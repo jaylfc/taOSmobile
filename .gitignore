@@ -1,0 +1,3 @@
+target/
+*.log
+docs/introspect-*.log

@@ -1,0 +1,11 @@
+# taosd-bridge configuration.
+#
+# Install to ~/.config/taosd-bridge/config.toml ON THE DEVICE.
+# Never commit a filled-in copy: the token and the controller address are
+# device/network specific.
+
+# WebSocket endpoint of the taOS controller.
+controller_url = "ws://CONTROLLER-HOST:PORT/ws/worker"
+
+# Bearer token for this device, issued by the controller.
+device_token = "REPLACE-ME"
