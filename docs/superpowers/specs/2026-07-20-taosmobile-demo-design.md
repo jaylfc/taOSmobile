@@ -122,6 +122,10 @@ The single biggest unknown is the exact DBus shape on this specific UT image. Be
 4. Introspect telephony-service; attempt a dial. If unusable → adopt the `url-dispatcher tel:` fallback and record it.
 5. Confirm UPower display-device properties update on charge state change.
 
+## Development workflow
+
+All on-device work happens over SSH (Wi-Fi) — no USB/adb required. One-time setup on the phone: add the dev machine's public key to `~/.ssh/authorized_keys` and enable SSH (`android-gadget-service enable ssh` or UT Tweak Tool). Then: bridge binary + unit file deploy via `scp`; the Click app deploys via `clickable install --ssh`; validation and Libertine setup run in SSH sessions. During dev sessions keep the phone plugged in with suspend disabled (or hold `powerd-cli active`) — UT suspend drops Wi-Fi and kills SSH. The phone is addressed only by a `taosphone` alias in `~/.ssh/config`; no device IPs in the repo.
+
 ## Testing
 
 - **Bridge:** unit tests for protocol serialization and provider-trait logic with mocked DBus; on-device smoke script (send test SMS, dial, battery read).
