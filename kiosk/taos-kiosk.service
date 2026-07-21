@@ -1,0 +1,19 @@
+[Unit]
+Description=taOS kiosk surface (fullscreen PWA)
+# The kiosk is a Mir client: it can only connect once Lomiri's session is up.
+After=graphical-session.target taos-controller.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Launch through lomiri-app-launch, not directly. Lomiri's Mir server rejects
+# clients that arrive outside the app-launch path ("not accepted by server"),
+# so a direct exec of webapp-container cannot get a screen.
+ExecStart=/usr/bin/lomiri-app-launch taos-kiosk
+# lomiri-app-launch returns as soon as the app is started, so this unit is
+# oneshot-like in practice; do not restart-loop it.
+RemainAfterExit=yes
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=taOS
+Comment=taOS mobile surface
+Exec=/home/phablet/bin/taos-kiosk.sh
+Icon=/home/phablet/bin/taos-icon.png
+Terminal=false
+X-Lomiri-Touch=true
+X-Lomiri-Supported-Orientations=portrait
+StartupNotify=false
+Categories=Utility;

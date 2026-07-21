@@ -1,0 +1,17 @@
+[Unit]
+Description=taOS controller (native, on-device)
+Documentation=https://github.com/jaylfc/taOS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/phablet/taos-venv/bin/taos
+Restart=on-failure
+RestartSec=5
+# The controller is the whole point of the device; give it room but let the
+# OOM killer take it before it takes the phone's UI down.
+OOMPolicy=stop
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
