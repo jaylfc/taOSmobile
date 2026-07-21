@@ -82,7 +82,34 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
   bootloader stays unlocked, and keep the verified UT image (already downloaded
   to the Mac Mini, integrity checked) as rollback.
 
-## Status
+## Status — kernel package BUILDS (2026-07-21)
+
+**Milestone reached: the Droidian kernel package builds end-to-end.** From
+`jaylfc/linux-android-nothing-spacewar@droidian-taos`, the Droidian
+`build-essential` container produces the full package set:
+
+- `linux-bootimage-5.4.289-nothing-spacewar` (73MB) — the flashable set:
+  `boot.img` (header v3, 21MB kernel + 16MB Droidian initramfs),
+  `vendor_boot.img`, `vbmeta.img`, `recovery.img`, flash metadata.
+- `linux-image-5.4.289-nothing-spacewar` (24MB), `linux-headers-*` (8.8MB),
+  and the three "latest" metapackages.
+
+Kernel/config issues fixed to get here (each committed with rationale):
+1. CI checkout — `IS_CONTAINER=true` (releng supports Travis/Circle/Drone/Azure, not Actions).
+2. `debian/compat` conflicted with the generated `debehelper-compat`.
+3. `LLVM_IAS=0` — clang-10's integrated assembler rejects a `head.S` `.ascii` escape.
+4. Prebuilt DTB injected — GKI kernel builds no device tree.
+5. `droidian/sm7325.config` — the lahaina SoC fragment stack, so QMI/modem
+   drivers build (rmnet_core needed prompt-less `QCOM_QMI_HELPERS`).
+6. Disabled in-tree qcacld WLAN — Halium uses the vendor prebuilt module.
+7. `SECONDIMAGE_OFFSET` set — mkbootimg needs a value for `--second_offset`.
+
+Build host: Fedora (12-core, native amd64) in the Droidian container —
+~10-minute cycles vs ~30 on GitHub Actions.
+
+### Old status
+
+### Prior status
 
 - UT rollback image: downloaded to the Mac Mini and verified
   (`boot.img`, `vendor_boot.img`, `ubuntu.img`).

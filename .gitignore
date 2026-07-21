@@ -1,3 +1,6 @@
-target/
 *.log
 docs/introspect-*.log
+droidian/artifacts/*.deb
+droidian/artifacts/linux-headers-*.deb
+droidian/artifacts/linux-image-*.deb
+target/
