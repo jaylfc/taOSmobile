@@ -1,0 +1,6 @@
+{
+  "name": "taosmobile-kiosk",
+  "version": "0.1.0",
+  "description": "taOS fullscreen kiosk shell for Ubuntu Touch",
+  "main": "main.js"
+}
