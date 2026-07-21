@@ -39,8 +39,22 @@ first-class systemd service on real Linux.
 
 ## Port status (verify before flashing)
 
-A community Droidian port for `spacewar` exists, with Waydroid. Reported
-working/broken as of the XDA thread:
+**The `spacewar` port is a community build, not officially supported.**
+Verified 2026-07-21:
+
+- Droidian's official images are **GSI-based** — the only image repos under
+  `droidian-images` are `droidian`, `rootfs-api28gsi-all`, `rootfs-api29gsi-all`
+  and `rootfs-api30gsi-all`. There is no per-device official image pipeline.
+- No `spacewar`/`nothing` repository exists in either the `droidian` or
+  `droidian-images` GitHub orgs.
+- The port is distributed via an XDA forum thread, not a maintained channel.
+
+Consequences: no OTA updates, no guarantee of maintenance, and the image's
+provenance is a forum post. That is acceptable for a concept device, but it
+argues strongly for the dual-boot route below — keep the working Ubuntu Touch
+install rather than trading it for an unmaintained image.
+
+Reported working/broken as of the XDA thread:
 
 - **Broken:** fingerprint, auto-brightness, Glyph LEDs.
 - **Flaky:** WiFi disconnects on some desktop environments; "UI lags on all
