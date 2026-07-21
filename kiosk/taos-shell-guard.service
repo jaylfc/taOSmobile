@@ -1,0 +1,10 @@
+[Unit]
+Description=Restore the Lomiri shell if the taOS kiosk does not come up
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/taos-shell-guard 150
+
+[Install]
+WantedBy=multi-user.target

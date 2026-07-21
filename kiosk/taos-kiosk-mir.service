@@ -1,0 +1,15 @@
+[Unit]
+Description=taOS kiosk surface (Mir client, replaces the Lomiri shell)
+# Runs in place of lomiri-full-greeter.service inside the normal Ubuntu Touch
+# user session, so the system compositor and its Android HAL are untouched.
+PartOf=ubuntu-touch-session-unencrypted.target
+After=ubuntu-touch-session-unencrypted.target taos-controller.service
+
+[Service]
+Type=simple
+ExecStart=/home/phablet/bin/taos-kiosk-mir.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=ubuntu-touch-session-unencrypted.target
