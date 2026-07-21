@@ -1,0 +1,24 @@
+Source: adaptation-nothing-spacewar
+Maintainer: jaylfc <jaylfc25@gmail.com>
+Section: metapackages
+Priority: optional
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.5.0.3
+Vcs-Browser: https://github.com/jaylfc/taOSmobile
+Vcs-Git: https://github.com/jaylfc/taOSmobile.git
+
+Package: adaptation-nothing-spacewar
+Architecture: arm64
+Depends: ${misc:Depends},
+         linux-bootimage-nothing-spacewar,
+         adaptation-hybris-api30-phone,
+         adaptation-nothing-spacewar-configs,
+Description: adaptation-nothing-spacewar - meta
+ Nothing Phone (1) (spacewar) Halium 11 (api30) adaptation metapackage.
+
+Package: adaptation-nothing-spacewar-configs
+Architecture: arm64
+Depends: ${misc:Depends},
+         adaptation-nothing-spacewar (= ${binary:Version}),
+Description: Nothing Phone (1) device-specific adaptation configs
+ udev rules, module loading and device configuration for spacewar.

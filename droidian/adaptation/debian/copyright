@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: adaptation-nothing-spacewar
+Source: https://github.com/jaylfc/taOSmobile
+
+Files: *
+Copyright: 2026 jaylfc <jaylfc25@gmail.com>
+License: BSD-3-clause
