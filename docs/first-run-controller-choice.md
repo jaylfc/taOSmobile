@@ -38,18 +38,26 @@ to taOS's own onboarding (account creation). The heavy work — venv, wheels —
 should be pre-baked into the image rather than downloaded at first run, so this
 path works with no network.
 
-**Remote:** discover controllers, let the user pick or type one, pair, write the
+**Remote:** sign in to taOSgo, pick a controller from the account, write the
 URL, point the kiosk at it.
 
-- **Discovery:** taOS already publishes over mDNS/zeroconf
-  (`tinyagentos/services/mdns_publisher.py`), so LAN controllers can be listed
-  without the user knowing an IP. Offer manual entry (host/IP or Tailscale name)
-  as a fallback, since mDNS is unreliable across subnets and some Wi-Fi APs
-  block multicast.
-- **Pairing:** reuse an existing taOS mechanism rather than inventing one — the
-  invite-link + PIN flow (`/i/<id>` → `POST /api/projects/invites/redeem`) or
-  the OTP worker pairing in taOS#212. Typing a PIN shown on the controller is
-  the right ergonomics on a phone.
+- **Pairing is taOSgo account-based.** taOS no longer uses mDNS/zeroconf for
+  discovery. Remote routing now goes through a hosted control plane
+  (headscale), so a device that signs in to a taOSgo account joins the user's
+  network and reaches their controllers by stable name — no IP entry, and no
+  dependence on being on the same LAN.
+- This is strictly better for a phone than LAN discovery was: the controller
+  stays reachable on mobile data, on someone else's Wi-Fi, and across subnets,
+  which is exactly the case a phone spends most of its life in. It also means
+  "remote controller" does not imply "at home".
+- **Fallback:** still allow a directly-entered URL for a controller on the same
+  LAN with no account involved — useful for development and for a fleet running
+  fully offline.
+
+> Confirm the specifics with taOS-dev over A2A before implementing: the exact
+> taOSgo sign-in flow on a headless/kiosk device (device-code style, or
+> credentials in the kiosk?), how controllers are enumerated for an account,
+> and what the phone needs to register itself as a worker on that network.
 
 ## Requirements
 
@@ -57,7 +65,9 @@ URL, point the kiosk at it.
    first-run one-way door. Local → remote should offer to keep or discard local
    data; remote → local must not silently orphan the remote pairing.
 2. **Legible failure.** If the remote controller is unreachable, say so and
-   offer retry / switch / manual entry. Never a blank screen — we hit exactly
+   offer retry / switch / manual entry. With account-based routing there is one
+   more failure mode to name explicitly: signed in but no controller reachable
+   is different from not signed in, and the user needs to be told which. Never a blank screen — we hit exactly
    that failure mode during bring-up and it is indistinguishable from a crash.
 3. **Config, not code.** One file the kiosk launcher reads (it already does
    this: `~/.config/taosmobile/shell.conf`). Mode + URL live there so the
