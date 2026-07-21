@@ -37,16 +37,20 @@ start_kiosk() {
     #                KMS plus Mesa freedreno, so this is a genuine fallback
     for platform in mir1server eglfs; do
         log "trying platform: $platform"
-        QT_QPA_PLATFORM="$platform" \
-        MIR_SERVER_NAME=taos-exclusive \
-        webapp-container \
-            --fullscreen \
-            --store-session-cookies \
-            --app-id=taos-exclusive \
-            --name="taOS" \
-            --webappUrlPatterns="http://localhost:6969/*,http://127.0.0.1:6969/*" \
-            "$CONTROLLER_URL/" \
-            >> "$LOG_DIR/exclusive-$platform.log" 2>&1 &
+        # setsid + nohup: the session must outlive the SSH connection that
+        # started it, or the display dies the moment the operator disconnects.
+        # No --webappUrlPatterns: it blocks the first navigation (see
+        # taos-kiosk.sh).
+        setsid nohup env \
+            QT_QPA_PLATFORM="$platform" \
+            MIR_SERVER_NAME=taos-exclusive \
+            webapp-container \
+                --fullscreen \
+                --store-session-cookies \
+                --app-id=taos-exclusive \
+                --name="taOS" \
+                "$CONTROLLER_URL/" \
+            >> "$LOG_DIR/exclusive-$platform.log" 2>&1 < /dev/null &
         local pid=$!
         sleep 12
         if kill -0 "$pid" 2>/dev/null; then

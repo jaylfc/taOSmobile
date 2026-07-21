@@ -1,0 +1,20 @@
+[Unit]
+Description=Tailscale (userspace networking, rootless)
+After=network-online.target
+
+[Service]
+Type=simple
+# Userspace networking: no root, no CAP_NET_ADMIN, no TUN configuration, and
+# nothing installed outside /home. The rootfs on Ubuntu Touch is read-only, so
+# the packaged install (apt) cannot work here — and a rootless daemon is the
+# safer answer anyway. Inbound connections are proxied to local ports by the
+# built-in netstack, so SSH over Tailscale still works.
+ExecStart=/home/phablet/tailscale/tailscaled \
+    --tun=userspace-networking \
+    --statedir=/home/phablet/.tailscale \
+    --socket=/home/phablet/.tailscale/tailscaled.sock
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
