@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=taOS
+Description=taOS boot splash — white wordmark, black background
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/taos
+ScriptFile=/usr/share/plymouth/themes/taos/taos.script

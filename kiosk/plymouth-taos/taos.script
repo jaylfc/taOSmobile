@@ -1,0 +1,43 @@
+# taOS boot splash: white "taOS" centred on black.
+#
+# Uses the script module's text rendering rather than a PNG so the wordmark
+# stays sharp at the phone's resolution without shipping per-density assets.
+
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+wordmark = Image.Text("taOS", 1, 1, 1, 1, "Ubuntu 64");
+sprite = Sprite(wordmark);
+sprite.SetX(Window.GetWidth()  / 2 - wordmark.GetWidth()  / 2);
+sprite.SetY(Window.GetHeight() / 2 - wordmark.GetHeight() / 2);
+sprite.SetZ(1);
+
+# Password prompts (full-disk encryption etc.) must still be answerable, or a
+# locked device becomes unbootable behind a pretty splash.
+status = "normal";
+
+fun display_password_callback(prompt, bullets) {
+    prompt_image = Image.Text(prompt, 1, 1, 1, 1, "Ubuntu 20");
+    prompt_sprite = Sprite(prompt_image);
+    prompt_sprite.SetX(Window.GetWidth() / 2 - prompt_image.GetWidth() / 2);
+    prompt_sprite.SetY(Window.GetHeight() * 0.68);
+    prompt_sprite.SetZ(2);
+    global.prompt_sprite = prompt_sprite;
+
+    dots = "";
+    for (i = 0; i < bullets; i++) dots += "*";
+    dots_image = Image.Text(dots, 1, 1, 1, 1, "Ubuntu 24");
+    dots_sprite = Sprite(dots_image);
+    dots_sprite.SetX(Window.GetWidth() / 2 - dots_image.GetWidth() / 2);
+    dots_sprite.SetY(Window.GetHeight() * 0.74);
+    dots_sprite.SetZ(2);
+    global.dots_sprite = dots_sprite;
+}
+
+fun display_normal_callback() {
+    global.prompt_sprite = NULL;
+    global.dots_sprite = NULL;
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
