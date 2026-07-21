@@ -39,6 +39,15 @@ else
     log "controller up after ${waited}s"
 fi
 
+# Ubuntu Touch injects GRID_UNIT_PX (21 here) and QTWEBKIT_DPR into app
+# sessions, and webapp-container turns those into a device scale factor. The
+# result laid the SPA out for a viewport far smaller than the 1080x2400
+# surface, leaving the UI crammed into the top of the screen with black below.
+# Pin the scale factor explicitly instead of inheriting the session's.
+export QTWEBKIT_DPR="${TAOS_DPR:-1.0}"
+export QTWEBENGINE_CHROMIUM_FLAGS="--force-device-scale-factor=${TAOS_SCALE:-2.0} ${QTWEBENGINE_CHROMIUM_FLAGS:-}"
+log "scale: dpr=$QTWEBKIT_DPR flags=$QTWEBENGINE_CHROMIUM_FLAGS"
+
 # --fullscreen             no chrome, fills the display
 # --store-session-cookies  keep the taOS login across restarts
 #

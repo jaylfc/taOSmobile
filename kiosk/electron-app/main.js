@@ -53,6 +53,23 @@ function createWindow() {
 
   const load = () => win.loadURL(TAOS_URL);
 
+  // Verification hook: with no way to see the phone's screen, capture what the
+  // renderer actually produced. Proves the page rendered rather than merely
+  // that the process is alive. Enabled only when TAOS_CAPTURE is set.
+  if (process.env.TAOS_CAPTURE) {
+    win.webContents.on("did-finish-load", () => {
+      setTimeout(async () => {
+        try {
+          const img = await win.webContents.capturePage();
+          require("fs").writeFileSync(process.env.TAOS_CAPTURE, img.toPNG());
+          console.log("captured to " + process.env.TAOS_CAPTURE);
+        } catch (e) {
+          console.error("capture failed: " + e.message);
+        }
+      }, 8000);
+    });
+  }
+
   // The controller is a local service and may still be starting.
   win.webContents.on("did-fail-load", (_e, code, desc) => {
     console.error(`load failed (${code} ${desc}); retrying in 2s`);
