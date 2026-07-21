@@ -39,16 +39,17 @@ else
     log "controller up after ${waited}s"
 fi
 
-# --fullscreen          no chrome, fills the display
-# --webappUrlPatterns   confine navigation to the local controller, so a stray
-#                       link cannot turn the kiosk into a general browser
+# --fullscreen             no chrome, fills the display
 # --store-session-cookies  keep the taOS login across restarts
+#
+# No --webappUrlPatterns: with patterns set, webapp-container refused the very
+# first navigation ("ignored request of type 6") and showed a blank page. The
+# controller is loopback-only anyway, so the confinement bought little.
 exec webapp-container \
     --fullscreen \
     --store-session-cookies \
     --local-content-can-access-remote-urls \
     --app-id=taosmobile \
     --name="taOS" \
-    --webappUrlPatterns="http://localhost:6969/*,http://127.0.0.1:6969/*" \
     "$CONTROLLER_URL/" \
     >> "$LOG_DIR/kiosk.log" 2>&1
