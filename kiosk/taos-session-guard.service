@@ -1,0 +1,11 @@
+[Unit]
+Description=Revert to Ubuntu Touch if the taOS kiosk fails to start
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/taos-session-guard 120
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore Ubuntu Touch after a failed taOS kiosk start
+# Deliberately minimal and dependency-free: this is the last line of defence
+# when the kiosk fails, so it must not be able to fail itself.
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl start lightdm.service

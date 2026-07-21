@@ -1,0 +1,46 @@
+[Unit]
+Description=taOS exclusive kiosk (cage + Electron on KMS)
+Documentation=https://github.com/jaylfc/taOS/issues/797
+# Starting this stops the Ubuntu Touch display manager: both want the display,
+# and only one process can hold DRM master.
+Conflicts=lightdm.service
+After=lightdm.service taos-tailscaled.service
+# If the kiosk cannot start, put Ubuntu Touch back rather than leaving a dead
+# screen. This is a SYSTEM unit, so unlike the earlier attempt it survives the
+# user session (and the SSH connection) going away.
+OnFailure=taos-kiosk-recover.service
+
+[Service]
+Type=simple
+User=root
+# libseat's builtin backend: as root with no logind seat (we may be driving
+# this over SSH), seatd/logind are not usable. builtin talks to DRM directly.
+Environment=LIBSEAT_BACKEND=builtin
+Environment=WLR_BACKENDS=drm
+Environment=WLR_DRM_DEVICES=/dev/dri/card0
+Environment=WLR_RENDERER=gles2
+Environment=XDG_RUNTIME_DIR=/run/taos-kiosk
+Environment=TAOS_URL=http://localhost:6969/
+RuntimeDirectory=taos-kiosk
+RuntimeDirectoryMode=0700
+
+# cage is a kiosk compositor: one fullscreen surface, no decorations, no
+# shell. Electron renders the taOS PWA into it with a current Chromium, so
+# gestures, layout and the software keyboard all work — none of which the
+# stock QtWebEngine 5.15 (Chromium 87) can do.
+ExecStart=/usr/bin/cage -- /home/phablet/electron/electron /home/phablet/electron/app \
+    --no-sandbox \
+    --ozone-platform=wayland \
+    --enable-features=UseOzonePlatform
+
+Restart=on-failure
+RestartSec=5
+# Three failures in a minute means it is not going to work; hand back to
+# Ubuntu Touch instead of flapping on the user's screen.
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
