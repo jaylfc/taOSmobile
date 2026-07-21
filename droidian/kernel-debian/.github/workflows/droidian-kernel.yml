@@ -1,0 +1,69 @@
+name: Build Droidian kernel packages (nothing-spacewar)
+
+# Droidian's own device repos build via a private CircleCI orb
+# (droidian-releng/droidian-buildd-orb) that we cannot use, so run their
+# build container directly here instead.
+on:
+  workflow_dispatch:
+  push:
+    branches: [droidian-taos]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/droidian/build-essential:current-amd64
+      options: --privileged
+
+    steps:
+      - name: Check out kernel + packaging
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Droidian packaging snippets
+        run: |
+          apt-get update
+          apt-get install -y linux-packaging-snippets git
+
+      - name: Fetch Droidian common config fragments
+        run: |
+          # Supplies the mandatory halium/droidian/pstore config fragments.
+          # No 5.4 branch exists upstream; 5.10-android-common is the closest
+          # (the 4.19 branch still sets CONFIG_LBDAF, removed in Linux 5.0).
+          rm -rf droidian/common_fragments
+          git clone --depth 1 -b 5.10-android-common \
+            https://github.com/droidian-devices/common_fragments.git \
+            droidian/common_fragments
+
+      - name: Restore executable bit on debian/rules
+        run: chmod +x debian/rules
+
+      - name: Generate debian/control from kernel-info.mk
+        run: |
+          rm -f debian/control
+          debian/rules debian/control
+          echo "----- generated debian/control -----"
+          cat debian/control
+
+      - name: Build kernel packages
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          RELENG_HOST_ARCH="arm64" releng-build-package
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          mkdir -p out
+          find .. -maxdepth 2 -name '*.deb' -exec cp -v {} out/ \; || true
+          find . -name 'boot.img' -o -name 'vendor_boot.img' | head -5 | xargs -r -I{} cp -v {} out/ || true
+          ls -la out/ || true
+
+      - name: Upload packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidian-kernel-nothing-spacewar
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
