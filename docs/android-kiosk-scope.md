@@ -22,6 +22,7 @@ else can have it. Exhaustively tested on the device:
 | Electron on Mir 1's Wayland | Mir lacks `wp_viewporter`/`text-input-v3`, errors on every `Surface::commit()`. |
 | Electron, any mode | Hangs before `app ready` on Wayland; **segfaults** creating a window even headless. |
 | miral-kiosk (Mir 2) nested via `mir:wayland` | Runs **only while Lomiri is up**; segfaults the moment Lomiri stops — i.e. exactly when it would be useful. |
+| QML shell (`qmlscene -platform mir1server` + `WebEngineView`) | Mir server starts cleanly and takes the display (`PlatformScreen 1080x2400`), but QtWebEngine reports `No suitable graphics backend found`. Same wall as webapp-container, so the limit is **QtWebEngine in a nested Mir server**, not Oxide. Two side-issues fixed along the way: the shell needs its own `XDG_RUNTIME_DIR` (otherwise it collides with Lomiri on `wayland-0.lock`), and `MIR_SERVER_WAYLAND_SOCKET_NAME` is not a Mir 1.8 option. |
 
 Conclusion: **exclusive fullscreen with a working renderer is not achievable on
 the stock UT image.** The only routes are a custom UT image (see
