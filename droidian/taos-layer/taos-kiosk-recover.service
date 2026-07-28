@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore Phosh if the taOS kiosk fails
+# Deliberately minimal and dependency-free: this is the last line of defence,
+# so it must not be able to fail itself.
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl start phosh.service

@@ -1,0 +1,47 @@
+[Unit]
+Description=taOS kiosk surface (cage + Chromium, fullscreen exclusive)
+Documentation=https://github.com/jaylfc/taOSmobile
+# Starting this stops Phosh: both want the display, and only one process can
+# hold it. Conflicts= makes that explicit rather than a race.
+Conflicts=phosh.service
+After=phosh.service taos-controller.service
+# If the kiosk cannot start, hand the display back to Phosh rather than leaving
+# a dead screen. This is a SYSTEM unit so it survives session teardown — the
+# lesson from Ubuntu Touch, where the safety net died with the thing it was
+# meant to rescue.
+OnFailure=taos-kiosk-recover.service
+
+[Service]
+Type=simple
+User=%i
+PAMName=login
+# cage is a kiosk compositor: one fullscreen surface, no panel, no launcher.
+# On Droidian this works because Droidian ships wlroots WITH an hwcomposer
+# backend. Do NOT try this against vanilla wlroots on a Halium device: it
+# fights the Android HAL for DRM master and powers the phone off.
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=XDG_SESSION_TYPE=wayland
+Environment=WLR_BACKENDS=hwcomposer
+
+ExecStart=/usr/bin/cage -- /usr/bin/chromium \
+    --kiosk \
+    --app=http://localhost:6969/ \
+    --ozone-platform=wayland \
+    --enable-features=UseOzonePlatform,TouchpadOverscrollHistoryNavigation \
+    --touch-events=enabled \
+    --no-first-run \
+    --disable-infobars \
+    --disable-session-crashed-bubble \
+    --password-store=basic \
+    --unsafely-treat-insecure-origin-as-secure=http://localhost:6969
+
+Restart=on-failure
+RestartSec=5
+# Three failures in a minute means it is not going to work; stop flapping on
+# the user's screen and let OnFailure hand back to Phosh.
+StartLimitBurst=3
+StartLimitIntervalSec=60
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=taOS controller (native, on-device)
+Documentation=https://github.com/jaylfc/taOS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Droidian is real Debian with real systemd, so this is a SYSTEM service.
+# On Ubuntu Touch this had to be a user service plus `loginctl enable-linger`,
+# because stopping the display manager tore down the user session and took the
+# controller with it. That whole class of problem does not exist here.
+User=%i
+WorkingDirectory=/home/%i
+ExecStart=/home/%i/taos-venv/bin/taos
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# The controller is the point of the device; give it room, but let the OOM
+# killer take it before it takes the display down with it.
+OOMPolicy=stop
+
+[Install]
+WantedBy=multi-user.target
