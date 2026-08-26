@@ -46,16 +46,36 @@ mkfs.ext4 -F -L data -m 0 \
   -E lazy_itable_init=1,lazy_journal_init=1 \
   "$W/userdata.img"
 
+# Release every mount and loop device backed by this image. A desktop automounter
+# will grab a freshly created loop device and mount it somewhere of its own choosing
+# (seen at /tmp/loop0), so unmounting only OUR mountpoint is not enough -- the image
+# stays mounted elsewhere and the e2fsck below then runs against a live filesystem and
+# corrupts it. That happened once; do not let it happen again.
+release_image() {
+  local img="$1" dev
+  for dev in $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
+    while mount | grep -q "^$dev "; do
+      sudo umount "$dev" || break
+    done
+    sudo losetup -d "$dev" 2>/dev/null || true
+  done
+  while mount | grep -q " $img "; do sudo umount "$img" || break; done
+  sync
+}
+
 log "populate it exactly as the porter procedure leaves /data"
+release_image "$W/userdata.img"
 mkdir -p "$W/mnt"
 sudo mount -o loop "$W/userdata.img" "$W/mnt"
 sudo cp --sparse=always "$W/rootfs32.img" "$W/mnt/rootfs.img"
 sudo ln -s /halium-system/var/lib/lxc/android/android-rootfs.img "$W/mnt/android-rootfs.img"
 sudo ls -la "$W/mnt"
 sudo umount "$W/mnt"
+release_image "$W/userdata.img"
 
-log "verify"
-e2fsck -fy "$W/userdata.img" || true
+log "verify (must end with a pass that modifies nothing)"
+sudo e2fsck -fy "$W/userdata.img" || true
+sudo e2fsck -fy "$W/userdata.img" || true
 ls -ls "$W/userdata.img"
 df -h "$S" | tail -1
 echo "BUILD-OK"
