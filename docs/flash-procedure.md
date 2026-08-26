@@ -111,6 +111,41 @@ Retry the full sequence *including* the resize before concluding the build is ba
 fastboot. The bootloader is unlocked and no partition layout was changed, so fastboot is
 always reachable by key combo.
 
+### 2026-08-26 (second attempt) — resize performed, still no boot, but the failure MOVED
+
+Retried without re-flashing anything and without re-pushing the rootfs, so the **only
+variable changed was the resize**. Findings, all verified on-device rather than assumed:
+
+- **Recovery has `e2fsck` but no `resize2fs`** (`which` finds only `/system/bin/e2fsck`).
+  Combined with the binary being absent from the tarball, this means *nobody* following
+  `Flash_on_Linux.sh` unmodified has ever had the resize succeed. The tarball contains
+  exactly five files: the two flash scripts, `boot.img`, `vendor_boot.img`, `rootfs.img`.
+- **The static aarch64 binaries run natively in Android recovery** — both report
+  `1.47.2` when executed there. This is what the static linking was for.
+- **The rootfs had been mounted and written to, then cut off uncleanly**: the pre-resize
+  `e2fsck` found and fixed an inode on the corrupted orphan list. Together with
+  `/data/android-data` holding 46 entries, this proves the first boot got as far as
+  mounting the rootfs and starting the Halium Android container. The kernel is not the
+  problem.
+- **The rootfs was 90.6% full** before the resize (1662665/1835008 blocks). That is a
+  second, independent reason an unresized rootfs would fail to boot cleanly.
+- Resize succeeded: 8388608 4k blocks = 32GiB exactly, post-resize `e2fsck` clean with no
+  modifications, usage down to 21%.
+
+**Result: still no boot** — no display, no SSH, no RNDIS after 4 minutes. **But the
+failure changed shape.** After the first attempt the device exposed *no USB whatsoever*.
+After the resize it enumerates as an Android adb gadget (`A063`, vendor `0x18D1`), so
+userspace now gets far enough to bring a USB gadget up. That is progress, not a fix.
+
+Next diagnostic (not yet completed): boot to recovery, loop-mount `/data/rootfs.img` and
+read the failed boot's journal. Blocked at the time of writing because recovery lands on
+the AOSP "No command" screen with `adb` in the `unauthorized` state, and the
+authorisation prompt cannot be accepted on a device whose display never comes up.
+
+> **Gotcha for next time:** do not trust a USB-presence check that greps for the word
+> `gadget`. On this flash host a "UVC+UAC_MICROPHONE Composite Gadget" matches and reads
+> as a false positive. Match on `A063`, on the serial, or on vendor `0x18D1`.
+
 ## Rollback to Ubuntu Touch
 
 Verified image staged at `jays-mac-mini:~/taosphone-images/UT-24.02_v3.tar.xz` (721MB,
