@@ -69,6 +69,17 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
 6. **taOS layer.** Lift `taos-controller.service` and the venv from this repo —
    Debian means the wheels that work today keep working. Then
    `cage -- chromium --kiosk --app=http://localhost:6969/` as the session.
+   - Chromium runs on an **ephemeral profile** under `/run`, and
+     `taos-kiosk-csrf-guard.service` watches for the taOS#2081 lockout. Both are
+     required, not belt-and-braces: the profile covers a cookie that is already
+     stale at boot, the guard covers a session that lapses while the kiosk is
+     running, and neither covers the other's case. Rationale and the acceptance
+     test (`check-csrf-lockout.sh`) are in `droidian/taos-layer/README.md`.
+   - Acceptance is **not** "the controller answers on `:6969`". taOS#2080 makes
+     a broken install serve 200s with no SPA mounted (`app.py:1702` guards the
+     static mount with `if static_dir.exists()`), so the check has to be that
+     the SPA renders and that a correct PIN gets in. Carded as `tsk-jibncp` and
+     `tsk-ame3lw`.
 
 ## Risks
 

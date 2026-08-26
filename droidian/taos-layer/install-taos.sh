@@ -63,6 +63,8 @@ sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-controller.service \
 sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-kiosk.service \
     | sudo tee /etc/systemd/system/taos-kiosk.service >/dev/null
 sudo cp taos-kiosk-recover.service /etc/systemd/system/
+sudo cp taos-kiosk-csrf-guard.service /etc/systemd/system/
+sudo install -D -m 755 kiosk-csrf-guard.sh /usr/local/lib/taos/kiosk-csrf-guard.sh
 sudo systemctl daemon-reload
 
 step "start the controller and WAIT for the port"
@@ -75,6 +77,31 @@ until (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; do
 done
 exec 3<&- || true
 echo "controller listening on :$PORT after ${waited}s"
+
+step "lockout guard (taOS#2081)"
+# A stale taos_session cookie turns a CORRECT PIN into "Incorrect PIN.", and
+# this device has no keyboard to clear one with. The guard proves at start that
+# it can actually read the controller's access log, and fails rather than
+# sitting green and blind -- so a red unit here is information, not noise.
+sudo systemctl enable --now taos-kiosk-csrf-guard.service || true
+if ! systemctl is-active --quiet taos-kiosk-csrf-guard.service; then
+    echo "WARNING: taos-kiosk-csrf-guard.service did not come up."
+    echo "The kiosk is still protected at BOOT (ephemeral profile), but a session"
+    echo "that lapses while it is RUNNING will need an SSH login to clear."
+    sudo journalctl -u taos-kiosk-csrf-guard.service -n 20 --no-pager || true
+fi
+
+step "verify the device cannot be locked out of its own login screen"
+# Exit 2 is INCOMPLETE, not failure: the deeper checks need a real PIN, which
+# this script has no business knowing. Re-run it by hand with TAOS_PIN set
+# before calling tsk-ame3lw done.
+./check-csrf-lockout.sh || rc=$?
+case "${rc:-0}" in
+    0) ;;
+    2) echo "NOTE: re-run with TAOS_PIN=... (and TAOS_USERNAME/TAOS_PASSWORD)"
+       echo "      to prove sign-in itself, not just that it is not CSRF-blocked." ;;
+    *) echo "check-csrf-lockout.sh FAILED -- see above. Do not ship this state." ;;
+esac
 
 echo
 echo "Controller is up and verified. The display is deliberately NOT touched."

@@ -10,6 +10,13 @@ After=phosh.service taos-controller.service
 # lesson from Ubuntu Touch, where the safety net died with the thing it was
 # meant to rescue.
 OnFailure=taos-kiosk-recover.service
+# Three failures in a minute means it is not going to work; stop flapping on
+# the user's screen and let OnFailure hand back to Phosh. These two keys live
+# in [Unit], not [Service] -- systemd moved them in v230 and silently ignores
+# them in [Service], which is where they were until 2026-08-26, so this limit
+# had never actually been in force.
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -23,8 +30,19 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=XDG_SESSION_TYPE=wayland
 Environment=WLR_BACKENDS=hwcomposer
 
+# Ephemeral browser profile, on tmpfs, wiped at every start (taOS#2081).
+# A stale taos_session cookie makes a CORRECT PIN render as "Incorrect PIN.",
+# and this device has no keyboard with which to clear one. /run is tmpfs, so a
+# reboot can never carry a cookie forward, and the explicit rm covers a
+# restart-in-place (RuntimeDirectoryPreserve defaults are not worth trusting a
+# lockout to). Nothing of value is lost: the only origin is localhost:6969.
+RuntimeDirectory=taos-kiosk
+RuntimeDirectoryMode=0700
+ExecStartPre=/bin/rm -rf /run/taos-kiosk/profile
+
 ExecStart=/usr/bin/cage -- /usr/bin/chromium \
     --kiosk \
+    --user-data-dir=/run/taos-kiosk/profile \
     --app=http://localhost:6969/ \
     --ozone-platform=wayland \
     --enable-features=UseOzonePlatform,TouchpadOverscrollHistoryNavigation \
@@ -37,10 +55,6 @@ ExecStart=/usr/bin/cage -- /usr/bin/chromium \
 
 Restart=on-failure
 RestartSec=5
-# Three failures in a minute means it is not going to work; stop flapping on
-# the user's screen and let OnFailure hand back to Phosh.
-StartLimitBurst=3
-StartLimitIntervalSec=60
 TimeoutStopSec=10
 
 [Install]

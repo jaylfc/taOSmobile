@@ -1,0 +1,24 @@
+[Unit]
+Description=Recover the taOS kiosk from a CSRF lockout (taOS#2081)
+Documentation=https://github.com/jaylfc/taOSmobile
+# Only useful once the controller is logging. Deliberately NOT PartOf= or
+# BindsTo= the kiosk: this unit restarts the kiosk, and a unit that is torn
+# down by the restart it issues cannot see whether the restart worked.
+After=taos-controller.service
+Wants=taos-controller.service
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Service]
+Type=simple
+# Root: it reads the controller's journal and issues systemctl restart.
+ExecStart=/usr/local/lib/taos/kiosk-csrf-guard.sh
+# The guard proves its own detection channel at every start and exits non-zero
+# if it cannot read access-log lines. on-failure therefore retries a controller
+# that is merely slow, while a genuinely broken channel shows as a red unit
+# instead of a green one that watches nothing.
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

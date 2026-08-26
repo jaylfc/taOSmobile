@@ -59,9 +59,16 @@ def build_token_re(prefixes: list[str]) -> re.Pattern:
 
     A preceding "." is excluded for the same reason: an Android component name
     like `com.taos.kiosk/.AdminReceiver` is not a path, and the dotted package
-    prefix is the only thing that distinguishes it from one."""
+    prefix is the only thing that distinguishes it from one.
+
+    A preceding "-" likewise: a prefix that starts mid-identifier is part of a
+    longer name, not a repo path. `/run/taos-kiosk/profile` is the case that hit
+    -- the one-character lookbehind saw the hyphen, not the leading slash, and
+    reported `kiosk/profile` as a missing repo path. Widening this is a
+    precision fix and does not weaken Layer A: a real repo path is never written
+    with a hyphen jammed against its first segment."""
     alternation = "|".join(re.escape(p) for p in prefixes)
-    return re.compile(r"(?<![\w/.])(?:" + alternation + r")/[^\s`\"'|]+")
+    return re.compile(r"(?<![\w/.-])(?:" + alternation + r")/[^\s`\"'|]+")
 
 
 _TOKEN_RE = build_token_re(DEFAULT_PATH_PREFIXES)
