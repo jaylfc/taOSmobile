@@ -6,7 +6,11 @@ the full-screen surface.
 
 ## Where things stand
 
-**Working today** (Ubuntu Touch, on-device):
+**Proven on hardware, but not installed right now.** The device was reflashed to
+Droidian on 2026-08-26, so Ubuntu Touch and everything below it is no longer on
+the phone. It is reflashable — the bootloader is unlocked, no partition layout
+was changed, and a verified UT rollback image is staged. What Ubuntu Touch
+demonstrated:
 
 - taOS controller running natively as a systemd service on `:6969`, surviving
   reboots. Every dependency resolved as an aarch64 wheel — the phone has no
@@ -21,7 +25,9 @@ role — so a web-rendering shell cannot replace Lomiri. Eight approaches were
 tested on hardware; see `docs/android-kiosk-scope.md` for the full table of
 what was tried and how each failed.
 
-**In progress:** porting [Droidian](https://droidian.org) to the device. Droidian
+**In progress:** porting [Droidian](https://droidian.org) to the device. It is
+flashed but not yet booting — see `docs/flash-procedure.md` for the attempt log
+and the current state. Droidian
 is Debian (glibc + systemd, so the controller is a straight lift) on Halium (so
 the Android vendor blobs keep camera, RIL and VoLTE working), with wlroots — so
 `cage` + Chromium gives an exclusive kiosk without fighting the display stack.
