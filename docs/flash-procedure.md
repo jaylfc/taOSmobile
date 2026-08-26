@@ -132,8 +132,18 @@ variable changed was the resize**. Findings, all verified on-device rather than 
 - Resize succeeded: 8388608 4k blocks = 32GiB exactly, post-resize `e2fsck` clean with no
   modifications, usage down to 21%.
 
-**Result: still no boot** — no display, no SSH, no RNDIS after 4 minutes. **But the
-failure changed shape.** After the first attempt the device exposed *no USB whatsoever*.
+**Result: it is a REBOOT LOOP** (observed directly on the device). During the loop the
+phone brings up **no USB whatsoever** — 90 seconds of cleared `dmesg` on a Linux USB host
+recorded zero USB events — so there is no channel to read the journal through while it
+loops. Earlier readings of "USB appears then dies" were the loop cycling, not a gadget
+failing.
+
+Do not leave it looping: `spacewar` is A/B, and a slot that keeps failing eventually gets
+marked unbootable by the bootloader. That is not unrecoverable — fastboot is always
+reachable by key combo — but there is nothing to gain. Force it off with a ~10s Power
+hold, then Power + Volume Down.
+
+**The failure did change shape.** After the first attempt the device exposed *no USB whatsoever*.
 After the resize it enumerates as an Android adb gadget (`A063`, vendor `0x18D1`), so
 userspace now gets far enough to bring a USB gadget up. That is progress, not a fix.
 
