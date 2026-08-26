@@ -44,6 +44,13 @@ adb shell "ln -s /halium-system/var/lib/lxc/android/android-rootfs.img /data/and
 adb reboot
 ```
 
+The `/data` half of that sequence — for **our** build, driven from the Linux Pi — is
+scripted as `scripts/install-ours-droidian.sh`. It asserts it is talking to a device in
+`recovery`, removes the old porter install, pushes the api30 rootfs, runs the fsck /
+resize / fsck, makes the symlink, and finally returns to the bootloader and restores
+`set_active a`. It deliberately stops before the reboot to system so the slot can be
+checked first.
+
 **A real bug in the upstream release, now worked around:** `Flash_on_Linux.sh` runs
 `adb push resize2fs /data/`, but **`resize2fs` is not in the tarball**. Running the script
 unmodified fails at that step.
@@ -173,9 +180,42 @@ Also note, from the same session:
   the ordinary Droidian boot flow (splash, then black), so it is useless as a rescue
   route. Do not reach for it expecting a shell.
 - Stock recovery lands on the AOSP "No command" screen. Press and hold Power, then tap
-  Volume Up, to reach the menu. Its `adb` is in the `unauthorized` state and the
-  authorisation prompt cannot be accepted on a device whose display never comes up. The
-  flash host's adb key was not the cause — it dates from March and was unchanged.
+  Volume Up, to reach the menu. Its `adb` is in the `unauthorized` state, and neither the
+  Mac's March key nor a freshly generated Pi key changes that — both were tried and both
+  stay `unauthorized`, so this is not a stale-key problem.
+  **Correction (2026-08-26 late):** the earlier claim that "the authorisation prompt
+  cannot be accepted on a device whose display never comes up" was wrong, and it was
+  self-refuting — the "No command" screen was itself *read off that display*. The dead
+  display is a **Droidian boot** symptom; stock recovery renders its own UI perfectly.
+  The prompt therefore can be accepted, but it needs someone at the device.
+
+## Recovery lives in the SLOT, not in a partition — this is why recovery "broke"
+
+`spacewar` has **no `recovery` partition at all**. The full partition list from
+`fastboot getvar all` contains `boot_a/_b`, `vendor_boot_a/_b`, `dtbo_a/_b`,
+`vbmeta_a/_b`, `vbmeta_system_a/_b` and a single un-slotted `userdata` — and no
+`recovery`. This is a GKI Android 11 layout: recovery is the generic ramdisk in
+`boot` plus a recovery fragment in `vendor_boot`, so **`fastboot reboot recovery`
+boots whatever is in the ACTIVE slot.**
+
+Consequences, verified on-device 2026-08-26:
+
+- Slot **B is still stock** (`slot-successful:b: yes`, never flashed). `set_active b`
+  then `fastboot reboot recovery` reaches **stock Android recovery** — confirmed, the
+  device came up as `adb ... recovery` within 20s.
+- Slot **A holds our Droidian images**, whose ramdisk has no recovery mode. On slot A,
+  `fastboot reboot recovery` simply returns to the bootloader — confirmed, reproduced.
+
+**So `fastboot reboot recovery` failing after our flash was caused by `set_active a`,
+not by our `vbmeta.img`.** The checkpoint's suspicion that the 4096-byte vbmeta was
+failing verification for the recovery path is **disproven**: with vbmeta untouched,
+merely moving the active slot back to B restored recovery. Do not spend time re-flashing
+or skipping vbmeta on account of recovery.
+
+Practical rule: **do the `/data` work from slot B, boot the system from slot A.**
+`userdata` is not slotted, so the rootfs push, resize and symlink are slot-independent.
+Always `fastboot set_active a` before rebooting to system, or the phone boots stock
+Android and will treat the Droidian `/data` as a corrupt Android `/data`.
 
 ## Slots — check them before and after every flash
 
