@@ -227,6 +227,40 @@ Practical rule: **do the `/data` work from slot B, boot the system from slot A.*
 Always `fastboot set_active a` before rebooting to system, or the phone boots stock
 Android and will treat the Droidian `/data` as a corrupt Android `/data`.
 
+### And it is not the boot path either — our vbmeta already disables verification
+
+The one variable the recovery finding left untested was whether our `vbmeta.img` could
+still be breaking the **boot** path. It cannot. Decoding the AVB header of the staged
+image (`pitop:~/taosflash/vbmeta.img`, 4096 bytes, only 19 non-zero bytes in the whole
+file) gives:
+
+```
+magic                AVB0        release_string      avbtool 1.3.0
+algorithm_type       0           (unsigned)
+auth block           0 bytes     aux block           0 bytes
+descriptors          0 bytes     rollback_index      0
+flags                0x00000003  ->  HASHTREE_DISABLED | VERIFICATION_DISABLED
+```
+
+It is an empty, unsigned vbmeta with **both** AVB flags set, i.e. the image `fastboot
+--disable-verity --disable-verification flash vbmeta` produces. It switches verification
+**off**; it cannot impose a check that a stock vbmeta would have let pass.
+
+Two things follow, and they close the question:
+
+- **Re-flashing with `--disable-verity --disable-verification` is not an experiment.**
+  Those flags set exactly bits 0 and 1 of this field, which are already set. The result
+  would be byte-identical.
+- **"Skip vbmeta like the porter does" is not available and would not help.** The
+  porter's bundle ships **no vbmeta at all** — `beta/Flash_on_Linux.sh` flashes only
+  `vendor_boot.img` and `boot.img` — and no stock vbmeta dump exists on any host here,
+  so there is nothing to restore. The porter's procedure works *because* the bootloader
+  is unlocked, which is the same permissive state our flags give us.
+
+So the RESUME checkpoint's "one remaining untried variable" is spent. If the prebuilt
+`/data` flash still reboot-loops, vbmeta is not the reason to keep going, and
+`tsk-q3rkpx` (LineageOS / Android Device Owner) is the answer Jay pre-authorised.
+
 ## Slots — check them before and after every flash
 
 `spacewar` is A/B and the bootloader will quietly move the goalposts under you.
