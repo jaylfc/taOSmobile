@@ -146,6 +146,27 @@ authorisation prompt cannot be accepted on a device whose display never comes up
 > `gadget`. On this flash host a "UVC+UAC_MICROPHONE Composite Gadget" matches and reads
 > as a false positive. Match on `A063`, on the serial, or on vendor `0x18D1`.
 
+## Diagnostic hosts — read before trusting any "no RNDIS" result
+
+**macOS cannot speak RNDIS.** It ships no RNDIS driver at all (`kextstat | grep -c rndis`
+returns 0 on the flash host). Droidian's primary debug channel is SSH over USB at
+`172.16.42.1`, carried by an RNDIS gadget — so **every "RNDIS does not answer" check run
+from the Mac Mini was meaningless**, including the ones that were recorded as evidence
+that the device was dead. A Droidian that booted perfectly would look identical from macOS.
+
+Use a **Linux** USB host for any RNDIS or SSH-over-USB diagnosis. macOS is fine for
+`fastboot` and `adb` and nothing else.
+
+Also note, from the same session:
+
+- Our built `recovery.img` is **not a recovery image**. `fastboot boot recovery.img` runs
+  the ordinary Droidian boot flow (splash, then black), so it is useless as a rescue
+  route. Do not reach for it expecting a shell.
+- Stock recovery lands on the AOSP "No command" screen. Press and hold Power, then tap
+  Volume Up, to reach the menu. Its `adb` is in the `unauthorized` state and the
+  authorisation prompt cannot be accepted on a device whose display never comes up. The
+  flash host's adb key was not the cause — it dates from March and was unchanged.
+
 ## Rollback to Ubuntu Touch
 
 Verified image staged at `jays-mac-mini:~/taosphone-images/UT-24.02_v3.tar.xz` (721MB,
