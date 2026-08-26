@@ -35,18 +35,81 @@ fastboot reboot recovery
 # wait ~45s for recovery
 adb shell "mount /data"
 adb push rootfs.img /data/
-adb shell "e2fsck -fy /data/rootfs.img"
-adb shell "resize2fs -f /data/rootfs.img 32G"     # see caveat below
-adb shell "e2fsck -fy /data/rootfs.img"
+adb push e2fsck /data/ && adb shell "chmod 755 /data/e2fsck"
+adb shell "/data/e2fsck -fy /data/rootfs.img"
+adb push resize2fs /data/ && adb shell "chmod 755 /data/resize2fs"
+adb shell "/data/resize2fs -f /data/rootfs.img 32G"
+adb shell "/data/e2fsck -fy /data/rootfs.img"
 adb shell "ln -s /halium-system/var/lib/lxc/android/android-rootfs.img /data/android-rootfs.img"
 adb reboot
 ```
 
-**Caveat — a real bug in the upstream release:** `Flash_on_Linux.sh` runs
-`adb push resize2fs /data/`, but **`resize2fs` is not in the tarball**. Running the
-script unmodified fails at that step. The resize only grows the 7.5GB rootfs to 32GB, so
-it can be skipped for a first boot test, or satisfied with recovery's own `resize2fs` if
-present (recovery clearly has `e2fsck`, which the script calls without pushing).
+**A real bug in the upstream release, now worked around:** `Flash_on_Linux.sh` runs
+`adb push resize2fs /data/`, but **`resize2fs` is not in the tarball**. Running the script
+unmodified fails at that step.
+
+The first flash (2026-08-26) skipped the resize for that reason and did not boot. That
+skip is the leading hypothesis for the failure — Droidian appears to expect the rootfs
+grown to 32G rather than left at the raw 7.5GB image size — so the resize must not be
+skipped again.
+
+A **statically linked aarch64 `resize2fs`** is now staged next to the images at
+`jays-mac-mini:~/taosphone-images/droidian/resize2fs`, together with a matching static
+`e2fsck` so the check either side of the resize runs the same e2fsprogs version rather
+than whatever recovery happens to ship.
+
+| File | sha256 |
+|---|---|
+| `resize2fs` | `aeb05b86b5cd2240d4ffd4d8db4f58c7892c78a2488fbd112abc5616e2d61120` |
+| `e2fsck` | `de01aab4e6ab08827fa2a2977eb62f28686a928cbb874dfa2546b6ec7eaea7d4` |
+
+Static matters: the resize runs under Android **recovery**, which has no glibc, so a
+Debian arm64 `.deb` binary would not run there. Both were verified `ELF64 / AArch64` with
+zero `NEEDED` entries, and proven on a real ext4 image (create at 64M, grow to 256M,
+`e2fsck -fy` clean afterwards).
+
+To rebuild them, on any aarch64 Linux host with `gcc`, `make` and `libc6-dev`:
+
+```
+curl -fsSLO https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.2/e2fsprogs-1.47.2.tar.gz
+tar xf e2fsprogs-1.47.2.tar.gz && mkdir -p e2fsprogs-1.47.2/build && cd e2fsprogs-1.47.2/build
+../configure --disable-nls --disable-uuidd --disable-fsck --disable-defrag \
+  --disable-debugfs --disable-imager LDFLAGS="-static" CFLAGS="-O2"
+make -j4 libs && make -j4 -C resize resize2fs && make -j4 -C e2fsck e2fsck
+```
+
+If recovery turns out to ship its own working `resize2fs`, the pushed copy is harmless —
+the procedure above calls `/data/resize2fs` by absolute path, so it never depends on
+which one `PATH` resolves to.
+
+## Attempt log
+
+### 2026-08-26 — Nonta72 `Droidian-beta`, did NOT boot
+
+Ran the sequence above **with the resize step skipped**, because the upstream tarball is
+missing the `resize2fs` binary its own script pushes.
+
+What went right:
+
+- `fastboot flash vendor_boot` OK; `fastboot flash boot` OK (auto-resolved to `boot_a`).
+- `fastboot format:ext4 userdata` OK.
+- `rootfs.img` (7.5GB) pushed to `/data/`; `e2fsck` clean; android-rootfs symlink made.
+- `adb reboot` at 19:04:48Z. Jay saw the **Droidian logo**, so the flashed `boot.img`
+  loaded and the kernel started.
+
+What went wrong: black screen after the logo, then the device **disappeared from USB
+entirely** — checked by USB product name across the whole bus on the flash host, not just
+for a "Nothing Phone" entry — and RNDIS `172.16.42.1` never answered. Still absent as of
+2026-08-26 20:40Z. In that state there is no remote route to the device at all: it cannot
+be read, rebooted or rolled back until it enumerates again.
+
+**Leading hypothesis: the skipped resize.** That is the one documented step that was not
+performed, and it is now fixed rather than worked around — see the static binaries above.
+Retry the full sequence *including* the resize before concluding the build is bad.
+
+**To get the device back:** hold Power ~10s to force it off, then Power + Volume Down for
+fastboot. The bootloader is unlocked and no partition layout was changed, so fastboot is
+always reachable by key combo.
 
 ## Rollback to Ubuntu Touch
 
