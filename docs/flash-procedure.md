@@ -177,6 +177,40 @@ Also note, from the same session:
   authorisation prompt cannot be accepted on a device whose display never comes up. The
   flash host's adb key was not the cause — it dates from March and was unchanged.
 
+## Slots — check them before and after every flash
+
+`spacewar` is A/B and the bootloader will quietly move the goalposts under you.
+
+After the 2026-08-26 reboot loop, the bootloader had **exhausted slot A's retries and
+marked it unbootable**, falling back to B:
+
+```
+current-slot: b
+slot-retry-count:a: 0      slot-successful:a: no     slot-unbootable:a: yes
+slot-retry-count:b: 7      slot-successful:b: yes    slot-unbootable:b: no
+```
+
+Two consequences:
+
+1. **`fastboot flash boot` writes to the ACTIVE slot.** With the active slot silently
+   changed to B, a flash intended for A lands in the wrong place and the failure looks
+   like a bad image. Always `fastboot getvar current-slot` first.
+2. **Target slot A deliberately.** The Android **11 / API 30** vendor this port depends on
+   was verified on slot A, and that dependency is the highest-risk assumption in the whole
+   port. Slot B's vendor version is unverified, so flashing there swaps a known quantity
+   for an unknown one.
+
+Reactivate A (this also clears the unbootable flag and restores the retry count) before
+flashing:
+
+```
+fastboot set_active a
+fastboot getvar current-slot     # confirm it really moved
+```
+
+Check these variables again after any boot failure — a loop that "just fails" may in fact
+have moved you to the other slot partway through.
+
 ## Rollback to Ubuntu Touch
 
 Verified image staged at `jays-mac-mini:~/taosphone-images/UT-24.02_v3.tar.xz` (721MB,
