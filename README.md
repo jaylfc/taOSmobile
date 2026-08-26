@@ -42,6 +42,31 @@ scripts/    Device introspection and deployment helpers
 docs/       Specs, scopes, and the record of what was tried
 ```
 
+## Documentation gate
+
+Every change that adds or removes a script, a systemd unit, an adaptation file
+or a doc has to touch the doc that covers it. This is enforced mechanically
+rather than by intention:
+
+```
+python3 scripts/check_doc_gate.py invariants          # Layer A
+python3 scripts/check_doc_gate.py diff-gate --staged  # Layer B, pre-commit
+bash scripts/install-git-hooks.sh                     # wire it to pre-commit
+```
+
+- **Layer A (invariants)** — every `scripts/`, `docs/`, `droidian/`, `kiosk/`
+  or `bridge/` path named in the doc set must exist on disk. This is what
+  catches a procedure doc still pointing at a renamed script.
+- **Layer B (diff-gate)** — path→doc rules. A rule fires only on a *structural*
+  change (a file added or deleted, never a plain edit), because a noisy gate
+  gets switched off. Satisfy it by editing one of the docs the rule names, or
+  by explaining yourself in a `Docs-Reviewed: <why>` commit trailer.
+
+Rules live in `docs/doc-gate.toml` and are data — cover a new area by adding a
+`[[rules]]` entry, not by editing the script. CI
+(`.github/workflows/doc-gate.yml`) is authoritative on push and PR, so
+`git commit --no-verify` skips the hook but not the gate.
+
 ## Upstream issues filed
 
 Found while bringing taOS up on the device:

@@ -20,7 +20,7 @@ kernel packages (`linux-image-*`, `linux-bootimage-*`, `linux-headers-*`).
 - **Halium 11** → the adaptation package must depend on the matching
   `adaptation-hybris-api30-phone`. A mismatch here breaks the whole
   graphics/HAL stack even with a good kernel.
-- `common_fragments` must be added as a submodule at `droidian/common_fragments`,
+- `common_fragments` must be added as a submodule at `<kernel-tree>/droidian/common_fragments`,
   pinned to the branch matching the kernel base version.
 
 ## Build

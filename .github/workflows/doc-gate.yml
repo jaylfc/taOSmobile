@@ -1,0 +1,63 @@
+name: Doc drift gate
+
+# Authoritative documentation-drift gate. Blocks changes that add or remove a
+# script, a systemd unit, an adaptation file or a doc without touching the doc
+# that covers it, unless a commit carries a "Docs-Reviewed: <why>" trailer.
+# See docs/doc-gate.toml for the rules and scripts/check_doc_gate.py for the
+# implementation. This job is authoritative regardless of local hooks
+# (`git commit --no-verify` does not skip it).
+#
+# This repo is worked on by direct commits to main as well as by PR, so the
+# gate runs on both. On a push it compares against the previous tip.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  doc-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Invariants (Layer A)
+        run: python scripts/check_doc_gate.py invariants
+
+      - name: Resolve base ref
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          elif [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            # Branch creation or a force-push whose old tip is gone: there is no
+            # meaningful base to diff against, so Layer B has nothing to say.
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Diff gate (Layer B)
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ]; then
+            echo "doc-gate: no base ref to diff against, skipping Layer B"
+            exit 0
+          fi
+          python scripts/check_doc_gate.py diff-gate --base "$BASE"

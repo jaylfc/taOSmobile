@@ -56,7 +56,7 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
 
 ## Steps
 
-1. **Kernel package.** Fork the kernel tree, add `droidian/debian` packaging
+1. **Kernel package.** Fork the kernel tree, add `droidian/kernel-debian/debian` packaging
    per `kernel-compilation.md`, build in Docker (or GitHub Actions, as we did
    for the pmOS attempt — CI worked fine and costs nothing).
    - Verify the Halium defconfig satisfies Droidian's kernel-info options.
@@ -116,7 +116,7 @@ Kernel/config issues fixed to get here (each committed with rationale):
 2. `debian/compat` conflicted with the generated `debehelper-compat`.
 3. `LLVM_IAS=0` — clang-10's integrated assembler rejects a `head.S` `.ascii` escape.
 4. Prebuilt DTB injected — GKI kernel builds no device tree.
-5. `droidian/sm7325.config` — the lahaina SoC fragment stack, so QMI/modem
+5. `droidian/kernel-debian/droidian/sm7325.config` — the lahaina SoC fragment stack, so QMI/modem
    drivers build (rmnet_core needed prompt-less `QCOM_QMI_HELPERS`).
 6. Disabled in-tree qcacld WLAN — Halium uses the vendor prebuilt module.
 7. `SECONDIMAGE_OFFSET` set — mkbootimg needs a value for `--second_offset`.

@@ -1,0 +1,87 @@
+# Documentation-drift gate configuration for taOSmobile.
+#
+# Read by scripts/check_doc_gate.py. Rules are data: add more [[rules]]
+# entries here to cover new areas without touching the script.
+#
+# Precision over recall: `when_changed` only triggers a rule on a structural
+# change (a file added or deleted), never a plain modification, and every
+# glob below is scoped to the specific tree it names. This is deliberate --
+# a noisy gate gets disabled, so false positives are worse than an occasional
+# missed doc update.
+#
+# This repo's history is mostly hardware findings rather than features, and
+# the thing that actually rots here is a procedure doc that still describes a
+# script or a systemd unit that has been renamed or deleted. The rules below
+# are aimed at exactly that.
+
+[gate]
+trailer = "Docs-Reviewed:"
+
+[invariants]
+# taOSmobile has no tinyagentos/ or desktop/ tree; naming another repo's
+# directories here would make Layer A permanently dead config.
+path_prefixes = ["scripts", "docs", "droidian", "kiosk", "bridge"]
+
+referenced_paths_scan = [
+  "README.md",
+  "docs/droidian-port-plan.md",
+  "docs/flash-procedure.md",
+  "docs/android-kiosk-scope.md",
+  "docs/droidian-kiosk-scope.md",
+  "docs/custom-image-scope.md",
+  "docs/device-notes.md",
+  "docs/first-run-controller-choice.md",
+  "droidian/taos-layer/README.md",
+  "droidian/adaptation/README.md",
+  "droidian/kernel-debian/README.md",
+]
+
+# Build outputs that are gitignored, so they are absent from a fresh clone and
+# absent in CI. The docs legitimately name them; Layer A must not fail on that.
+ignore_paths = [
+  "droidian/artifacts/*.deb",
+  "docs/introspect-*.log",
+  "bridge/target/**",
+]
+
+[[rules]]
+name = "flash-scripts"
+when_changed = ["scripts/*"]
+require_doc = ["docs/flash-procedure.md", "README.md"]
+hint = "a top-level script was added or removed; the flash/build procedure names these by path"
+
+[[rules]]
+name = "taos-layer"
+when_changed = ["droidian/taos-layer/*"]
+require_doc = ["droidian/taos-layer/README.md", "docs/droidian-port-plan.md"]
+hint = "a taOS-on-Droidian unit or installer was added or removed"
+
+[[rules]]
+name = "adaptation"
+when_changed = ["droidian/adaptation/usr/**", "droidian/adaptation/etc/**", "droidian/adaptation/debian/*"]
+require_doc = ["droidian/adaptation/README.md", "docs/droidian-port-plan.md"]
+hint = "the device adaptation package changed shape (udev rules, hybris config, packaging)"
+
+[[rules]]
+name = "kernel-packaging"
+when_changed = ["droidian/kernel-debian/debian/*", "droidian/kernel-debian/droidian/**"]
+require_doc = ["droidian/kernel-debian/README.md", "docs/droidian-port-plan.md"]
+hint = "kernel packaging changed; the port plan lists the fixes and the produced .debs"
+
+[[rules]]
+name = "kiosk-units"
+when_changed = ["kiosk/*.service", "kiosk/*.sh", "kiosk/*.desktop"]
+require_doc = ["docs/android-kiosk-scope.md", "docs/droidian-kiosk-scope.md", "README.md"]
+hint = "a kiosk unit or launcher script was added or removed; the scope docs enumerate the approaches tried"
+
+[[rules]]
+name = "bridge"
+when_changed = ["bridge/src/**", "bridge/*.toml"]
+require_doc = ["README.md", "docs/superpowers/**"]
+hint = "the SMS/dial bridge gained or lost a module"
+
+[[rules]]
+name = "doc-index"
+when_changed = ["docs/*.md"]
+require_doc = ["README.md"]
+hint = "a doc was added or removed; README indexes the doc set"
