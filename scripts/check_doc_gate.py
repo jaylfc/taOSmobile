@@ -4,7 +4,11 @@
 Blocks commits/PRs that change feature code without a matching doc update,
 unless the change carries an explicit "Docs-Reviewed: <why>" trailer.
 
-Two layers:
+Three layers:
+  liveness    -- Layer A0: refuse to pass vacuously. Config that names a tree,
+                 doc or rule target this repo does not have would make the
+                 gate green by measuring nothing; that is reported as an
+                 error rather than as coverage.
   invariants  -- deterministic sanity checks (Layer A). Currently: every
                  path mentioned in the configured doc set, under one of the
                  repo trees named by `[invariants] path_prefixes`, actually
@@ -102,11 +106,74 @@ def load_config(path: Path) -> dict:
         return tomllib.load(f)
 
 
+def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict) -> list[str]:
+    """Layer A0: the gate must not be able to pass by measuring nothing.
+
+    Every check here targets a way this gate can report "clean" while actually
+    inspecting an empty set:
+
+    - a `path_prefixes` entry naming a tree the repo does not have. The token
+      regex then matches nothing, every scanned doc yields zero tokens, and
+      Layer A is green forever. This is not hypothetical: the taOS original
+      hardcoded `tinyagentos|desktop`, and porting it here unchanged would have
+      produced exactly that.
+    - a `referenced_paths_scan` entry that does not exist. Missing scan targets
+      are skipped by design (a gitignored local-only doc is legitimate), but a
+      typo is indistinguishable from that and silently shrinks coverage, so
+      anything skipped must be declared in `optional_scan_paths`.
+    - a rule whose `when_changed` globs are all rooted in a nonexistent tree, or
+      whose `require_doc` names a file that does not exist. Either way the rule
+      can never fire or can never be satisfied.
+
+    The failure mode this guards against is the one that cost taOS five weeks on
+    #2081: an autouse fixture no-oped `verify_csrf` for the whole auth suite, so
+    the tests were green because they were measuring the fixture rather than the
+    system. A gate that cannot fail is worse than no gate, because it is
+    reported as coverage.
+    """
+    invariants = config.get("invariants", {})
+    optional = invariants.get("optional_scan_paths", [])
+    failures: list[str] = []
+
+    for prefix in invariants.get("path_prefixes", DEFAULT_PATH_PREFIXES):
+        if not (repo_root / prefix).is_dir():
+            failures.append(
+                f"config: path_prefixes names '{prefix}/', which is not a directory in this "
+                f"repo -- Layer A would scan for a tree that does not exist and pass vacuously"
+            )
+
+    for rel in files_to_scan:
+        if not (repo_root / rel).is_file() and not _match_any(rel, optional):
+            failures.append(
+                f"config: referenced_paths_scan names '{rel}', which does not exist -- it "
+                f"would be skipped silently; fix the path or declare it in optional_scan_paths"
+            )
+
+    for rule in config.get("rules", []):
+        name = rule.get("name", "?")
+        for pattern in rule.get("when_changed", []):
+            root = pattern.split("/", 1)[0]
+            if not any(ch in root for ch in "*?[") and not (repo_root / root).exists():
+                failures.append(
+                    f"config: rule '{name}' watches '{pattern}', but '{root}' does not exist "
+                    f"in this repo -- the rule can never fire"
+                )
+        for doc in rule.get("require_doc", []):
+            if any(ch in doc for ch in "*?[") :
+                continue
+            if not (repo_root / doc).exists():
+                failures.append(
+                    f"config: rule '{name}' requires '{doc}', which does not exist -- the rule "
+                    f"could fire but never be satisfied by a doc edit"
+                )
+    return failures
+
+
 def check_referenced_paths(repo_root: Path, files_to_scan: list[str], config: dict) -> list[str]:
-    """Layer A: every scripts/tinyagentos/docs/desktop path token mentioned in
-    the configured doc set must exist on disk. A scan-target file that itself
-    does not exist (e.g. a local-only, gitignored doc) is silently skipped
-    rather than treated as a failure."""
+    """Layer A: every path token mentioned in the configured doc set, under one
+    of the repo trees named by `path_prefixes`, must exist on disk. A scan-target
+    file that itself does not exist is skipped here, but Layer A0 above refuses
+    to let that happen silently."""
     prefixes = config.get("invariants", {}).get("path_prefixes", DEFAULT_PATH_PREFIXES)
     token_re = build_token_re(prefixes)
     ignore = config.get("invariants", {}).get("ignore_paths", [])
@@ -295,7 +362,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "invariants":
         files_to_scan = config.get("invariants", {}).get("referenced_paths_scan", [])
-        failures = check_referenced_paths(REPO_ROOT, files_to_scan, config)
+        failures = check_config_is_live(REPO_ROOT, files_to_scan, config)
+        failures += check_referenced_paths(REPO_ROOT, files_to_scan, config)
         return _report(failures)
 
     if args.command == "print-trailer":

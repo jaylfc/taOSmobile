@@ -54,6 +54,11 @@ python3 scripts/check_doc_gate.py diff-gate --staged  # Layer B, pre-commit
 bash scripts/install-git-hooks.sh                     # wire it to pre-commit
 ```
 
+- **Layer A0 (liveness)** — refuses to let the gate pass by measuring nothing.
+  Config that names a tree, a doc or a rule target this repo does not have is
+  an error, not coverage: the token regex would match nothing and Layer A would
+  be green forever. A gate that cannot fail is worse than no gate, because it
+  gets reported as protection.
 - **Layer A (invariants)** — every `scripts/`, `docs/`, `droidian/`, `kiosk/`
   or `bridge/` path named in the doc set must exist on disk. This is what
   catches a procedure doc still pointing at a renamed script.
