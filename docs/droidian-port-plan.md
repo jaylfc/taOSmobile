@@ -82,7 +82,24 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
   bootloader stays unlocked, and keep the verified UT image (already downloaded
   to the Mac Mini, integrity checked) as rollback.
 
-## Status — kernel package BUILDS (2026-07-21)
+## Status — FLASHED, not booting (2026-08-26)
+
+The kernel milestone below stands, but it is no longer the latest state. The build has
+since been flashed to hardware **twice** and does not boot: it is a **reboot loop**, and
+during the loop the device raises no USB, so there is no channel to diagnose through.
+The kernel itself is not in question — the rootfs gets mounted and written and the Halium
+Android container starts.
+
+**Read `flash-procedure.md` before doing anything with hardware.** It carries the attempt
+log, the A/B slot handling (a loop marks the slot unbootable and switches slots under
+you), and the correction that macOS cannot speak RNDIS so Droidian's debug channel must
+be driven from Linux.
+
+Fallback if our own build also loops: the Android Device Owner kiosk route in
+`android-kiosk-scope.md`, pre-authorised by Jay and carded as `tsk-q3rkpx`. Note root is
+not required for it.
+
+## Milestone — kernel package BUILDS (2026-07-21)
 
 **Milestone reached: the Droidian kernel package builds end-to-end.** From
 `jaylfc/linux-android-nothing-spacewar@droidian-taos`, the Droidian
