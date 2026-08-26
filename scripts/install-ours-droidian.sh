@@ -1,4 +1,9 @@
 #!/bin/bash
+# SUPERSEDED on this device by scripts/build-userdata-image.sh -- see
+# docs/flash-procedure.md, "Prebuilt /data route". Stock recovery on spacewar
+# draws no adb authorisation prompt, so adb here is stuck at `unauthorized` and
+# this script cannot run. Kept for a device that does authorise adb.
+#
 # Install OUR Droidian build onto spacewar. Run from the Pi with the phone in
 # stock recovery (slot B) and adb AUTHORISED. userdata is not slotted, so the
 # /data work is slot-independent; slot A is restored at the end.

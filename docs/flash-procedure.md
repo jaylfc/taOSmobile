@@ -5,9 +5,19 @@ device-specific brick modes. The previous version of this file was **wrong** —
 described a hand-rolled `fastboot flash userdata rootfs.img` sequence. That is not how
 Droidian installs on this device.
 
+> **Do not confuse that with the prebuilt-`/data` route added below (2026-08-26).**
+> The mistake above was flashing `rootfs.img` *as* the userdata partition — the rootfs
+> is a **file that lives inside** the `/data` filesystem, not the filesystem itself.
+> The prebuilt route flashes a real `/data` **ext4 filesystem that contains**
+> `rootfs.img` plus the `android-rootfs` symlink, which is byte-for-byte the state the
+> porter's `adb push` sequence leaves behind. Same destination, different vehicle.
+
+- **A/B device.** Slot suffix is *not* fixed — see the slots section below; the `/data`
+  work is done from slot B and the system is booted from slot A.
+
 ## Device facts (verified on-device, not assumed)
 
-- **A/B device**, currently on slot `_a` (`ro.boot.slot_suffix=_a`, `ro.build.ab_update=true`).
+- **A/B device** (`ro.build.ab_update=true`).
 - **Vendor is Android 11** (`ro.vendor.build.version.release=11`, `RKQ1.230824.001`).
   This matches our Halium 11 / api30 build. Note the XDA Droidian image expects an
   Android **13** vendor and is therefore the wrong image for this device state.
@@ -250,6 +260,47 @@ fastboot getvar current-slot     # confirm it really moved
 
 Check these variables again after any boot failure — a loop that "just fails" may in fact
 have moved you to the other slot partway through.
+
+## Prebuilt `/data` route — no on-device shell at all (2026-08-26)
+
+**Why this exists.** Stock recovery on `spacewar` shows **no adb authorisation prompt**.
+Confirmed at the device: recovery was reached, `adb` sat at `unauthorized`, both the
+Mac's March key and a freshly generated Pi key were tried, and no prompt was ever drawn
+on screen to accept. So the porter's `adb push` route cannot be driven at all here. The
+answer is to stop needing a shell.
+
+`scripts/build-userdata-image.sh` builds the finished `/data` filesystem on the Linux USB
+host and it goes on in one fastboot write:
+
+```
+# on the Linux host
+scripts/build-userdata-image.sh          # ~4-5GB of real data, mostly zeros
+# then, phone in fastboot:
+fastboot set_active a                    # boot slot must be A before the reboot
+fastboot flash userdata work/userdata.img
+fastboot reboot
+```
+
+What the script does, and why each part matters:
+
+- **Resizes the rootfs here, not on the phone.** The 4GiB api30 rootfs is grown to 32G
+  with `resize2fs`, and `e2fsck` verifies it *before* it ever reaches the device. The
+  skipped resize was the leading suspect for the first failed boot; doing it on a machine
+  where the result can be checked removes it as a variable.
+- **Disables `orphan_file` and `fast_commit` explicitly.** The Halium kernel is 5.4 and
+  can mount neither (6.x and 5.10+ respectively). e2fsprogs 1.47 does not enable them by
+  default, so this is belt-and-braces against a toolchain bump silently producing a
+  filesystem the phone refuses to mount.
+- **Builds a 40G filesystem into a 226GiB partition** (`partition-size:userdata` is
+  `0x388D5D3000` = 226.21 GiB). That is deliberate: it keeps the write small and fast.
+  `/data` must be grown to fill the partition after first boot — carded, do not forget it.
+
+`max-download-size` is `0x30000000` (768 MiB), so fastboot chunks the image by itself; no
+`img2simg` is required.
+
+**Supersedes the recovery route.** `scripts/install-ours-droidian.sh` drove the same
+`/data` work over `adb` in recovery. It is kept only for the case where a device *does*
+authorise adb; on this phone it cannot run, and it is not the procedure to reach for.
 
 ## Rollback to Ubuntu Touch
 
