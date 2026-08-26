@@ -51,16 +51,24 @@ mkfs.ext4 -F -L data -m 0 \
 # (seen at /tmp/loop0), so unmounting only OUR mountpoint is not enough -- the image
 # stays mounted elsewhere and the e2fsck below then runs against a live filesystem and
 # corrupts it. That happened once; do not let it happen again.
+# Unmount by MOUNTPOINT, never by device name: util-linux resolves a loop mount back
+# to its backing file, so the mount table reads "userdata.img on /tmp/loop0" and a
+# match on the /dev/loopN name never fires -- leaving the image mounted while the
+# detach fails silently. Ask findmnt for the target instead.
 release_image() {
-  local img="$1" dev
-  for dev in $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
-    while mount | grep -q "^$dev "; do
-      sudo umount "$dev" || break
+  local img="$1" dev mp
+  for src in "$img" $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
+    while mp=$(findmnt -n -o TARGET --source "$src" 2>/dev/null | head -1); [ -n "$mp" ]; do
+      sudo umount "$mp" || break
     done
+  done
+  for dev in $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
     sudo losetup -d "$dev" 2>/dev/null || true
   done
-  while mount | grep -q " $img "; do sudo umount "$img" || break; done
   sync
+  if findmnt -n --source "$img" >/dev/null 2>&1; then
+    echo "WARNING: $img is STILL mounted -- do not trust any fsck run after this" >&2
+  fi
 }
 
 log "populate it exactly as the porter procedure leaves /data"
