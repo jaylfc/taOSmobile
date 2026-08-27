@@ -7,6 +7,12 @@
 # the whole point of #2081's mitigation is that it must not be provable by
 # something that measured nothing.
 #
+#   exit 0  PASS         every check ran and passed
+#   exit 1  FAIL         something is wrong with the device
+#   exit 2  INCOMPLETE   nothing failed, but a check did not run
+#   exit 3  SELF-PROOF FAILED -- the suite cannot tell an absent controller from a
+#           reachable one, so it issues no verdict. Not a verdict about the device.
+#
 # Background. verify_csrf's exemption was "no taos_session cookie -> skip", so a
 # STALE cookie turned a correct PIN into 403 {"detail":"CSRF token missing"},
 # which pin-panel.js rendered as "Incorrect PIN." Keyboard-less kiosk, no way to
@@ -46,11 +52,45 @@ none() { echo "  SKIPPED $*"; skip=$((skip+1)); }
 cont() { echo "          $*"; }
 hdr()  { echo; echo "== $* =="; }
 
-status() {  # status METHOD PATH [--data BODY] [--cookie C]
-    local method="$1" path="$2"; shift 2
-    curl -s -o /dev/null -w '%{http_code}' -m 10 -X "$method" \
-        -H 'Content-Type: application/json' "$@" "$BASE$path" 2>/dev/null || echo 000
+# 000 is curl's "no HTTP response at all" -- a refused connection or a timeout.
+# The arms below MATCH on it, so it has to arrive as exactly three characters.
+# curl prints it AND exits non-zero, so the trailing `|| echo 000` that used to be
+# here appended a SECOND one: the result was "000000", which matched neither the
+# 000 arm nor the 404 arm, fell through to the catch-all, and reported an absent
+# controller as "route exists". Four checks then read green against nothing at all
+# -- the exact vacuous pass this file's header promises to refuse. Normalise the
+# code instead, and prove at every start (below) that the sentinel still lands.
+UNREACHABLE=000
+
+status_at() {  # status_at BASE METHOD PATH [--data BODY] [--cookie C]
+    local base="$1" method="$2" path="$3"; shift 3
+    local out
+    out=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X "$method" \
+        -H 'Content-Type: application/json' "$@" "$base$path" 2>/dev/null)
+    case "$out" in
+        [0-9][0-9][0-9]) echo "$out" ;;
+        *)               echo "$UNREACHABLE" ;;
+    esac
 }
+
+status() { status_at "$BASE" "$@"; }
+
+# --- 0. self-proof: the unreachable sentinel still reaches the arms ----------
+# Every check below is gated on telling "the controller answered" apart from
+# "nothing is listening". When that distinction breaks, the gate opens and the
+# suite reports PASS against an absent controller -- which is what it did until
+# this was added. So prove the distinction rather than assume it: port 1 on
+# loopback has nothing on it, and a closed loopback port REFUSES instantly, so
+# this cannot turn into a wait the way a blackholed address would.
+CLOSED_PORT="${TAOS_CLOSED_PORT:-1}"
+sentinel=$(status_at "http://127.0.0.1:$CLOSED_PORT" POST /auth/pin-login --data '{}')
+if [ "$sentinel" != "$UNREACHABLE" ]; then
+    echo "SELF-PROOF FAILED: an unreachable controller yielded '$sentinel', not"
+    echo "'$UNREACHABLE'. The 'unreachable' arm cannot fire, so every check below"
+    echo "would read as PASS against a controller that is not running. Refusing to"
+    echo "report a verdict at all -- a broken instrument must not issue one."
+    exit 3
+fi
 
 # --- 1. the routes exist ----------------------------------------------------
 # Without this, every check below "passes" against a 404 and proves nothing.

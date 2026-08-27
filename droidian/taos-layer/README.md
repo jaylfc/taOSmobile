@@ -83,6 +83,19 @@ So at every start it issues a request of its own and confirms the resulting
 access-log line is readable, and exits non-zero if it is not. A red unit here is
 information; a green blind one would not be.
 
+**The check proves its own sentinel before it reports anything.** The same
+failure it exists to catch had been living inside it. `status()` ended in
+`curl … || echo 000`, and curl prints `000` *and* exits non-zero when it cannot
+connect — so the fallback appended a second one. The result, `000000`, matched
+neither the `000` arm nor the `404` arm, fell through to the catch-all, and
+reported an absent controller as *route exists*. Four checks then read `PASS`
+against nothing listening at all, and the section header calling itself a guard
+against a vacuous pass was the part that had gone inert. So the code is now
+normalised to exactly three digits, and at every start the check asks a closed
+loopback port for a status and asserts it gets the unreachable sentinel back.
+If it does not, it exits **3** and issues no verdict — a broken instrument must
+not hand down a judgement about the device.
+
 **We have no credential-establishing form POST of our own.** @taOS-dev found a
 second instance of the same class upstream at `POST /setup/complete`: any route
 that *mints* a credential can never satisfy a double-submit check, because a
@@ -431,8 +444,10 @@ instrument that stopped reporting.
 ## Order of operations after the flash
 
 1. Verify over SSH: network, then `install-taos.sh`, then confirm `:6969`.
-2. Run `TAOS_PIN=… ./check-csrf-lockout.sh` and get a `PASS`. `INCOMPLETE` means
-   a check did not run, which is not the same as a clean device.
+2. Run `TAOS_PIN=… ./check-csrf-lockout.sh` and get a `PASS`. `INCOMPLETE`
+   (exit 2) means a check did not run, which is not the same as a clean device;
+   exit **3** is the check disqualifying *itself* and says nothing about the
+   phone — fix the check, then re-run.
 3. Confirm what the kiosk would open: `./taos-kiosk-launch.sh --print-url`. On an
    unconfigured device this is the first-run helper, and
    `systemctl is-active taos-firstrun.service` must say `active` — otherwise the
