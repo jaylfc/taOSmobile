@@ -9,6 +9,15 @@ After=lightdm.service taos-tailscaled.service
 # screen. This is a SYSTEM unit, so unlike the earlier attempt it survives the
 # user session (and the SSH connection) going away.
 OnFailure=taos-kiosk-recover.service
+# Three failures in a minute means it is not going to work; hand back to
+# Ubuntu Touch instead of flapping on the user's screen. These two keys live in
+# [Unit], NOT [Service] -- systemd moved them in v230 and silently ignores them
+# in [Service], which is where they were until 2026-08-27. So the limit this
+# comment describes had never actually been in force. Same bug as the one fixed
+# in droidian/taos-layer/taos-kiosk.service on 2026-08-26; found by running
+# every rendered unit through systemd-analyze verify rather than by reading.
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -35,10 +44,6 @@ ExecStart=/usr/bin/cage -- /home/phablet/electron/electron /home/phablet/electro
 
 Restart=on-failure
 RestartSec=5
-# Three failures in a minute means it is not going to work; hand back to
-# Ubuntu Touch instead of flapping on the user's screen.
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 TimeoutStopSec=10
 
