@@ -17,6 +17,8 @@ Droidian phone. Authored ahead of the flash so it is ready to drop in.
 | `taos-firstrun.service` | The first-run helper, loopback only |
 | `taos-firstrun.py` | The helper itself; installed to `/usr/local/lib/taos/` |
 | `check-firstrun-helper.sh` | Acceptance test: prove the helper is not a proxy |
+| `taos-kiosk-launch.sh` | Resolves the kiosk URL from `shell.conf`, then becomes the kiosk |
+| `check-kiosk-url.sh` | Acceptance test: prove the kiosk never opens a dead page |
 
 ## Design decisions, and why
 
@@ -132,6 +134,72 @@ leaving the default in force — the same silently-ignored-setting class as the
 `StartLimitBurst`-in-`[Service]` bug fixed in `taos-kiosk.service`. Worth
 grepping other units for settings that look plausible but are silently dropped.
 
+### The kiosk URL comes from `shell.conf`, and every fallback points at the helper
+
+`taos-kiosk.service` used to hardcode `--app=http://localhost:6969/`. That is
+correct in exactly one of the three states this device can be in:
+
+| State | What listens on `:6969` | What the hardcoded unit showed |
+|---|---|---|
+| Fresh device, no `shell.conf` | nothing | a dead page, with no way to reach the first-run helper on `:6970` |
+| `mode=local` | the controller | correct |
+| `mode=remote` | nothing — remote mode is *defined* by having no local controller | a dead page |
+
+So the URL is resolved at start from `~/.config/taosmobile/shell.conf`, which is
+what `docs/first-run-controller-choice.md` requirement 3 asks for and what the
+first-run helper already writes. systemd cannot do this in the unit file:
+`ExecStart=` performs no command substitution. Hence `taos-kiosk-launch.sh`.
+
+**Which way to fail is the whole safety argument.** Every fallback resolves to
+the first-run helper, never to `:6969`. A user holding a phone with no keyboard
+can escape the helper screen — it is a form that writes the config. They cannot
+escape a controller that is not there. The one deliberate exception is
+`mode=local` with a malformed `url=`: that device *has* a controller, so it gets
+`:6969` rather than being sent back to first-run setup.
+
+**A dead loopback target is an exit 3, not a launch.** A kiosk sitting on
+Chromium's "site can't be reached" is a *successful* start, so `Restart=` and
+`OnFailure=` never fire and the screen is stuck — the "successful start showing
+the wrong page" that `OnFailure=taos-kiosk-recover.service` explicitly does not
+cover. Refusing the display instead lets the recover unit hand it back to Phosh,
+which has a keyboard and a way back in. This required
+`RestartPreventExitStatus=3 64` in the unit: `Restart=on-failure` parks a unit in
+*auto-restart*, not *failed*, and `OnFailure=` only fires on *failed*, so without
+it the kiosk would flap forever and never fail over. The start limit could not
+rescue it either — the launcher waits 45 s internally, so three attempts span
+~150 s and never fall inside a 60 s window.
+
+**Remote targets are deliberately *not* readiness-gated.** A phone in remote mode
+is a surface whose network comes and goes; handing the display back to Phosh on a
+blip would be worse than the unreachable-controller state requirement 2 already
+puts in the UI. Only loopback targets are gated.
+
+**The insecure-origin flag now follows the resolved URL.** It was hardcoded to
+`http://localhost:6969`, which had it backwards: Chromium already treats
+`localhost` as trustworthy without any flag, while a remote `http://` controller
+— the case that actually needs it — was not covered. It is also why the URL
+grammar rejects commas: that flag takes a *comma-separated list*, so a comma in
+`shell.conf` would grant a secure context to an origin nobody chose.
+
+`check-kiosk-url.sh` runs 32 checks off-device against constructed `shell.conf`
+files. Its positive control is **different from the helper's**, because the trap
+here is different: most expected answers are the helper URL, so a launcher that
+ignored `shell.conf` entirely and always printed the helper would pass most of
+the file. The control therefore proves the launcher *discriminates* — a good
+remote config yields the configured URL and a local config yields the controller
+— and exits `2` INCOMPLETE if it does not. Proven red against eight deliberately
+broken builds: config ignored (caught as INCOMPLETE, not FAIL), fallbacks
+pointed at `:6969`, launching anyway on a dead target, the origin flag hardcoded
+back, `RestartPreventExitStatus` deleted, a loosened URL grammar, remote targets
+gated, and the unit's `ExecStart` reverted.
+
+Every readiness call in the checker runs under an **outer** `timeout`, and the
+probe bounds each connect attempt. A bare `/dev/tcp` connect to an address that
+*blackholes* rather than refusing blocks for the kernel's SYN-retry budget —
+minutes — which made `WAIT_SECS` a lower bound rather than a budget and turned
+one broken-build run into a hang. A hanging check is not a red; it is an
+instrument that stopped reporting.
+
 ## Not needed here (unlike the Ubuntu Touch attempt)
 
 - `kiosk/polyfills.js` — Debian Chromium is current; the `Object.hasOwn` /
@@ -146,5 +214,9 @@ grepping other units for settings that look plausible but are silently dropped.
 1. Verify over SSH: network, then `install-taos.sh`, then confirm `:6969`.
 2. Run `TAOS_PIN=… ./check-csrf-lockout.sh` and get a `PASS`. `INCOMPLETE` means
    a check did not run, which is not the same as a clean device.
-3. Only then `systemctl start taos-kiosk.service`, **with the phone in view**.
-4. Once proven, `systemctl enable` it so it owns the display at boot.
+3. Confirm what the kiosk would open: `./taos-kiosk-launch.sh --print-url`. On an
+   unconfigured device this is the first-run helper, and
+   `systemctl is-active taos-firstrun.service` must say `active` — otherwise the
+   launcher will refuse the display rather than show a dead page.
+4. Only then `systemctl start taos-kiosk.service`, **with the phone in view**.
+5. Once proven, `systemctl enable` it so it owns the display at boot.

@@ -246,9 +246,18 @@ discovery at all, which is cheaper for us than anything account-mediated.
    pair request expired* — the last is real rather than theoretical, since
    expiry is enforced at approve time (F6) and so a request can look pending on
    our screen right up until it fails.
-3. **Config, not code.** One file the kiosk launcher reads (it already does
-   this: `~/.config/taosmobile/shell.conf`). Mode + URL live there so the
-   session is a pure consumer.
+3. **Config, not code.** One file the kiosk launcher reads:
+   `~/.config/taosmobile/shell.conf`. Mode + URL live there so the session is a
+   pure consumer.
+
+   > **This doc used to say the launcher "already does this". It did not.** That
+   > sentence described `Main.qml` from the Ubuntu Touch demo plan — a shell that
+   > was never built — while the unit that actually owns the display,
+   > `taos-kiosk.service`, hardcoded `--app=http://localhost:6969/`. So the
+   > requirement read as already satisfied for as long as it was written down,
+   > which is the same failure as a comment describing a setting systemd was
+   > silently ignoring. Built for real in `taos-kiosk-launch.sh`; the launcher
+   > resolves the URL and `check-kiosk-url.sh` holds it there.
 4. **Works offline.** Local mode must complete with no network. That means the
    image ships the venv and wheels rather than fetching them.
 5. **Worker registration is orthogonal.** In remote mode the phone should still
@@ -271,6 +280,12 @@ discovery at all, which is cheaper for us than anything account-mediated.
 
 ## Notes
 
+- **The helper has to actually be running, and once was not.** The commit that
+  added `taos-firstrun.py` installed the unit and the script but never
+  `systemctl enable`d it, so it shipped dead — invisible until the kiosk started
+  depending on it, because nothing else did. The installer now enables it and
+  fails if it does not come up, and the kiosk `Wants=` it. A component nobody
+  depends on yet is a component nobody can tell is broken.
 - This mirrors the hybrid-vs-local decision taken early in this project; the
   conclusion then was that a phone is more useful as its own controller, but
   that was for a demo device with a Pi already present. Making it a first-run

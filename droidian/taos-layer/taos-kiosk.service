@@ -4,7 +4,13 @@ Documentation=https://github.com/jaylfc/taOSmobile
 # Starting this stops Phosh: both want the display, and only one process can
 # hold it. Conflicts= makes that explicit rather than a race.
 Conflicts=phosh.service
-After=phosh.service taos-controller.service
+After=phosh.service taos-controller.service taos-firstrun.service
+# On an unconfigured device the launcher resolves to the first-run helper, so
+# the helper has to exist for the very first boot to show anything. Wants=, not
+# Requires=: if the helper is dead the launcher exits non-zero by itself and
+# OnFailure= hands the display back to Phosh, which is a better answer than
+# systemd refusing to start the kiosk at all in the modes that do not need it.
+Wants=taos-firstrun.service
 # If the kiosk cannot start, hand the display back to Phosh rather than leaving
 # a dead screen. This is a SYSTEM unit so it survives session teardown — the
 # lesson from Ubuntu Touch, where the safety net died with the thing it was
@@ -40,20 +46,25 @@ RuntimeDirectory=taos-kiosk
 RuntimeDirectoryMode=0700
 ExecStartPre=/bin/rm -rf /run/taos-kiosk/profile
 
-ExecStart=/usr/bin/cage -- /usr/bin/chromium \
-    --kiosk \
-    --user-data-dir=/run/taos-kiosk/profile \
-    --app=http://localhost:6969/ \
-    --ozone-platform=wayland \
-    --enable-features=UseOzonePlatform,TouchpadOverscrollHistoryNavigation \
-    --touch-events=enabled \
-    --no-first-run \
-    --disable-infobars \
-    --disable-session-crashed-bubble \
-    --password-store=basic \
-    --unsafely-treat-insecure-origin-as-secure=http://localhost:6969
+# The URL is NOT hardcoded here any more. It comes from shell.conf, and on an
+# unconfigured device it is the first-run helper rather than a controller that
+# is not there. ExecStart= cannot do command substitution, so the resolution
+# lives in the wrapper; see the header of taos-kiosk-launch.sh for why every
+# fallback points at the helper and why a dead loopback target is an exit 3
+# rather than a kiosk sitting on an error page.
+ExecStart=/usr/local/lib/taos/taos-kiosk-launch.sh
 
 Restart=on-failure
+# Exit 3 is the launcher REFUSING to take the display because its target is not
+# listening; exit 64 is a bad argument. Neither is retryable, and both must
+# reach the failed state so OnFailure= hands the screen back to Phosh.
+#
+# Without this the unit would flap instead of failing over: Restart=on-failure
+# parks a unit in auto-restart, not failed, and OnFailure= only fires on failed.
+# The start limit cannot rescue it either -- the launcher waits 45s internally,
+# so three attempts span ~150s and never fall inside a 60s window. The internal
+# wait IS the retry; retrying the retry just delays the handback forever.
+RestartPreventExitStatus=3 64
 RestartSec=5
 TimeoutStopSec=10
 

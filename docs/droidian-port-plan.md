@@ -67,8 +67,18 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
 5. **Flash and bring up.** Verify over SSH before trusting the display:
    controller, network, then compositor.
 6. **taOS layer.** Lift `taos-controller.service` and the venv from this repo —
-   Debian means the wheels that work today keep working. Then
-   `cage -- chromium --kiosk --app=http://localhost:6969/` as the session.
+   Debian means the wheels that work today keep working. Then `cage --
+   chromium --kiosk` as the session — but **the URL is not hardcoded**. It is
+   resolved at start by `taos-kiosk-launch.sh` from
+   `~/.config/taosmobile/shell.conf`, because `--app=http://localhost:6969/` is
+   correct only in `mode=local`: on a fresh device and in `mode=remote` nothing
+   listens there, and the unit showed a dead page with no route to the first-run
+   helper. Every fallback resolves to the helper rather than to `:6969`, and a
+   dead loopback target makes the launcher exit 3 so
+   `OnFailure=taos-kiosk-recover.service` can hand the display back to Phosh —
+   a kiosk sitting on an error page is a *successful* start and would otherwise
+   never fail over. Acceptance test `check-kiosk-url.sh` (32 checks, off-device);
+   rationale in `droidian/taos-layer/README.md`.
    - Chromium runs on an **ephemeral profile** under `/run`, and
      `taos-kiosk-csrf-guard.service` watches for the taOS#2081 lockout. Both are
      required, not belt-and-braces: the profile covers a cookie that is already

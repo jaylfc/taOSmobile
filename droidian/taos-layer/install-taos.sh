@@ -72,7 +72,35 @@ sudo install -D -m 755 kiosk-csrf-guard.sh /usr/local/lib/taos/kiosk-csrf-guard.
 sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-firstrun.service \
     | sudo tee /etc/systemd/system/taos-firstrun.service >/dev/null
 sudo install -D -m 755 taos-firstrun.py /usr/local/lib/taos/taos-firstrun.py
+# Kiosk launcher: resolves the URL from shell.conf instead of the unit
+# hardcoding :6969, which was wrong on a fresh device and wrong in remote mode.
+# ExecStart= cannot do command substitution, hence a wrapper rather than a
+# cleverer unit file.
+sudo install -D -m 755 taos-kiosk-launch.sh /usr/local/lib/taos/taos-kiosk-launch.sh
 sudo systemctl daemon-reload
+
+step "verify the kiosk resolves a URL before it is ever given the display"
+# Off-device check, run here because this is the last point before the display
+# is offered and a wrong URL is a dead screen on a keyboard-less phone. Exit 2
+# is INCOMPLETE, not pass.
+./check-kiosk-url.sh || krc=$?
+case "${krc:-0}" in
+    0) ;;
+    2) echo "NOTE: kiosk URL checks INCOMPLETE -- see above. Do not enable the kiosk blind." ;;
+    *) echo "check-kiosk-url.sh FAILED -- the kiosk would open the wrong page. Not shipping this."
+       exit 1 ;;
+esac
+
+step "first-run helper"
+# Must be up before the kiosk: on an unconfigured device the launcher resolves
+# to the helper, and the launcher refuses the display (exit 3) if it is not
+# listening rather than showing an unrecoverable error page.
+sudo systemctl enable --now taos-firstrun.service
+if ! systemctl is-active --quiet taos-firstrun.service; then
+    echo "taos-firstrun.service did not come up; a fresh device would have no setup screen."
+    sudo journalctl -u taos-firstrun.service -n 20 --no-pager || true
+    exit 1
+fi
 
 step "start the controller and WAIT for the port"
 sudo systemctl enable --now taos-controller.service
@@ -112,6 +140,10 @@ esac
 
 echo
 echo "Controller is up and verified. The display is deliberately NOT touched."
+echo
+echo "The kiosk will open:"
+echo "  $(./taos-kiosk-launch.sh --print-url 2>/dev/null || echo '(could not resolve)')"
+echo "(unconfigured devices open the first-run helper; set mode there.)"
 echo
 echo "To take the screen (do this with the phone in front of you):"
 echo "  sudo systemctl start taos-kiosk.service     # Phosh stops, taOS takes over"
