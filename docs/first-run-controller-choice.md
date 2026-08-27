@@ -186,41 +186,87 @@ and the worker polls `manual-claim` — 202 "awaiting" until authorised, then
 `{signing_key, url}`. Per-IP rate limited (`_manual_claim_rate_ok`), so back off
 on 429.
 
-### The gap: there is no controller enumeration, so the picker has no backing API
+### Enumeration EXISTS — `GET /api/hosts`. This section used to say it did not.
 
-**`GET /api/account/mesh/status` is not it.** Backed by `mesh_status()`
-(`tinyagentos/taosnet/mesh.py:130`), it reports only **this** host from
-`tailscale status --json` — `{joined, online, tailnet, node_ip, hostname,
-guests}` — and `guests` is only peers tagged `tag:guest` that joined *this*
-host's mesh (`_is_guest_node`, `:107`). Self is `self_node.get("HostName")`: a
-tailscale hostname, no UUID, no user-set display name.
+**Corrected 2026-08-27 (A2A 3424).** Everything below the fold in the previous
+version of this section was built on "there is no controller-enumeration
+endpoint". That was wrong, and it was wrong in the direction that costs most:
+it declared a requirement unmeetable and sent the design down a fallback path.
 
-**Now definitive on both sides (A2A 3418):** with the upstream surface in hand,
-there is no controller-enumeration endpoint on the controller *and* none in
-taos.my's surface as the controller's forwarding table knows it. The nearest
-neighbour is `/api/cluster/join/*` (`_JOIN_BASE`, taos-website PR #35) — account
--credential-based and cluster-shaped, but it enumerates **join requests**, not
-controllers. It is not the answer; it is evidence that taos.my already does
-account-scoped cluster bookkeeping, so this is the right neighbourhood.
+```
+GET /api/hosts                         taos-website server/main.py:864
+    user: dict = Depends(current_user)     <- ACCOUNT session credential
+    -> {"hosts": [{handle, created_at}], "count": N}
+```
 
-**Carded upstream as `tsk-ckvyps`** (repo `jaylfc/taos-website`, not ours to
-land) for the cheap shape agreed below.
+`Depends(current_user)` is the account credential and nothing else — no device
+token, no controller address, no hardware. **That is the hard ordering
+requirement met verbatim**, which is the thing this section said was missing.
+Backing store is real: `accounts.py:78`, `hosts(id, account_id, headscale_user,
+pairing_code, handle UNIQUE, created_at)`; `list_hosts` orders by `created_at`.
 
-This is load-bearing for the flow, because of an ordering constraint that is
-easy to miss: **`/api/devices/pair-requests` lives on a controller, not on
-taos.my.** To create a pair request the phone must already have a controller
-address. So enumeration is not a convenience on top of pairing — it is the step
-*before* pairing, and without it the remote branch cannot start.
+**Verified against the live host, not just read:** `GET /api/hosts` → **401**,
+with `GET /api/nonexistent-control-probe-2` → 404 as the negative control. The
+method is correct for this route, so the 404-means-wrong-method trap that bit
+the `/api/auth/login` probe does not apply here. 401 rather than 404 is the
+route existing and refusing an anonymous caller.
 
-**Consequence, and the correction that matters most here:** the
-directly-entered URL below is not a fallback today. **It is the only working
-remote path**, and the spec is written that way until an enumeration API exists.
-Shipping the picker as the primary flow would be exactly the "wrong spec
-implemented faithfully" failure this section was written to avoid.
+**`GET /api/auth/me` is *not* controller-shaped** — `server/main.py:408` returns
+`user_id, email, username, email_verified, taosgo{status, trial_ends_at,
+current_period_end}` and nothing about hosts. That question is closed.
+
+### But a handle is not an address, and that is the real constraint
+
+This is the part that changes the screen, and it presents as an auth bug exactly
+the way the CORS finding did.
+
+`hosts` stores a **handle**. Turning a handle into something the phone can
+connect to goes through the relay, and that path is **entitlement-gated**:
+
+```
+server/main.py:937-938
+    if user["taosgo_status"] not in ("trialing", "active"):
+        raise HTTPException(403, "not_entitled")
+```
+
+So on a free account, `GET /api/hosts` will tell the phone a controller **exists
+and name it**, and taos.my will then decline to hand back an address for it.
+Off-LAN reach is a paid taOSgo feature by design — not a bug, and not something
+to file. **taos.my stores no LAN address at all**, so there is nothing to fall
+back to on the local network either.
+
+**Consequence: "list controllers, tap one, connect" does not work as a whole.**
+The list step is free and available today; the connect step needs either an
+entitled account or an address the user supplies. A picker that enumerates and
+then cannot connect is worse than no picker, because it shows the user a
+controller by name and then fails — which reads as our bug.
 
 **Manual URL entry** — a directly-entered controller URL, no account involved.
 Works on a LAN, for development, and for a fleet running fully offline. This is
-the path to build first.
+still the path to build first.
+
+> **The conclusion survived; its reason did not.** The previous version said
+> manual entry was the only remote path *because enumeration did not exist*.
+> Enumeration does exist. Manual entry is still first because enumeration yields
+> a **name, not a route**, and the name→route step is paid. Same answer, wholly
+> different reason — worth writing down, because a right answer resting on a
+> wrong premise breaks silently the moment the premise is fixed. Had `tsk-ckvyps`
+> landed while this doc still said "absent", the spec would have kept steering
+> away from an API that was already there.
+
+**Sequencing that follows:** build manual entry first, as before. Add
+enumeration as an *assist* on top — offer the list from `/api/hosts` to name
+what the account has, and require an address for any host whose route cannot be
+resolved, rather than presenting the list as a connect flow. `tsk-ckvyps` is
+therefore "confirm and close the gap", not "build from nothing".
+
+**The ordering constraint still holds, and still matters.**
+`/api/devices/pair-requests` lives on a **controller**, not on taos.my, so the
+phone needs a controller address before it can pair. Enumeration is the step
+*before* pairing. `/api/hosts` satisfies the credential ordering — it is callable
+with only the account credential — but because it returns a handle rather than an
+address, it does not by itself put the phone in a position to pair. The address
+still has to come from entitlement or from the user.
 
 ### One earlier claim in this doc was half wrong
 

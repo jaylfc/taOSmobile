@@ -80,6 +80,16 @@ CONFIG_PATH = Path(
 # Only these four are here because only these four are needed to finish first
 # run. /api/auth/me is the one call that is account-credential-only and needs no
 # prior controller knowledge, which is why the remote branch can start with it.
+#
+# NOT here yet, deliberately: GET /api/hosts. It exists and is account-credential
+# gated (taos-website server/main.py:864; probed live 2026-08-27 -> 401 with a
+# 404 control), so it would satisfy the ordering requirement. It is absent
+# because it returns a HANDLE, not a reachable address, and resolving a handle
+# goes through an entitlement gate (main.py:937, 403 not_entitled off taOSgo)
+# while taos.my stores no LAN address at all. Adding it would let the UI name a
+# controller it then cannot connect to, which is worse than not offering the
+# list. Add it WITH the address story, not before -- see
+# docs/first-run-controller-choice.md.
 _ACTIONS = {
     "me":       ("GET",  "/api/auth/me"),
     "login":    ("POST", "/api/auth/login"),
@@ -342,8 +352,9 @@ INDEX_HTML = """<!doctype html>
 <div id="remotebox" hidden>
   <input id="url" inputmode="url" autocapitalize="none" autocorrect="off"
          placeholder="http://controller.local:6969">
-  <small>Enter the controller address. Picking from an account is not available
-  yet &mdash; taos.my has no endpoint that lists an account&rsquo;s controllers.</small>
+  <small>Enter the controller address. Your account can name its controllers
+  but not tell this phone how to reach them &mdash; that needs taOSgo, or an
+  address on this network.</small>
 </div>
 <button id="go">Continue</button>
 <div id="msg" role="status" aria-live="polite"></div>
