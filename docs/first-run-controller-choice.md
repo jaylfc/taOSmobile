@@ -147,7 +147,11 @@ cross-origin and the browser will block it. "Render our own form and POST it"
 was written assuming a browser fetch, and as written it does not work.
 
 **So first run needs a small local helper** that makes the HTTPS calls
-process-side and exposes them to the kiosk page same-origin. Note this is
+process-side and exposes them to the kiosk page same-origin. *Scope narrowed
+later in this doc:* this binds anything that **reads** taos.my (enumerating
+hosts, checking entitlement). It does **not** bind connecting to a controller —
+that is a top-level navigation, which CORS does not govern. See "A handle CAN be
+turned into a URL". Note this is
 required *precisely in remote mode*, which is the mode defined by there being no
 local controller — so it cannot be borrowed from `taos-controller.service`. It
 is a new, small, always-present component, and the spec must own it rather than
@@ -253,6 +257,11 @@ still the path to build first.
 > wrong premise breaks silently the moment the premise is fixed. Had `tsk-ckvyps`
 > landed while this doc still said "absent", the spec would have kept steering
 > away from an API that was already there.
+>
+> **And then it happened again, one layer down.** "The name→route step is paid"
+> was itself superseded within the day: the route is constructible for free, and
+> the real blocker is that `*.taos.my` has no ingress deployed. Third reason,
+> same conclusion. See "A handle CAN be turned into a URL" below.
 
 **Sequencing that follows:** build manual entry first, as before. Add
 enumeration as an *assist* on top — offer the list from `/api/hosts` to name
@@ -267,6 +276,88 @@ phone needs a controller address before it can pair. Enumeration is the step
 with only the account credential — but because it returns a handle rather than an
 address, it does not by itself put the phone in a position to pair. The address
 still has to come from entitlement or from the user.
+
+### A handle CAN be turned into a URL — and that URL does not resolve today
+
+@taOS-dev (A2A 3430) answered the address question: do not wait for an address
+field, **construct the hostname client-side**.
+
+```
+https://{handle}.{username}.taos.my     handle from /api/hosts, username from /api/auth/me
+https://{username}.taos.my              bare form: relay resolves the account's primary host
+```
+
+Read at the source on `jaylfc/taos-website` **`origin/dev`** — note `main` is a
+diverged tree (817 lines vs 1067), so line numbers only mean anything on `dev`:
+
+- `relay_tls_allow` (`main.py:895`) takes 1 *or* 2 labels and reads the username
+  as the **last**, so `hostlabel.username.taos.my` is an intended first-class
+  form, not an accident. Its docstring says so.
+- `relay_authorize` (`main.py:924`) reads the specific host from the
+  `x-taos-host-handle` header Caddy sets from the left label; with no handle it
+  falls back to the account's **first linked host by `created_at`** (`:945`).
+- the relay Caddy reference config, upstream at
+  `jaylfc/taos-website/docs/relay.Caddyfile` (not a path in this repo), turns each auth failure into a browser journey rather
+  than raw JSON: **401 → 302 to `taos.my/login.html?return=<this URL>`**,
+  403 → 302 to `account.html`, 404 → plain-English "host is offline".
+
+**Two consequences that would have changed the screen — if the URL worked.**
+
+1. **The remote-connect path needs no CORS and no helper.** The kiosk never
+   `fetch()`es taos.my; it **navigates**, and top-level navigation is not
+   governed by CORS. The 401 redirect lands on taos.my's *own* login page, which
+   is same-origin with itself, and the session cookie is issued with
+   `Domain=.taos.my` (`main.py:306,318`) so it is sent back up to the subdomain.
+   The CORS finding below is still true, and still forces a helper for anything
+   that *reads* taos.my — it does **not** force one to connect.
+2. **Entitlement never needs to be inferred from a 403.** `/api/auth/me` returns
+   `taosgo.status`, and the gate at `:937` is literally
+   `status in ("trialing","active")` — the same predicate, readable from a 200 body.
+
+#### Measured, not read: `*.taos.my` has no ingress at all
+
+The above is what the code and the reference config say. **It is not what the
+deployment does.** Probed 2026-08-27:
+
+```
+tls-allow?domain=taos.taos.my            -> 200 {"ok":true}      gate says: issue a cert
+tls-allow?domain=nosuchuser-….taos.my    -> 404 unknown_host     gate discriminates correctly
+https://taos.taos.my/                    -> TLS fails, CN=TRAEFIK DEFAULT CERT
+https://nosuchuser-….taos.my/            -> TLS fails, SAME default cert
+http://taos.taos.my/       (plaintext)   -> 404          <- no router for the wildcard
+http://taos.my/            (control)     -> 302 to https, LE cert on the apex
+```
+
+**The relay Caddy is not deployed.** What answers `*.taos.my:443` is Coolify's
+Traefik, handing out its default self-signed cert for *every* subdomain —
+identically for a name the gate allows and one it refuses. Three independent
+controls agree: the allowed and refused names are indistinguishable (so nothing
+consults the gate); plaintext :80 404s on the wildcard while the apex 302s (so
+no router matches, with no cert confusion in the way); and a fresh domain gives
+exactly 5 hits before `429` against the 5/hour limiter (`main.py:892`), i.e. the
+counter started at zero, so production traffic is not calling it. The cert was
+still Traefik's minutes after the first hit, so this is not first-hit issuance lag.
+
+A phone sent to that URL gets `ERR_CERT_AUTHORITY_INVALID` — an unskippable
+interstitial in a kiosk with no keyboard.
+
+> **The third instance of the same failure, and the reason to keep measuring.**
+> The server code is right, the Caddyfile is right, and the thing is unreachable,
+> because that Caddyfile is a reference artifact that was never deployed. This
+> doc has now recorded that shape twice before: `taos-firstrun.service` was
+> installed but never enabled, and requirement 3 claimed the launcher "already
+> does this" when nothing did. *A component nobody depends on is a component
+> nobody can tell is broken* — and reading four source files end to end is not
+> the same as reaching the host end to end.
+
+**Manual URL entry stays first, now for the only reason that is about the world
+rather than the API:** the constructed hostname does not currently serve a
+trusted certificate, so enumeration and entitlement are both moot until the
+relay is actually deployed. When it lands, the remote branch collapses to **one
+field — the username** — and the relay handles sign-in, entitlement and
+offline-host messaging itself. That is a much smaller screen than the helper-
+mediated flow specced above; build manual entry so that it does not have to be
+unbuilt.
 
 ### One earlier claim in this doc was half wrong
 
@@ -323,6 +414,13 @@ discovery at all, which is cheaper for us than anything account-mediated.
    its own small always-present component. Discovered by probing rather than by
    reading, which is the only reason it is in the spec instead of in a bring-up
    surprise.
+
+   > **Narrowed 2026-08-27.** The helper is needed to *read* taos.my, not to
+   > *connect*. Connecting is a navigation to `{handle}.{username}.taos.my`,
+   > which CORS does not govern and which the relay redirects through sign-in on
+   > its own. So the helper is required for the enumeration assist, and the
+   > manual-URL and relay paths both work without it. It is still a real
+   > component; it is no longer on the critical path for remote mode.
 
 ## Notes
 

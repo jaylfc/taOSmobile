@@ -84,11 +84,21 @@ CONFIG_PATH = Path(
 # NOT here yet, deliberately: GET /api/hosts. It exists and is account-credential
 # gated (taos-website server/main.py:864; probed live 2026-08-27 -> 401 with a
 # 404 control), so it would satisfy the ordering requirement. It is absent
-# because it returns a HANDLE, not a reachable address, and resolving a handle
-# goes through an entitlement gate (main.py:937, 403 not_entitled off taOSgo)
-# while taos.my stores no LAN address at all. Adding it would let the UI name a
-# controller it then cannot connect to, which is worse than not offering the
-# list. Add it WITH the address story, not before -- see
+# because it would let the UI name a controller it then cannot connect to, which
+# is worse than not offering the list at all.
+#
+# The REASON for that has now changed twice; keep the current one, not the old
+# ones. It is no longer "a handle is not an address" -- a handle IS turnable
+# into a URL client-side, https://{handle}.{username}.taos.my, confirmed against
+# taos-website origin/dev (relay_tls_allow main.py:895 takes the username as the
+# LAST of 1-2 labels, so that form is intended). It is that the URL does not
+# resolve: measured 2026-08-27, *.taos.my has NO ingress deployed -- Coolify's
+# Traefik answers every subdomain with CN=TRAEFIK DEFAULT CERT, identically for
+# a name /api/relay/tls-allow allows (200) and one it refuses (404), and
+# plaintext :80 404s on the wildcard while the apex 302s. A phone sent there
+# gets ERR_CERT_AUTHORITY_INVALID, unskippable on a kiosk with no keyboard.
+#
+# So: add it WITH a working relay, not before -- see
 # docs/first-run-controller-choice.md.
 _ACTIONS = {
     "me":       ("GET",  "/api/auth/me"),
