@@ -380,8 +380,36 @@ discovery at all, which is cheaper for us than anything account-mediated.
    > there is no route back to the helper from the kiosk — on a device with no
    > keyboard that is a one-way door, which is exactly what this requirement
    > forbids. The check in requirement 2 narrows how often a wrong address gets
-   > written; it does not make a written one reversible. Tracked as the next
-   > slice of `tsk-vyzv2u`.
+   > written; it does not make a written one reversible. Tracked as `tsk-l3ntdg`.
+   >
+   > **Its prerequisite landed 2026-08-27, and it was not the constraint it was
+   > filed as.** `tsk-l3ntdg` names one shape the escape must not take: an
+   > escape that is merely a link would be a one-click drive-by, *because*
+   > `POST /api/config` is reachable from any page the kiosk loads. Measuring
+   > that rather than reasoning from it showed the drive-by needed no escape
+   > hatch to exist — it was already live, and in remote mode the page that
+   > could fire it belongs to someone else. A foreign-origin `text/plain` POST
+   > rewrote `shell.conf`; a 404 to a bogus route was the control that proved
+   > the 200 was a real handler.
+   >
+   > The error underneath is worth keeping, because it is the same shape as the
+   > `RestartPreventExitStatus` and `ProtectHome=read-write` findings: a
+   > protection that was **present in the source and inert in practice**. The
+   > helper had `X-Frame-Options`, `nosniff` and no `Access-Control-Allow-Origin`,
+   > and a comment calling it "same-origin by construction". None of that admits
+   > or refuses a request. CORS decides who may **read a reply**, not who may
+   > **cause a write**, and a `text/plain` POST is not preflighted at all, so
+   > there was no preflight for the missing headers to fail. Fixed with an
+   > `Origin`/`Sec-Fetch-Site` gate plus a JSON content-type lock on every
+   > state-changing route; `droidian/taos-layer/README.md` carries the
+   > measurement and the mutation results.
+   >
+   > **Still unbuilt: the escape itself.** The remaining shape is physical
+   > intent — a hardware key held on a device the compositor does not arbitrate
+   > — because it is the one signal a web page cannot produce. Plus the two
+   > sub-asks this requirement makes and nothing yet specifies: local → remote
+   > offering to keep or discard local data, and remote → local not silently
+   > orphaning the pairing.
 2. **Legible failure.** If the remote controller is unreachable, say so and
    offer retry / switch / manual entry. Never a blank screen — we hit exactly
    that failure mode during bring-up and it is indistinguishable from a crash.

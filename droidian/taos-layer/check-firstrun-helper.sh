@@ -129,6 +129,99 @@ else
 fi
 check "valid local config accepted"     200 "$(code -X POST -H "$J" -d '{"mode":"local"}' "http://127.0.0.1:$HELP_PORT/api/config")"
 
+echo "== admission: another origin cannot drive this service =="
+# THE BUG THIS SECTION EXISTS FOR, measured against this helper on 2026-08-27
+# before the fix, with a POST to a bogus route as a control so the 200 could
+# not have come from a catch-all:
+#
+#     POST /api/config  Origin: http://attacker.example  Content-Type: text/plain
+#         -> 200, and shell.conf on disk then named the attacker's controller
+#     POST /api/nonexistent  (control)
+#         -> 404
+#
+# In remote mode the kiosk is pointed at a page on someone else's machine, and
+# that page shares a browser with this loopback service. Absent CORS headers do
+# not help: CORS governs whether the caller may READ the reply, and that request
+# is "simple" -- text/plain, no custom header -- so it is not even preflighted.
+# One fetch and the device opens their controller on every boot afterwards.
+#
+# Its OWN helper and OWN config file, for the same reason the rate limiter has
+# one: the assertion at the end is "the attacks changed nothing", and sharing
+# $CONF with the section above would make that depend on running in order.
+CSRF_CONF="$WORK/csrf.conf"
+CSRF_PORT="$(free_port)"
+TAOS_FIRSTRUN_PORT="$CSRF_PORT" TAOS_UPSTREAM="http://127.0.0.1:$STUB_PORT" \
+TAOS_SHELL_CONF="$CSRF_CONF" python3 "$HELPER" >"$WORK/h4.log" 2>&1 &
+H4=$!
+for _ in $(seq 1 50); do
+    curl -fsS -o /dev/null "http://127.0.0.1:$CSRF_PORT/health" 2>/dev/null && break
+    sleep 0.1
+done
+if ! curl -fsS -o /dev/null "http://127.0.0.1:$CSRF_PORT/health" 2>/dev/null; then
+    bad "admission helper did not come up; see $WORK/h4.log"
+else
+    SELF="Origin: http://127.0.0.1:$CSRF_PORT"
+    SAME="Sec-Fetch-Site: same-origin"
+    ALIEN="Origin: http://attacker.example"
+    CFG="http://127.0.0.1:$CSRF_PORT/api/config"
+
+    # POSITIVE CONTROL FIRST. Everything after this is a refusal, and a service
+    # that refuses EVERYTHING passes all of them while being useless -- which is
+    # a worse outcome than the bug, because the device could no longer be set up
+    # at all. This is the exact shape Chromium sends from our own page.
+    c=$(code -X POST -H "$SELF" -H "$SAME" -H "$J" -d '{"mode":"local"}' "$CFG")
+    check "our own page's fetch is accepted" 200 "$c"
+    [ "$c" = "200" ] || give_up "admission positive control failed: the setup form itself is now refused, so the refusals below prove nothing"
+    grep -q '^mode=local$' "$CSRF_CONF" \
+        && ok "control: the accepted write reached the file" \
+        || bad "control: accepted write did not reach the file"
+
+    # No Origin and no Sec-Fetch-Site is curl on loopback -- this verifier, and
+    # anyone with a shell on the device, who can already edit shell.conf with a
+    # text editor. Refusing it would buy nothing and would break every other
+    # check in this file. Allowed deliberately, and asserted so that a future
+    # "tighten it further" has to face the decision rather than discover it.
+    check "headerless loopback caller still allowed" 200 \
+        "$(code -X POST -H "$J" -d '{"mode":"local"}' "$CFG")"
+
+    # The attack, verbatim.
+    check "foreign Origin + text/plain refused"  403 \
+        "$(code -X POST -H "$ALIEN" -H 'Content-Type: text/plain' -d '{"mode":"remote","url":"http://attacker.example:6969/"}' "$CFG")"
+    check "foreign Origin + JSON refused"        403 \
+        "$(code -X POST -H "$ALIEN" -H "$J" -d '{"mode":"remote","url":"http://attacker.example:6969/"}' "$CFG")"
+    # Origin stripped but the fetch metadata still tells the truth. A page
+    # cannot set either header, so this is the belt to the Origin braces.
+    check "Sec-Fetch-Site: cross-site refused"   403 \
+        "$(code -X POST -H 'Sec-Fetch-Site: cross-site' -H "$J" -d '{"mode":"remote","url":"http://attacker.example:6969/"}' "$CFG")"
+    check "Sec-Fetch-Site: same-site refused"    403 \
+        "$(code -X POST -H 'Sec-Fetch-Site: same-site' -H "$J" -d '{"mode":"local"}' "$CFG")"
+
+    # /api/config is not the only thing worth stealing. /api/check is a
+    # reachable/not oracle for this device's network, and /api/upstream
+    # forwards the caller's Authorization header to taos.my.
+    check "foreign origin cannot use /api/check" 403 \
+        "$(code -X POST -H "$ALIEN" -H "$J" -d '{"url":"http://127.0.0.1:1/"}' "http://127.0.0.1:$CSRF_PORT/api/check")"
+    check "foreign origin cannot reach /api/upstream" 403 \
+        "$(code -H "$ALIEN" "http://127.0.0.1:$CSRF_PORT/api/upstream/me")"
+
+    # The second lock: the content types a cross-origin POST may use without a
+    # preflight are refused even from our own origin, so there is no
+    # no-preflight path left to find.
+    check "text/plain refused even same-origin"  415 \
+        "$(code -X POST -H "$SELF" -H "$SAME" -H 'Content-Type: text/plain' -d '{"mode":"remote","url":"http://x.local:6969/"}' "$CFG")"
+    check "form encoding refused even same-origin" 415 \
+        "$(code -X POST -H "$SELF" -H "$SAME" -H 'Content-Type: application/x-www-form-urlencoded' -d 'mode=local' "$CFG")"
+
+    # The point of all of it: nothing above moved the config. Grepping for the
+    # attacker's host rather than for mode= catches a partial write too.
+    if grep -q 'attacker\.example' "$CSRF_CONF"; then
+        bad "a refused request WROTE the attacker's controller into shell.conf"
+    else
+        ok "no refused request changed shell.conf"
+    fi
+fi
+kill "$H4" 2>/dev/null
+
 echo "== the reachability check: /api/check =="
 # The check exists so a typo does not become a dead screen on a keyboardless
 # phone. Everything here is about one question: does a VERDICT of "ok" actually

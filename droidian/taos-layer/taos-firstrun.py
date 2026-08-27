@@ -103,6 +103,50 @@ UPSTREAM = os.environ.get("TAOS_UPSTREAM", "https://taos.my").rstrip("/")
 
 UPSTREAM_TIMEOUT = float(os.environ.get("TAOS_UPSTREAM_TIMEOUT", "20"))
 
+# --- who is allowed to ASK -------------------------------------------------
+# The kiosk points Chromium at a controller, and in remote mode that is a page
+# on someone else's machine. That page shares a browser with this helper, and
+# until this commit it could repoint the device in a single fetch:
+#
+#     POST http://127.0.0.1:6970/api/config
+#     Origin: http://attacker.example
+#     Content-Type: text/plain
+#     {"mode":"remote","url":"http://attacker.example:6969/"}
+#
+# Measured against this file on 2026-08-27, with a POST to a bogus route as a
+# control so the 200 could not be a catch-all: the bogus route gave 404, the
+# real one gave 200, and shell.conf on disk then named the attacker's
+# controller. Every boot after that opens their page.
+#
+# CORS DOES NOT STOP THIS, and assuming it does is the trap. CORS governs
+# whether the caller may READ the response; the request is still delivered and
+# the write still happens. Worse, that shape is a "simple" request -- text/plain
+# with no custom header -- so it is not preflighted at all and there is no
+# preflight for the missing CORS headers to fail.
+#
+# Two independent gates, because either one alone has a failure mode:
+#
+#   1. Origin / Sec-Fetch-Site. A browser sets both and a page cannot forge
+#      either. This is the real gate. Sec-Fetch-Site is checked as well as
+#      Origin so that a request which somehow arrives with the header stripped
+#      is still classified rather than waved through.
+#   2. Content-Type must be JSON on the routes that take a body. On its own
+#      this only forces the attacker into a preflight -- which then fails --
+#      so it is a second lock, not the lock.
+#
+# A request with NEITHER header is allowed: that is curl on loopback, i.e. the
+# verifier and anyone with a shell on the device, who can already write
+# shell.conf directly. The gate is against pages, which always send both.
+ALLOWED_ORIGINS = frozenset(
+    f"http://{host}:{BIND_PORT}" for host in ("127.0.0.1", "localhost", "[::1]")
+)
+
+# Sec-Fetch-Site values that may reach a state-changing route. "same-origin" is
+# our own page's fetch; "none" is a user-initiated navigation, which cannot be
+# caused by another page. "same-site" and "cross-site" are both another origin
+# asking, which is the case this exists to refuse.
+ALLOWED_FETCH_SITES = frozenset(("same-origin", "none"))
+
 CONFIG_PATH = Path(
     os.environ.get(
         "TAOS_SHELL_CONF",
@@ -297,9 +341,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(payload)))
-        # This service is same-origin by construction. Say so explicitly rather
-        # than relying on the absence of a header: no CORS, no framing, no
-        # sniffing, and no referrer leaking a local URL upstream.
+        # These headers harden the RESPONSE: no CORS, no framing, no sniffing,
+        # and no referrer leaking a local URL upstream.
+        #
+        # They were once described here as making the service "same-origin by
+        # construction". They do not. Not sending Access-Control-Allow-Origin
+        # stops another origin READING a reply; it does nothing to stop the
+        # request arriving and taking effect, which is exactly how a foreign
+        # page rewrote shell.conf until _same_origin_only was added. Response
+        # hardening and request admission are separate jobs; this is the first.
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -321,6 +371,42 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length) if length else b""
 
+    def _same_origin_only(self) -> bool:
+        """Refuse a state-changing request that another origin caused.
+
+        Returns True when the caller may proceed. On refusal it has already
+        answered 403, so the route must return immediately.
+        """
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site.lower() not in ALLOWED_FETCH_SITES:
+            log(f"admit: refused, sec-fetch-site={site.lower()}")
+            self._json(403, {"error": "cross_origin_refused"})
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            # The origin is NOT echoed back. Reflecting caller input into an
+            # error body is how a helpful message becomes an injection surface,
+            # which is the same reason _upstream does not echo the action.
+            log("admit: refused, foreign origin")
+            self._json(403, {"error": "cross_origin_refused"})
+            return False
+        return True
+
+    def _json_body_only(self) -> bool:
+        """Require an honestly declared JSON body on routes that take one.
+
+        The second lock described above. text/plain and form encodings are the
+        content types a cross-origin POST can use WITHOUT a preflight, so
+        refusing them removes the no-preflight path entirely and leaves an
+        attacker needing a preflight this service will never satisfy.
+        """
+        ctype = self.headers.get("Content-Type", "")
+        if ctype.split(";", 1)[0].strip().lower() != "application/json":
+            log("admit: refused, non-json content type")
+            self._json(415, {"error": "unsupported_media_type"})
+            return False
+        return True
+
     # --- routes ---------------------------------------------------------
 
     def do_GET(self) -> None:
@@ -332,17 +418,33 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/config":
             self._json(200, read_config())
         elif path.startswith("/api/upstream/"):
+            # Guarded even though it is a GET: it forwards the caller's
+            # Authorization header to taos.my, so it acts on a credential.
+            if not self._same_origin_only():
+                return
             self._upstream(path[len("/api/upstream/"):])
         else:
             self._json(404, {"error": "not_found"})
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # Every POST here changes something -- the config on disk, the network
+        # the device probes, or an account upstream -- so admission is checked
+        # once, before the route is chosen. Doing it per-route is how one new
+        # route ships without it.
+        if not self._same_origin_only():
+            return
         if path == "/api/config":
+            if not self._json_body_only():
+                return
             self._write_config()
         elif path == "/api/check":
+            if not self._json_body_only():
+                return
             self._check()
         elif path.startswith("/api/upstream/"):
+            if not self._json_body_only():
+                return
             self._upstream(path[len("/api/upstream/"):])
         else:
             self._json(404, {"error": "not_found"})

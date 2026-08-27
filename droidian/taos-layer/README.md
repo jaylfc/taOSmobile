@@ -141,6 +141,60 @@ why the limiter is there.
 > **"The page could already make the device navigate anywhere via `/api/config`"
 > is not a defence.** A cross-origin navigation's result is not readable by the
 > page that caused it. This is a capability that genuinely did not exist before.
+>
+> That sentence used to rest on a premise which was true and should not have
+> been: another origin really could reach `/api/config`. It cannot any more —
+> see below. The argument stands on its own without it, which is why it is kept
+> rather than deleted.
+
+#### Not sending CORS headers does not stop another origin *asking*
+
+Measured against the helper on 2026-08-27, with a POST to a bogus route as a
+control so the 200 could not have come from a catch-all:
+
+```
+POST /api/config   Origin: http://attacker.example   Content-Type: text/plain
+    {"mode":"remote","url":"http://attacker.example:6969/"}
+        -> 200, and shell.conf on disk then named the attacker's controller
+POST /api/nonexistent-control-probe                     (control)
+        -> 404
+```
+
+In remote mode the kiosk is pointed at a page on **someone else's machine**, and
+that page shares a browser with this loopback service. One `fetch()` and the
+device opens their controller on every boot afterwards — permanently, on a
+handset with no keyboard to undo it with.
+
+**The mistake was reading "no CORS headers" as "no cross-origin access".** CORS
+governs whether the caller may **read the response**. The request is still
+delivered and the write still happens. And that shape is a *simple* request —
+`text/plain`, no custom header — so it is not preflighted at all, meaning there
+is no preflight for the absent CORS headers to fail. The service had response
+hardening (`X-Frame-Options`, `nosniff`, no `Access-Control-Allow-Origin`) and
+no request admission at all; a comment in the source called it "same-origin by
+construction", which was the belief rather than the behaviour.
+
+Two independent gates now stand in front of every state-changing route
+(`POST /api/config`, `POST /api/check`, and all of `/api/upstream/` including
+the `GET`, which forwards the caller's `Authorization` upstream):
+
+| gate | refuses | why it is not enough alone |
+|---|---|---|
+| `Origin` / `Sec-Fetch-Site` | anything a page on another origin caused | this is the real gate; both are checked because a page can forge neither, and one may be stripped in transit |
+| `Content-Type: application/json` | `text/plain` and form encodings | on its own it only forces a preflight — which then fails — so it is a second lock, not the lock |
+
+A request carrying **neither** header is allowed. That is `curl` on loopback:
+this test suite, and anyone with a shell on the device, who can already edit
+`shell.conf` with a text editor. The gate is against pages, and pages always
+send both.
+
+**Why this is in the reversibility work at all.** `tsk-l3ntdg` asks for a route
+back to the setup screen once `shell.conf` names a mode, and its own text named
+this as a constraint on the *design* — an escape hatch that is merely a link
+would make reconfiguration a one-click drive-by. Measuring it showed the
+drive-by did not need the escape hatch: it was already live. So it is fixed
+first, and the hatch is built on top of a service that only its own page can
+drive.
 
 #### A status code is not an answer — the SPA trap
 
@@ -169,7 +223,7 @@ Two more things that came out of the same measurement, both worth keeping:
   treating a failed check as a wall. A controller that is merely switched off is
   a legitimate thing to configure.
 
-`check-firstrun-helper.sh` runs 39 checks and, importantly, **runs its positive
+`check-firstrun-helper.sh` runs 51 checks and, importantly, **runs its positive
 control first**: it proves forwarding actually reaches upstream before testing
 any refusal, because a dead process refuses path traversal perfectly. If the
 control fails the script exits `2` INCOMPLETE rather than reporting a pass. The
@@ -177,10 +231,21 @@ reachability section has its own positive control for the same reason — a chec
 that can never say `ok` refuses everything perfectly — and the rate-limit test
 runs against its own helper process so that exhausting the shared bucket cannot
 turn every other assertion into an undocumented ordering dependency.
-Proven red against five deliberately broken builds — open forwarder, `0.0.0.0`
-bind, missing `chmod 0600`, upstream errors swallowed as 200, and forwarding
-removed entirely — each caught by the check meant to catch it, the last as
-INCOMPLETE rather than PASS.
+Proven red against seven deliberately broken builds — open forwarder, `0.0.0.0`
+bind, missing `chmod 0600`, upstream errors swallowed as 200, forwarding removed
+entirely, the origin gate stubbed to `return True`, and the JSON content-type
+lock stubbed to `if False` — each caught by the check meant to catch it, the
+forwarding one as INCOMPLETE rather than PASS.
+
+The last two are worth spelling out, because they are what makes the admission
+section more than decoration. Stubbing the origin gate turns six checks red;
+stubbing the content-type lock turns two red **and no others**, which is the
+evidence that the two gates are genuinely independent rather than one gate
+counted twice. The admission section also opens with its own positive control —
+the exact `Origin` + `Sec-Fetch-Site` + JSON shape Chromium sends from our own
+form must be **accepted** — because a service that refused everything would pass
+all eleven refusals below it while leaving the device impossible to set up,
+which is a worse outcome than the bug.
 
 One incidental find while writing the unit: `ProtectHome=read-write` is **not a
 valid systemd value**. systemd logs `Invalid argument` and *ignores the line*,
