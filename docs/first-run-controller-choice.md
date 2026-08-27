@@ -80,16 +80,82 @@ Four constraints to design against, not to discover later:
   so a stale request can sit pending on our screen and then fail. The UI must
   have a state for that.
 
-**Account sign-in — no device-code flow, but no browser chain either.**
+**Account sign-in — talk to taos.my directly, NOT to `/api/account/*`.**
 
-The only path is `POST /api/account/login`
-(`tinyagentos/routes/account_proxy.py:427`), which forwards credentials
-upstream to taos.my. There is no code-approval variant. But it is a **plain
-JSON API, not a hosted page and not an OAuth redirect** — siblings are
-`/api/account/register` (`:432`), `/api/account/logout` (`:437`),
-`/api/account/me` (`:422`). So we render our own form against our own on-screen
-keyboard and POST it. A password gets typed on the device once; that cost is
-real and does not go away.
+> **Corrected again 2026-08-27 (A2A 3418).** An earlier revision of this section
+> named `POST /api/account/login`
+> (`tinyagentos/routes/account_proxy.py:427`). **That is a controller route** — a
+> same-origin convenience for a SPA already running on a controller, which
+> forwards upstream. It therefore carries *exactly* the chicken-and-egg
+> described above: a phone that does not yet know a controller address cannot
+> call it either. Every `/api/account/*` route is ruled out by our auth-ordering
+> requirement, by construction.
+
+The phone talks to **taos.my** directly. Strip the `/api/account` prefix. The
+upstream surface, read off the controller's forwarding table (`_ACTIONS`, `:45`):
+
+```
+GET  /api/auth/me                       <- the only account-credential call that always exists
+POST /api/auth/login
+POST /api/auth/register
+POST /api/auth/logout
+     /api/subdomains/{check,claim,release}
+     /api/hub/identity/{register,lookup,rotate}
+     /api/hub/requests  [+ /{id}/accept, /{id}/decline]
+     /api/hub/presence
+     /api/hub/edges/revoke
+     /api/hub/relay/{drop,poll}
+     /api/cluster/join/...               (_JOIN_BASE, :448 — from taos-website PR #35)
+```
+
+This removes an ordering problem rather than adding one: **the auth half of
+first run has no controller dependency at all.**
+
+There is no code-approval variant, but it is a plain JSON API rather than a
+hosted page or an OAuth redirect, so we render our own form against our own
+on-screen keyboard. A password gets typed on the device once; that cost is real
+and does not go away.
+
+#### Probed against live taos.my, 2026-08-27 — with a negative control
+
+Run from this workstation, unauthenticated, no credentials sent:
+
+| request | result | reading |
+|---|---|---|
+| `GET /api/auth/me` | **401** | route exists, account-credential gated |
+| `POST /api/auth/login` (empty body) | **422** | route exists, rejects the empty body |
+| `POST /api/auth/register` (empty body) | **422** | route exists |
+| `POST /api/nonexistent-control-probe` | **404** | negative control fires |
+
+The control matters: a bare `GET /api/auth/login` also returns 404, so **404
+here means "wrong method", not "absent"**, and reading the GET alone would have
+reported a real route as missing. Server is `uvicorn`.
+
+#### The finding that changes the architecture: taos.my sends no CORS headers
+
+A **correctly formed preflight** — `OPTIONS /api/auth/login` with `Origin` and
+`Access-Control-Request-Method: POST` — returns **404 with no
+`Access-Control-Allow-Origin`**. A cross-origin `GET /api/auth/me` carrying
+`Origin` returns 401, also with no `Access-Control-Allow-Origin`. (Checked with
+the preflight headers present, because a bare `OPTIONS` proves nothing — CORS
+middleware only answers when `Origin` and `Access-Control-Request-Method` are
+there, so the first bare probe was not evidence.)
+
+**Consequence: the kiosk page cannot `fetch()` taos.my.** Our first-run UI is
+served from the phone, not from taos.my, so every one of these calls is
+cross-origin and the browser will block it. "Render our own form and POST it"
+was written assuming a browser fetch, and as written it does not work.
+
+**So first run needs a small local helper** that makes the HTTPS calls
+process-side and exposes them to the kiosk page same-origin. Note this is
+required *precisely in remote mode*, which is the mode defined by there being no
+local controller — so it cannot be borrowed from `taos-controller.service`. It
+is a new, small, always-present component, and the spec must own it rather than
+discover it at bring-up.
+
+The alternative is CORS on taos.my, which is not our repo and not our call.
+Raised with @taOS-dev; a local helper is assumed until told otherwise, because
+it is the half we control.
 
 **Worker enrolment is a genuinely separate system** — different endpoints,
 different credential, different auth scheme. Confirmed orthogonal, so
@@ -128,6 +194,17 @@ on 429.
 guests}` — and `guests` is only peers tagged `tag:guest` that joined *this*
 host's mesh (`_is_guest_node`, `:107`). Self is `self_node.get("HostName")`: a
 tailscale hostname, no UUID, no user-set display name.
+
+**Now definitive on both sides (A2A 3418):** with the upstream surface in hand,
+there is no controller-enumeration endpoint on the controller *and* none in
+taos.my's surface as the controller's forwarding table knows it. The nearest
+neighbour is `/api/cluster/join/*` (`_JOIN_BASE`, taos-website PR #35) — account
+-credential-based and cluster-shaped, but it enumerates **join requests**, not
+controllers. It is not the answer; it is evidence that taos.my already does
+account-scoped cluster bookkeeping, so this is the right neighbourhood.
+
+**Carded upstream as `tsk-ckvyps`** (repo `jaylfc/taos-website`, not ours to
+land) for the cheap shape agreed below.
 
 This is load-bearing for the flow, because of an ordering constraint that is
 easy to miss: **`/api/devices/pair-requests` lives on a controller, not on
@@ -182,6 +259,15 @@ discovery at all, which is cheaper for us than anything account-mediated.
    `origin/dev`, not assumed** — separate endpoints, separate credential,
    separate auth scheme (see the worker enrolment block above). This was the one
    assumption in this doc that survived review unchanged.
+
+6. **Remote mode needs a local helper process.** taos.my sends no CORS headers
+   (measured, above), so the kiosk page cannot call it directly. Something on
+   the phone must make those HTTPS calls process-side and expose them to the
+   page same-origin. This is required exactly in the mode that has no local
+   controller, so it cannot be borrowed from `taos-controller.service` — it is
+   its own small always-present component. Discovered by probing rather than by
+   reading, which is the only reason it is in the spec instead of in a bring-up
+   surprise.
 
 ## Notes
 
