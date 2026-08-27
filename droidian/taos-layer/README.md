@@ -119,10 +119,64 @@ identity. A prefix allowlist would not do — prefixes invite traversal and
 encoding tricks — whereas a closed action table has no user-controlled component
 in the URL to trick.
 
-`check-firstrun-helper.sh` runs 26 checks and, importantly, **runs its positive
+#### The one route that does take a caller-supplied host
+
+`POST /api/check` is the exception to the paragraph above, and it is shaped so
+that it is not a hole in it. It exists because the form has to tell the user
+whether the address they just typed is a controller **before** it is written to
+`shell.conf` — after that the device points Chromium at it on every boot, and a
+typo is a dead screen on a phone with no keyboard. The page cannot check for
+itself: the controller is a different origin, so the answer is unreadable from
+JavaScript.
+
+What keeps it small: the path is fixed (`/api/health`), only the **origin** of
+the caller's URL is used (a pasted path is dropped, not appended to), the
+response never crosses back — the caller gets a verdict plus two integers read
+from fixed key names and range-checked — and it is rate limited to 30/minute
+with a 5s timeout, so it is neither a scanner nor an amplifier. What it does
+still give a loopback caller is a coarse reachable/not oracle for hosts this
+device can reach. That is the cost, it is stated rather than glossed, and it is
+why the limiter is there.
+
+> **"The page could already make the device navigate anywhere via `/api/config`"
+> is not a defence.** A cross-origin navigation's result is not readable by the
+> page that caused it. This is a capability that genuinely did not exist before.
+
+#### A status code is not an answer — the SPA trap
+
+Measured 2026-08-27, and this is why the check tests the response *shape*:
+
+| target | `GET /api/health` | |
+|---|---|---|
+| taOS controller `:6969` | **200** `{"status":"ok","agents":2,"backends":9}` | a controller |
+| taOSmd A2A bus `:7900` | **200** `<!doctype html>…` | **not** a controller |
+
+The bus is a single-page app with a catch-all route, so it answers 200 with
+`index.html` for a path it has never heard of. A port check accepts it. A
+"200 means yes" check accepts it too. Only the content type and the `status`
+key tell them apart, so a stub with exactly that behaviour is a permanent
+negative control in the test — relax the check to a status code and it goes red.
+
+Two more things that came out of the same measurement, both worth keeping:
+
+- `GET /api/nonexistent-control-probe-3` on the controller returns **401, not
+  404** — it authenticates before it routes. So on *that* host a 404 does not
+  mean absent. It is the exact inverse of the `taos.my` trap above, where a 404
+  meant wrong-method. **Do not port a 404 reading between the two hosts.**
+- A controller that gates `/api/health` would be reported `not_a_controller`.
+  That is honest — it is indistinguishable from any other authenticated service
+  — and it is why the form offers *Use this address anyway* rather than
+  treating a failed check as a wall. A controller that is merely switched off is
+  a legitimate thing to configure.
+
+`check-firstrun-helper.sh` runs 39 checks and, importantly, **runs its positive
 control first**: it proves forwarding actually reaches upstream before testing
 any refusal, because a dead process refuses path traversal perfectly. If the
-control fails the script exits `2` INCOMPLETE rather than reporting a pass.
+control fails the script exits `2` INCOMPLETE rather than reporting a pass. The
+reachability section has its own positive control for the same reason — a check
+that can never say `ok` refuses everything perfectly — and the rate-limit test
+runs against its own helper process so that exhausting the shared bucket cannot
+turn every other assertion into an undocumented ordering dependency.
 Proven red against five deliberately broken builds — open forwarder, `0.0.0.0`
 bind, missing `chmod 0600`, upstream errors swallowed as 200, and forwarding
 removed entirely — each caught by the check meant to catch it, the last as

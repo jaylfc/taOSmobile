@@ -374,6 +374,14 @@ discovery at all, which is cheaper for us than anything account-mediated.
 1. **Reversible.** Switching modes later must be possible from settings — not a
    first-run one-way door. Local → remote should offer to keep or discard local
    data; remote → local must not silently orphan the remote pairing.
+
+   > **Not built, and it is the largest remaining gap on this card.** Once
+   > `shell.conf` names a mode, the launcher resolves to it on every boot and
+   > there is no route back to the helper from the kiosk — on a device with no
+   > keyboard that is a one-way door, which is exactly what this requirement
+   > forbids. The check in requirement 2 narrows how often a wrong address gets
+   > written; it does not make a written one reversible. Tracked as the next
+   > slice of `tsk-vyzv2u`.
 2. **Legible failure.** If the remote controller is unreachable, say so and
    offer retry / switch / manual entry. Never a blank screen — we hit exactly
    that failure mode during bring-up and it is indistinguishable from a crash.
@@ -383,6 +391,37 @@ discovery at all, which is cheaper for us than anything account-mediated.
    pair request expired* — the last is real rather than theoretical, since
    expiry is enforced at approve time (F6) and so a request can look pending on
    our screen right up until it fails.
+
+   > **Built for the manual-entry path, 2026-08-27.** The address is now checked
+   > *before* it is written, not after — which is the only moment at which a
+   > wrong one is still cheap. `POST /api/check` in `taos-firstrun.py` probes
+   > `{origin}/api/health` process-side (the page cannot: different origin, no
+   > CORS) and returns one of three verdicts, mapped one-to-one onto the states
+   > above:
+   >
+   > | verdict | what the user sees | what it asks of them |
+   > |---|---|---|
+   > | `ok` | "Found a taOS controller — 2 agents, 9 backends" | nothing; it saves |
+   > | `not_a_controller` | something answered, and it was not one | check the port |
+   > | `unreachable` | nothing answered | check the network / power |
+   >
+   > **The check is on the shape, not the status code, and that is load-bearing.**
+   > Measured against the live A2A bus: it is a single-page app with a catch-all,
+   > so `GET /api/health` returns **200 with `index.html`**. A port check accepts
+   > it; so does a 200-means-yes check. Its stub is now a permanent negative
+   > control in `check-firstrun-helper.sh`.
+   >
+   > A failed check is a **warning with a way past it**, not a wall — *Use this
+   > address anyway* commits the address unchecked. A controller that is merely
+   > switched off is a legitimate thing to configure, and this requirement says
+   > offer a way forward, never a dead end. The launcher's own boot-time
+   > behaviour is unchanged and deliberately still does not gate remote targets:
+   > a phone in remote mode is a surface whose network comes and goes, and
+   > handing the display back to Phosh on a blip would be the worse failure.
+   >
+   > Still unbuilt here: the *pair request expired* state, which needs the
+   > pairing flow, and the account sign-in states. Manual entry does not touch
+   > either.
 3. **Config, not code.** One file the kiosk launcher reads:
    `~/.config/taosmobile/shell.conf`. Mode + URL live there so the session is a
    pure consumer.

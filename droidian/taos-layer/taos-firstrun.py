@@ -40,6 +40,39 @@ all, so there is nothing to trick.
 
 If you add a capability here, add an entry to _ACTIONS. If you ever find
 yourself wanting to pass a path through, stop: that is the bug.
+
+THE ONE ROUTE THAT DOES TAKE A CALLER-SUPPLIED HOST
+---------------------------------------------------
+/api/check is the exception, and it is deliberately shaped so that it is not a
+hole in the paragraph above. It exists because the first-run form has to be
+able to tell the user whether the address they just typed is a taOS controller
+BEFORE it is written to shell.conf -- after that the device points Chromium at
+it on every boot, and a typo is a dead screen on a phone with no keyboard.
+
+The page cannot do that check itself: the controller is a different origin and
+sends no CORS headers to us, so the answer is unreadable from JavaScript. It
+has to happen process-side, which means this process connects to a host the
+caller named. That is a real new capability and it is worth being precise
+about what keeps it small:
+
+  - The PATH is fixed (/api/health). The caller supplies a host, never a path.
+  - Only http/https, via the same _URL_RE that gates what may be written to
+    the config. What is verified is the ORIGIN of that string: scheme, host
+    and port. A path the user pasted is deliberately dropped rather than
+    appended to, and is therefore not verified -- see probe_controller.
+  - The response is never returned. The caller gets a VERDICT, plus two
+    integers read from fixed key names and range-checked. There is no code
+    path that hands back a body, a header or an upstream status code.
+  - Rate limited and short-timeout, so it is not a usable scanner and not an
+    amplifier.
+
+What it does still give a loopback caller is a coarse reachable/not oracle for
+hosts this device can reach. That is stated rather than glossed: it is the cost
+of the check, it is why the limiter is there, and it is why the verdict is
+three words instead of a response. Note that "the page can already make the
+device navigate anywhere via /api/config" is NOT a defence -- a cross-origin
+navigation's result is not readable by the page that caused it, so this is a
+capability that genuinely did not exist before.
 """
 
 from __future__ import annotations
@@ -50,6 +83,8 @@ import re
 import socket
 import ssl
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -112,6 +147,122 @@ _ACTIONS = {
 # process a useful amplifier.
 MAX_REQUEST_BODY = 64 * 1024
 MAX_UPSTREAM_BODY = 1024 * 1024
+
+# --- the reachability check ------------------------------------------------
+# Shorter than UPSTREAM_TIMEOUT (20s) because a person is watching this one:
+# it runs while they are still looking at the form, and a 20s stall on a typo
+# reads as a hang.
+CHECK_TIMEOUT = float(os.environ.get("TAOS_CHECK_TIMEOUT", "5"))
+
+# Fixed. The caller names a host; it never names this.
+#
+# Measured against the live controller at :6969 on 2026-08-27, with controls:
+#     GET /api/health   -> 200 {"status":"ok","agents":2,"backends":9}
+#     GET /api/version  -> 200 {"version":"1.0.0-beta.50"}
+#     GET /            -> 401 {"error":"Authentication required"}
+#     GET /api/nonexistent-control-probe-3 -> 401   <- NOT 404
+# That last one matters for anyone extending this: the controller authenticates
+# before it routes, so on THIS host a 404 does not mean absent. It is the exact
+# inverse of the taos.my trap recorded in docs/first-run-controller-choice.md,
+# where a 404 meant wrong-method rather than missing route. Do not port a
+# 404-means-absent reading between the two hosts.
+CHECK_PATH = "/api/health"
+
+MAX_CHECK_BODY = 64 * 1024
+
+# Enough for a person retyping an address; useless as a network scanner.
+_CHECK_RATE = 30
+_CHECK_WINDOW = 60.0
+_check_times: list[float] = []
+_check_lock = threading.Lock()
+
+
+def check_allowed() -> bool:
+    """Token bucket over a sliding minute. Shared across threads and clients.
+
+    Deliberately global rather than per-URL: a per-target limit would still let
+    a caller sweep a /24 at full speed, which is the case the limit is for.
+    """
+    now = time.monotonic()
+    with _check_lock:
+        cutoff = now - _CHECK_WINDOW
+        while _check_times and _check_times[0] < cutoff:
+            _check_times.pop(0)
+        if len(_check_times) >= _CHECK_RATE:
+            return False
+        _check_times.append(now)
+        return True
+
+
+def probe_controller(url: str) -> dict:
+    """Is there a taOS controller at `url`? Verdict only, never the response.
+
+    THE STATUS CODE IS NOT THE ANSWER, AND THIS IS THE WHOLE POINT.
+    Measured 2026-08-27: the taOSmd A2A bus on :7900 is a single-page app with
+    a catch-all route, so GET /api/health against it returns **200** -- with a
+    body of index.html. A port check accepts it. A 200-means-yes check accepts
+    it too. Only the SHAPE of the response tells the two apart, so that is what
+    is checked: JSON content type, a JSON object, and a "status" key.
+
+    Verdicts, which map one-to-one onto the three states requirement 2 needs to
+    be distinguishable:
+        ok               a controller answered
+        not_a_controller something answered and it was not one
+        unreachable      nothing answered
+    """
+    # ORIGIN ONLY. Appending to the URL as typed would let a path the caller
+    # supplied survive as a prefix (".../some/where/else/api/health"), which
+    # would quietly make this the caller-supplied-path route the module
+    # docstring says does not exist. It is also simply where the endpoint is:
+    # a controller serves /api/health at the root of its origin, not under
+    # whatever path the user happened to paste.
+    parts = urllib.parse.urlsplit(url)
+    target = urllib.parse.urlunsplit((parts.scheme, parts.netloc, CHECK_PATH, "", ""))
+    req = urllib.request.Request(target, method="GET")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(
+            req, timeout=CHECK_TIMEOUT, context=ssl.create_default_context()
+        ) as resp:
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "")
+            raw = resp.read(MAX_CHECK_BODY)
+    except urllib.error.HTTPError as exc:
+        # It answered, just not the way a controller does. An older controller
+        # that gates /api/health would land here too, which is honest: we
+        # cannot tell it from any other authenticated service, and the form
+        # offers "use it anyway" for exactly that case.
+        log(f"check: answered {exc.code}, not a controller")
+        return {"verdict": "not_a_controller"}
+    except (urllib.error.URLError, ssl.SSLError, socket.timeout, OSError) as exc:
+        log(f"check: unreachable: {type(exc).__name__}")
+        return {"verdict": "unreachable"}
+
+    if status != 200 or "json" not in ctype.lower():
+        log(f"check: {status} ctype-mismatch, not a controller")
+        return {"verdict": "not_a_controller"}
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        log("check: unparseable body, not a controller")
+        return {"verdict": "not_a_controller"}
+    if not isinstance(body, dict) or "status" not in body:
+        log("check: wrong shape, not a controller")
+        return {"verdict": "not_a_controller"}
+
+    # A fixed, tiny projection -- named keys, type- and range-checked. This is
+    # the only thing that crosses back from upstream, and it is here because
+    # "found a controller: 2 agents, 9 backends" is a far more convincing
+    # success state on a 6-inch screen than a green tick. It cannot grow into a
+    # general read: adding a key means editing this tuple.
+    out = {"verdict": "ok"}
+    for key in ("agents", "backends"):
+        val = body.get(key)
+        if isinstance(val, int) and not isinstance(val, bool) and 0 <= val < 10000:
+            out[key] = val
+    log("check: ok")
+    return out
+
 
 # Accepted for mode=remote. Deliberately strict: a URL that lands in shell.conf
 # is what the kiosk will point Chromium at on every subsequent boot, so a
@@ -189,6 +340,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/config":
             self._write_config()
+        elif path == "/api/check":
+            self._check()
         elif path.startswith("/api/upstream/"):
             self._upstream(path[len("/api/upstream/"):])
         else:
@@ -253,6 +406,32 @@ class _Handler(BaseHTTPRequestHandler):
 
         log(f"upstream: {method} {action} -> {status}")
         self._send(status, payload, ctype)
+
+    def _check(self) -> None:
+        body = self._read_body()
+        if body is None:
+            return
+        try:
+            data = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            self._json(400, {"error": "bad_json"})
+            return
+        if not isinstance(data, dict):
+            self._json(400, {"error": "bad_json"})
+            return
+        url = str(data.get("url", "")).strip()
+        # Same gate as the config write, on purpose: the check must test the
+        # exact string that would be saved, or it is checking something else.
+        if not _URL_RE.match(url):
+            self._json(400, {"error": "bad_url"})
+            return
+        # After validation, before the network call: a malformed URL should not
+        # be able to burn the budget that protects the network call.
+        if not check_allowed():
+            log("check: rate limited")
+            self._json(429, {"error": "rate_limited"})
+            return
+        self._json(200, probe_controller(url))
 
     # --- config half ----------------------------------------------------
 
@@ -350,6 +529,8 @@ INDEX_HTML = """<!doctype html>
  input{width:100%;padding:.9rem;font:inherit;border-radius:.6rem;border:1px solid #33343c;
        background:#1c1d24;color:inherit;margin:.4rem 0}
  #go{background:#3d5afe;border-color:#3d5afe;text-align:center;margin-top:1rem}
+ #go[disabled]{opacity:.6}
+ #anyway{text-align:center;background:#1c1d24;border-color:#5a4a2c;color:#f0c674}
  #msg{margin-top:1rem;min-height:1.5rem;color:#ffb4a2}
  small{color:#9a9aa4;display:block;margin-top:.35rem}
 </style>
@@ -368,35 +549,104 @@ INDEX_HTML = """<!doctype html>
 </div>
 <button id="go">Continue</button>
 <div id="msg" role="status" aria-live="polite"></div>
+<!-- Requirement 2: never a dead end. A controller that is merely switched off
+     right now is a legitimate thing to configure, so a failed check must not
+     be a wall -- it must be a warning with a way past it. -->
+<button id="anyway" hidden>Use this address anyway</button>
 </main>
 <script>
  var mode=null;
  var L=document.getElementById('local'), R=document.getElementById('remote');
  var box=document.getElementById('remotebox'), msg=document.getElementById('msg');
  function pick(m){mode=m;L.classList.toggle('sel',m==='local');
-   R.classList.toggle('sel',m==='remote');box.hidden=(m!=='remote');msg.textContent='';}
+   R.classList.toggle('sel',m==='remote');box.hidden=(m!=='remote');msg.textContent='';
+   /* A stale "use it anyway" from a previous address must not survive a mode
+      change -- it would offer to commit a verdict that was about something
+      else entirely. */
+   var a=document.getElementById('anyway'); if(a){a.hidden=true}
+   document.getElementById('go').disabled=false;}
  L.onclick=function(){pick('local')}; R.onclick=function(){pick('remote')};
- document.getElementById('go').onclick=function(){
-   if(!mode){msg.textContent='Choose one of the two options above.';return}
+ var GO=document.getElementById('go'), ANY=document.getElementById('anyway');
+ var J={'Content-Type':'application/json'};
+ function say(color,text){msg.style.color=color;msg.textContent=text}
+ function post(path,body){
+   return fetch(path,{method:'POST',headers:J,body:JSON.stringify(body)})
+     .then(function(r){return r.json().then(function(j){return {s:r.status,j:j}})});
+ }
+
+ /* Writing the config is the last step in every branch, so it lives in one
+    place. Reached directly for local mode, after a clean check for remote, and
+    from "use it anyway" when the check was unhappy. */
+ function save(body){
+   ANY.hidden=true; GO.disabled=true; say('#e8e8ea','Saving\\u2026');
+   post('/api/config',body).then(function(o){
+     if(o.s===200){say('#9ae6b4','Saved. Restarting the kiosk\\u2026');return}
+     GO.disabled=false;
+     /* Name the failure. A blank screen here is indistinguishable from a
+        crash, which is exactly what bring-up hit. */
+     say('#ffb4a2',(o.j&&o.j.error==='bad_url')
+       ? 'That address does not look like a URL. Include http:// or https://.'
+       : 'Could not save the setting ('+((o.j&&o.j.error)||o.s)+').');
+   }).catch(function(){GO.disabled=false;
+     say('#ffb4a2','The setup service is not responding.');});
+ }
+
+ /* The three states requirement 2 wants kept apart, because each one asks the
+    user for something different. Guessing between them is how a kiosk with no
+    keyboard becomes a brick. */
+ function check(url,body){
+   GO.disabled=true; ANY.hidden=true;
+   say('#e8e8ea','Checking that address\\u2026');
+   post('/api/check',{url:url}).then(function(o){
+     GO.disabled=false;
+     var v=o.j&&o.j.verdict;
+     if(o.s===200&&v==='ok'){
+       var extra='';
+       if(typeof o.j.agents==='number'&&typeof o.j.backends==='number')
+         extra=' \\u2014 '+o.j.agents+' agents, '+o.j.backends+' backends';
+       say('#9ae6b4','Found a taOS controller'+extra+'.');
+       save(body); return;
+     }
+     if(o.s===400&&o.j&&o.j.error==='bad_url'){
+       say('#ffb4a2','That address does not look like a URL. Include http:// or https://.');
+       return;
+     }
+     if(o.s===429){
+       say('#ffb4a2','Too many checks just now. Wait a moment and try again.');
+       return;
+     }
+     if(v==='not_a_controller'){
+       say('#f0c674','Something answered at that address, but it is not a taOS '
+         +'controller. A controller normally listens on port 6969.');
+     }else{
+       say('#f0c674','Nothing answered at that address. Check that the controller '
+         +'is running and that this phone is on the same network.');
+     }
+     /* Not an error state -- an unverified one. The address may be right and
+        the controller simply off. Let it through, deliberately. */
+     ANY.hidden=false;
+   }).catch(function(){GO.disabled=false;
+     say('#ffb4a2','The setup service is not responding.');});
+ }
+
+ function collect(){
+   if(!mode){say('#ffb4a2','Choose one of the two options above.');return null}
    var body={mode:mode};
-   if(mode==='remote'){body.url=document.getElementById('url').value.trim();
-     if(!body.url){msg.textContent='Enter the controller address.';return}}
-   msg.textContent='Saving\\u2026';
-   fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
-                        body:JSON.stringify(body)})
-    .then(function(r){return r.json().then(function(j){return {s:r.status,j:j}})})
-    .then(function(o){
-      if(o.s===200){msg.style.color='#9ae6b4';
-        msg.textContent='Saved. Restarting the kiosk\\u2026';return}
-      /* Name the failure. A blank screen here is indistinguishable from a
-         crash, which is exactly what bring-up hit. */
-      msg.style.color='#ffb4a2';
-      msg.textContent=(o.j&&o.j.error==='bad_url')
-        ? 'That address does not look like a URL. Include http:// or https://.'
-        : 'Could not save the setting ('+((o.j&&o.j.error)||o.s)+').';})
-    .catch(function(){msg.style.color='#ffb4a2';
-      msg.textContent='The setup service is not responding.';});
+   if(mode==='remote'){
+     body.url=document.getElementById('url').value.trim();
+     if(!body.url){say('#ffb4a2','Enter the controller address.');return null}
+   }
+   return body;
+ }
+
+ GO.onclick=function(){
+   var body=collect(); if(!body) return;
+   /* Local mode has nothing to check: the controller is this device, and it
+      may not be installed yet at the moment this form is filled in. */
+   if(body.mode==='local'){save(body); return}
+   check(body.url,body);
  };
+ ANY.onclick=function(){var body=collect(); if(body) save(body)};
 </script>
 """
 

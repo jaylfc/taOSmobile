@@ -129,6 +129,150 @@ else
 fi
 check "valid local config accepted"     200 "$(code -X POST -H "$J" -d '{"mode":"local"}' "http://127.0.0.1:$HELP_PORT/api/config")"
 
+echo "== the reachability check: /api/check =="
+# The check exists so a typo does not become a dead screen on a keyboardless
+# phone. Everything here is about one question: does a VERDICT of "ok" actually
+# mean a controller, or does it just mean something answered?
+#
+# THE SPA CASE IS THE REASON THIS SECTION IS NOT TRIVIAL. Measured against the
+# live taOSmd A2A bus on 2026-08-27: it is a single-page app with a catch-all
+# route, so GET /api/health returns 200 -- with index.html in the body. A port
+# check accepts it. A "200 means yes" check accepts it too. Only the response
+# SHAPE tells them apart, so a stub with exactly that behaviour is a permanent
+# negative control here: if someone ever relaxes the check to a status code,
+# this is the test that goes red.
+cat > "$WORK/ctlstub.py" <<'PYEOF2'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+MODE = sys.argv[2]
+LOG = sys.argv[3]
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(LOG, "a") as f:
+            f.write(self.command + " " + self.path + "\n")
+        if MODE == "controller":
+            body, ctype, code = json.dumps(
+                {"status": "ok", "agents": 2, "backends": 9}).encode(), "application/json", 200
+        elif MODE == "spa":
+            # The A2A bus shape: 200 + HTML for every path, health included.
+            body, ctype, code = b"<!doctype html><title>not a controller</title>", "text/html", 200
+        elif MODE == "wrongjson":
+            body, ctype, code = b'{"hello":"world"}', "application/json", 200
+        else:  # auth401
+            body, ctype, code = b'{"error":"Authentication required"}', "application/json", 401
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PYEOF2
+
+CTL_PIDS=""
+start_ctl() {  # start_ctl <mode> -> echoes port
+    local port; port="$(free_port)"
+    python3 "$WORK/ctlstub.py" "$port" "$1" "$WORK/ctl-$1.log" >/dev/null 2>&1 &
+    CTL_PIDS="$CTL_PIDS $!"
+    local i
+    for i in $(seq 1 50); do
+        curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$port/api/health" 2>/dev/null && break
+        # auth401 never returns 2xx, so -f fails; a connection is enough.
+        curl -sS -o /dev/null --max-time 2 "http://127.0.0.1:$port/api/health" 2>/dev/null && break
+        sleep 0.1
+    done
+    printf '%s\n' "$port"
+}
+verdict() {  # verdict <url> -> echoes the verdict field, or the error field
+    curl -s --max-time 15 -X POST -H "$J" -d "{\"url\":\"$1\"}" \
+        "http://127.0.0.1:$HELP_PORT/api/check" \
+    | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("UNPARSEABLE"); raise SystemExit
+print(d.get("verdict") or d.get("error") or "NEITHER")'
+}
+vcheck() { if [ "$2" = "$3" ]; then ok "$1 ($3)"; else bad "$1 (want $2, got $3)"; fi; }
+
+CTL_PORT="$(start_ctl controller)"
+SPA_PORT="$(start_ctl spa)"
+WJ_PORT="$(start_ctl wrongjson)"
+A4_PORT="$(start_ctl auth401)"
+
+# POSITIVE CONTROL FIRST, same reason as the top of this file: every assertion
+# below is a rejection, and a check that can never say "ok" rejects perfectly.
+v="$(verdict "http://127.0.0.1:$CTL_PORT")"
+vcheck "a real controller verifies" ok "$v"
+[ "$v" = "ok" ] || give_up "check positive control failed: /api/check can never succeed, so its refusals prove nothing"
+grep -q "GET /api/health" "$WORK/ctl-controller.log" \
+    || bad "control: the check did not request /api/health"
+
+# The projection: fixed keys, and they must actually arrive or the success
+# screen silently loses the detail that makes it convincing.
+got="$(curl -s --max-time 15 -X POST -H "$J" -d "{\"url\":\"http://127.0.0.1:$CTL_PORT\"}" \
+      "http://127.0.0.1:$HELP_PORT/api/check" \
+      | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("agents"),d.get("backends"))')"
+[ "$got" = "2 9" ] && ok "agents/backends projected ($got)" || bad "projection wrong: got '$got', want '2 9'"
+
+vcheck "an SPA answering 200 is NOT a controller" not_a_controller "$(verdict "http://127.0.0.1:$SPA_PORT")"
+vcheck "JSON without a status key is NOT a controller" not_a_controller "$(verdict "http://127.0.0.1:$WJ_PORT")"
+vcheck "a 401 service is NOT a controller" not_a_controller "$(verdict "http://127.0.0.1:$A4_PORT")"
+
+DEAD1="$(free_port)"
+vcheck "nothing listening is unreachable" unreachable "$(verdict "http://127.0.0.1:$DEAD1")"
+
+vcheck "non-url refused"        bad_url "$(verdict "not a url")"
+vcheck "javascript: refused"    bad_url "$(verdict "javascript:alert(1)")"
+vcheck "file: refused"          bad_url "$(verdict "file:///etc/passwd")"
+
+# The check must not become a read of the upstream. Nothing from the SPA's body
+# may appear in what comes back.
+raw="$(curl -s --max-time 15 -X POST -H "$J" -d "{\"url\":\"http://127.0.0.1:$SPA_PORT\"}" \
+      "http://127.0.0.1:$HELP_PORT/api/check")"
+case "$raw" in
+    *"not a controller"*|*doctype*|*"<title"*) bad "the check echoed the upstream body back: $raw" ;;
+    *) ok "no upstream body crosses back" ;;
+esac
+
+# A caller-supplied path must not survive into the request. The path comes from
+# CHECK_PATH; the caller supplies a host.
+: > "$WORK/ctl-controller.log"
+verdict "http://127.0.0.1:$CTL_PORT/some/where/else" >/dev/null
+seen="$(sort -u "$WORK/ctl-controller.log" 2>/dev/null | tr '\n' '|')"
+if [ "$seen" = "GET /api/health|" ]; then
+    ok "only /api/health is ever requested"
+else
+    bad "a caller-supplied path reached the target (saw: $seen)"
+fi
+
+# The limiter gets its OWN helper. Exhausting the shared bucket in the main one
+# would make every later check depend on running before this line -- an
+# ordering dependency nobody would see until it broke.
+echo "== the check is rate limited =="
+P3="$(free_port)"
+TAOS_FIRSTRUN_PORT="$P3" TAOS_UPSTREAM="http://127.0.0.1:$STUB_PORT" \
+TAOS_SHELL_CONF="$WORK/y.conf" python3 "$HELPER" >"$WORK/h3.log" 2>&1 &
+H3=$!
+for _ in $(seq 1 50); do
+    curl -fsS -o /dev/null "http://127.0.0.1:$P3/health" 2>/dev/null && break
+    sleep 0.1
+done
+if curl -fsS -o /dev/null "http://127.0.0.1:$P3/health" 2>/dev/null; then
+    limited=0
+    for _ in $(seq 1 40); do
+        c=$(code -X POST -H "$J" -d "{\"url\":\"http://127.0.0.1:$CTL_PORT\"}" \
+            "http://127.0.0.1:$P3/api/check")
+        [ "$c" = "429" ] && { limited=1; break; }
+    done
+    [ "$limited" = "1" ] && ok "a burst is refused with 429" || bad "40 checks in a row were all allowed"
+    # And a malformed URL must not spend the budget it is not allowed to use.
+    c=$(code -X POST -H "$J" -d '{"url":"not a url"}' "http://127.0.0.1:$P3/api/check")
+    check "bad_url still refused while rate limited" 400 "$c"
+else
+    bad "third helper did not come up; see $WORK/h3.log"
+fi
+kill "$H3" 2>/dev/null
+for pid in $CTL_PIDS; do kill "$pid" 2>/dev/null; done
+
 echo "== bind is loopback only =="
 # Ask the kernel, not the source. A helper that bound 0.0.0.0 would pass every
 # check above and still be exposed to the LAN.
