@@ -77,6 +77,15 @@ sudo install -D -m 755 taos-firstrun.py /usr/local/lib/taos/taos-firstrun.py
 # ExecStart= cannot do command substitution, hence a wrapper rather than a
 # cleverer unit file.
 sudo install -D -m 755 taos-kiosk-launch.sh /usr/local/lib/taos/taos-kiosk-launch.sh
+# Setup escape: the way back OUT once shell.conf names a mode. Without it a
+# controller that later moves or goes away is a dead screen on every boot with
+# no way to reach the setup form, which is the one-way door requirement 1 of
+# docs/first-run-controller-choice.md forbids. Runs as root -- /dev/input is
+# root-owned and the effect is a systemctl restart -- and %i tells it which
+# user's runtime dir the sentinel belongs in.
+sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-setup-escape.service \
+    | sudo tee /etc/systemd/system/taos-setup-escape.service >/dev/null
+sudo install -D -m 755 taos-setup-escape.py /usr/local/lib/taos/taos-setup-escape.py
 sudo systemctl daemon-reload
 
 step "verify the kiosk resolves a URL before it is ever given the display"
@@ -90,6 +99,32 @@ case "${krc:-0}" in
     *) echo "check-kiosk-url.sh FAILED -- the kiosk would open the wrong page. Not shipping this."
        exit 1 ;;
 esac
+
+step "verify the setup escape before trusting the device to it"
+./check-setup-escape.sh || erc=$?
+case "${erc:-0}" in
+    0) ;;
+    2) echo "NOTE: setup-escape checks INCOMPLETE -- see above." ;;
+    *) echo "check-setup-escape.sh FAILED -- there would be no way back from a stale config."
+       exit 1 ;;
+esac
+
+step "setup escape"
+# It exits 78 when nothing on the device reports the volume keys, ON PURPOSE:
+# a watcher that cannot see its keys would sit active and never fire, and this
+# repo has been bitten four times by exactly that. So a failed unit here is
+# information. It does not abort the install -- the device still boots and still
+# works -- but it must be said plainly, because the thing that would be lost is
+# the ability to recover a device that has no keyboard.
+sudo systemctl enable --now taos-setup-escape.service || true
+if ! systemctl is-active --quiet taos-setup-escape.service; then
+    echo "WARNING: taos-setup-escape.service did not come up."
+    echo "The volume-up + volume-down escape back to the setup screen is NOT armed."
+    echo "If exit status is 78, no input device on this machine reports the volume"
+    echo "keys -- check 'sudo evtest' and the key codes in taos-setup-escape.py."
+    echo "Until it runs, a stale controller address can only be fixed over SSH."
+    sudo journalctl -u taos-setup-escape.service -n 20 --no-pager || true
+fi
 
 step "first-run helper"
 # Must be up before the kiosk: on an unconfigured device the launcher resolves

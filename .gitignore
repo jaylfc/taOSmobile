@@ -4,3 +4,5 @@ droidian/artifacts/*.deb
 droidian/artifacts/linux-headers-*.deb
 droidian/artifacts/linux-image-*.deb
 target/
+__pycache__/
+*.pyc

@@ -52,7 +52,13 @@ LOCAL_URL="http://localhost:6969/"
 # conf <lines...>  -- write a shell.conf for the next resolution
 conf() { printf '%s\n' "$@" > "$CONF"; }
 # url_for  -- resolve with the current shell.conf
-url_for() { TAOS_SHELL_CONF="$CONF" "$LAUNCH" --print-url 2>/dev/null; }
+# TAOS_SETUP_SENTINEL is pinned to a path inside $WORK, and nothing creates it
+# except the section that tests it. Without this every answer in this file would
+# depend on whether the machine running it happens to have a real escape pending
+# in its own XDG_RUNTIME_DIR -- a test that reads the tester's environment.
+SENTINEL="$WORK/setup-requested"
+url_for() { TAOS_SHELL_CONF="$CONF" TAOS_SETUP_SENTINEL="$SENTINEL" \
+            "$LAUNCH" --print-url 2>/dev/null; }
 
 want() {  # want <label> <expected> <actual>
     if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (want $2, got $3)"; fi
@@ -196,6 +202,66 @@ case "$rc" in
     0)   ok "unreachable remote still launches" ;;
     124) bad "remote target was GATED and the probe hung on a blackholed address" ;;
     *)   bad "unreachable remote returned $rc, want 0 (remote must not be gated)" ;;
+esac
+
+echo "== the setup escape overrides a config that resolves perfectly well =="
+# The case the rest of this file cannot reach. Every fallback above fires on a
+# config that is MISSING or MALFORMED. A config that is well-formed and STALE --
+# the controller moved, was renamed, or the user changed their mind -- resolves
+# cleanly to somewhere unreachable, on every boot, with no way back on a device
+# with no keyboard. That is the one-way door requirement 1 forbids, and
+# taos-setup-escape.py is what puts a sentinel here.
+#
+# Note what is being asserted: not "a bad config falls back" but "a GOOD config
+# is overridden". Both configs below are ones the launcher is otherwise right to
+# honour, which is why they are the ones used.
+conf "mode=remote" "url=http://gone.example:6969/"
+want "control: the stale config still resolves on its own" \
+     "http://gone.example:6969/" "$(url_for)"
+: > "$SENTINEL"
+want "sentinel beats a well-formed remote config" "$HELPER_URL" "$(url_for)"
+[ -e "$SENTINEL" ] && bad "the sentinel survived resolution -- every boot now goes to setup" \
+                   || ok "the sentinel is consumed, so it is one start only"
+want "the start after that is normal again" \
+     "http://gone.example:6969/" "$(url_for)"
+
+# local mode too. This is the "nothing was ever wrong, the answer changed" half
+# of requirement 1 -- local -> remote -- and it is the case a fallback-shaped
+# fix would miss entirely, because mode=local never falls back to anything.
+conf "mode=local"
+want "control: local mode still resolves to the controller" "$LOCAL_URL" "$(url_for)"
+: > "$SENTINEL"
+want "sentinel beats mode=local" "$HELPER_URL" "$(url_for)"
+
+# An undeletable sentinel must not become a dead end in the other direction:
+# honour it, say so, and let a reboot clear it -- /run is tmpfs. A read-only
+# DIRECTORY is what makes rm fail; a read-only file would still be removable.
+mkdir -p "$WORK/ro"
+: > "$WORK/ro/setup-requested"
+chmod 500 "$WORK/ro"
+if [ "$(id -u)" = "0" ]; then
+    echo "  SKIP  running as root: a read-only directory does not stop rm"
+else
+    got="$(TAOS_SHELL_CONF="$CONF" TAOS_SETUP_SENTINEL="$WORK/ro/setup-requested" \
+           "$LAUNCH" --print-url 2>/dev/null)"
+    want "an unremovable sentinel is still honoured" "$HELPER_URL" "$got"
+fi
+chmod 700 "$WORK/ro"
+
+# And it must reach the ACTUAL command line, not just --print-url. A resolution
+# the launcher then ignores when it really runs is the drift this file exists to
+# prevent.
+conf "mode=remote" "url=http://gone.example:6969/"
+: > "$SENTINEL"
+argv="$(TAOS_SHELL_CONF="$CONF" TAOS_SETUP_SENTINEL="$SENTINEL" \
+        "$LAUNCH" --print-argv 2>/dev/null)"
+case "$argv" in
+    *"--app=$HELPER_URL"*) ok "the escape reaches the chromium command line" ;;
+    *) bad "the escape did not reach --app= (got: $(printf '%s' "$argv" | tr '\n' ' '))" ;;
+esac
+case "$argv" in
+    *gone.example*) bad "the overridden URL is still on the command line" ;;
+    *) ok "the overridden URL is gone from the command line" ;;
 esac
 
 echo "== a bad argument is rejected, and is not retryable =="

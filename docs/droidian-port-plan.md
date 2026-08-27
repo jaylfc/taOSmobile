@@ -77,8 +77,20 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
    dead loopback target makes the launcher exit 3 so
    `OnFailure=taos-kiosk-recover.service` can hand the display back to Phosh —
    a kiosk sitting on an error page is a *successful* start and would otherwise
-   never fail over. Acceptance test `check-kiosk-url.sh` (32 checks, off-device);
+   never fail over. Acceptance test `check-kiosk-url.sh` (41 checks, off-device);
    rationale in `droidian/taos-layer/README.md`.
+   - And there is a way back OUT. Everything above fires on a config that is
+     missing or malformed; one that is well-formed and merely **stale** — the
+     controller moved or went away — resolves cleanly to a dead target on every
+     boot with nothing to fall back to. `taos-setup-escape.service` watches
+     evdev for **volume-up + volume-down held five seconds** and sends the next
+     start to the first-run helper. A hardware key because in `mode=remote` the
+     page on screen belongs to someone else, and a physical press is the one
+     signal a web page cannot produce. It exits 78 and lands in `failed` if no
+     device on the phone reports those key codes, rather than sitting active and
+     never firing. Acceptance test `check-setup-escape.sh` (31 checks,
+     off-device); **the chord itself is unverified on `spacewar`** — confirm
+     with `evtest` and by watching the screen.
    - Chromium runs on an **ephemeral profile** under `/run`, and
      `taos-kiosk-csrf-guard.service` watches for the taOS#2081 lockout. Both are
      required, not belt-and-braces: the profile covers a cookie that is already

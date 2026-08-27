@@ -404,12 +404,29 @@ discovery at all, which is cheaper for us than anything account-mediated.
    > state-changing route; `droidian/taos-layer/README.md` carries the
    > measurement and the mutation results.
    >
-   > **Still unbuilt: the escape itself.** The remaining shape is physical
-   > intent — a hardware key held on a device the compositor does not arbitrate
-   > — because it is the one signal a web page cannot produce. Plus the two
-   > sub-asks this requirement makes and nothing yet specifies: local → remote
+   > **The escape is now built.** `taos-setup-escape.py` watches evdev for
+   > **volume-up + volume-down held five seconds**, writes a one-shot sentinel
+   > and restarts the kiosk; `taos-kiosk-launch.sh` consumes the sentinel and
+   > opens the first-run helper for that one start, whatever `shell.conf` says.
+   > A physical key because it is the one signal a web page cannot produce —
+   > and in remote mode the page on screen belongs to someone else. It does not
+   > touch `shell.conf`: the user is handed the setup form and chooses there,
+   > with the same address check and the same refusals as first run.
+   >
+   > **Verified off-device, and honest about which half that is.** The chord
+   > logic is driven on a synthetic clock (31 checks; six mutations each go
+   > red), and the capability probe has a real evdev node advertising both key
+   > codes as its positive control. What is *not* verified is that `spacewar`'s
+   > volume keys appear as `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` under the Halium 5.4
+   > kernel. If they do not, the unit exits 78 and lands in `failed` rather
+   > than sitting active and never firing — the refusal is the design, not a
+   > consolation. Confirm on the phone with `evtest` and by watching the
+   > screen, not `systemctl status`.
+   >
+   > **Still unbuilt: the two sub-asks in the sentence above.** Local → remote
    > offering to keep or discard local data, and remote → local not silently
-   > orphaning the pairing.
+   > orphaning the pairing. Neither is reachable until the pairing flow exists,
+   > and neither is what makes the door one-way — the escape was.
 2. **Legible failure.** If the remote controller is unreachable, say so and
    offer retry / switch / manual entry. Never a blank screen — we hit exactly
    that failure mode during bring-up and it is indistinguishable from a crash.

@@ -1,0 +1,57 @@
+[Unit]
+Description=taOS setup escape (volume chord returns the kiosk to first-run setup)
+Documentation=https://github.com/jaylfc/taOSmobile
+# Deliberately independent of taos-kiosk.service. This is the way back OUT of a
+# kiosk pointed somewhere unreachable, so it must not be ordered after, bound to
+# or stopped with the thing it rescues. It restarts the kiosk by name; it does
+# not depend on it being up.
+After=systemd-user-sessions.service
+
+# Exit 78 is the watcher refusing to run because nothing on this device reports
+# the volume keys. That is a configuration fact, not a transient one, so it must
+# reach `failed` and stay visible rather than flapping. These two live in [Unit]:
+# systemd moved them there in v230 and SILENTLY IGNORES them in [Service], which
+# is the bug that had been sitting in taos-kiosk.service until 2026-08-26.
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+# Root, and this is the one unit in the layer that needs it. /dev/input/event*
+# is root-owned on Droidian, and the effect is `systemctl restart` on a system
+# unit. Both halves are why it is not the kiosk user.
+User=root
+Environment=PYTHONUNBUFFERED=1
+# Filled in by install-taos.sh, the same substitution the kiosk unit gets. The
+# watcher needs the kiosk user's uid to put the sentinel in THAT user's
+# XDG_RUNTIME_DIR, where the launcher -- which is not root -- can delete it.
+Environment=TAOS_KIOSK_USER=%i
+Environment=TAOS_KIOSK_UNIT=taos-kiosk.service
+ExecStart=/usr/bin/python3 /usr/local/lib/taos/taos-setup-escape.py
+
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+
+# DO NOT ADD PrivateDevices=yes. It replaces /dev with a minimal set that has no
+# /dev/input, so the watcher would start, find nothing that reports the volume
+# keys, and exit 78 -- a hardening line silently disabling the feature. Noted
+# here because it is the obvious thing to reach for on a unit running as root.
+NoNewPrivileges=yes
+# full, not strict: strict mounts the WHOLE hierarchy read-only bar /dev, /proc
+# and /sys, and this needs to write the sentinel under /run/user and to connect
+# to systemd's private socket under /run to issue the restart. full leaves /run
+# writable while still protecting /usr, /boot and /etc.
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+# No network of any kind. It reads a keyboard and restarts a unit.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

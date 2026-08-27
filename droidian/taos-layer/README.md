@@ -19,6 +19,9 @@ Droidian phone. Authored ahead of the flash so it is ready to drop in.
 | `check-firstrun-helper.sh` | Acceptance test: prove the helper is not a proxy |
 | `taos-kiosk-launch.sh` | Resolves the kiosk URL from `shell.conf`, then becomes the kiosk |
 | `check-kiosk-url.sh` | Acceptance test: prove the kiosk never opens a dead page |
+| `taos-setup-escape.service` | Watches the volume keys for the way back to setup |
+| `taos-setup-escape.py` | The watcher itself; installed to `/usr/local/lib/taos/` |
+| `check-setup-escape.sh` | Acceptance test: prove the escape fires, and only on purpose |
 
 ## Design decisions, and why
 
@@ -252,6 +255,103 @@ valid systemd value**. systemd logs `Invalid argument` and *ignores the line*,
 leaving the default in force — the same silently-ignored-setting class as the
 `StartLimitBurst`-in-`[Service]` bug fixed in `taos-kiosk.service`. Worth
 grepping other units for settings that look plausible but are silently dropped.
+
+### Two held buttons are the way back out, because a page cannot press them
+
+Everything in the section below is about a config that is **missing or
+malformed**. A config that is well-formed and merely **stale** — the controller
+moved, was renamed, went away, or the user simply changed their mind — resolves
+cleanly, every boot, to somewhere unreachable. Nothing falls back, because
+nothing is wrong. On a handset with no keyboard that is the one-way door
+`docs/first-run-controller-choice.md` requirement 1 forbids, and the address
+check added in `c3878c0` does not help: it stops a wrong address being *written*
+and says nothing about one that was right when typed.
+
+`taos-setup-escape.py` watches evdev for **volume-up + volume-down held together
+for five seconds**, then writes a one-shot sentinel and restarts the kiosk. The
+launcher consumes the sentinel and opens the first-run helper for that one
+start; the next start is normal again.
+
+**Why a hardware key and not a link, a button or a local URL.** In remote mode
+the kiosk is pointed at a page on someone else's machine, so "a page the user is
+looking at" and "a page we trust" are different sets. A page can navigate to or
+fetch any address without the user doing anything — which is not a hypothetical
+here, see the drive-by measured above. **A physical key is the one signal a web
+page cannot produce.** That is the entire reason for the shape.
+
+**Why it can read the keys while cage owns the display.** evdev character
+devices are not exclusive — `EVIOCGRAB` is opt-in and libinput does not take it
+for keyboards — so several processes see the same events. The watcher therefore
+needs no hotkey API from the compositor, and needs neither the kiosk nor the
+session to be healthy. That matters: the case it exists for is the one where
+what is on screen is unusable.
+
+**What it deliberately does not do: edit `shell.conf`.** It hands the user the
+setup screen and they choose there, with the same address check and the same
+refusals as first run. A watcher that rewrote the config would be a second
+writer of the file the design says has exactly one, and "hold two buttons to
+lose your controller" is a footgun rather than a way out.
+
+Three details that are each a decision rather than an accident:
+
+- **The sentinel lives under `XDG_RUNTIME_DIR`, which is tmpfs.** An orphan —
+  written when the restart then failed — cannot survive a reboot and strand the
+  device in setup. Failing in the other direction would be much worse.
+- **The launcher unlinks it *before* answering, not after.** If the launcher
+  then dies, the sentinel is already gone and the next start is normal; the
+  other order turns a crash loop into a device permanently in setup.
+- **It is consumed on every resolution, `--print-url` included.** One contract —
+  "the next resolution goes to setup" — has no special cases to get wrong, and
+  it means the test drives the same consumption the unit does. The cost is that
+  a diagnostic run over SSH eats a pending escape, and anyone with an SSH shell
+  is already past needing one.
+
+#### It refuses to run blind, and that is checked by making it hang
+
+The watcher has exactly one input: evdev key events. Pointed at devices that
+cannot report the volume keys it would sit `active` forever and detect nothing —
+the failure mode this repo has now met four times (`taos-firstrun.service`
+installed but never enabled; the relay Caddyfile correct and never deployed;
+`StartLimitBurst` in `[Service]` where systemd ignores it; a board check reading
+a JSON key that does not exist). So at start it asks the kernel, via
+`EVIOCGBIT(EV_KEY)`, which codes each device advertises, and exits **78**
+(`EX_CONFIG`) if nothing covers both. The unit names 78 in
+`RestartPreventExitStatus`, so that refusal reaches `failed` and stays visible
+while a transient crash is still retried.
+
+`check-setup-escape.sh` runs 31 checks. Two things in it are worth copying
+rather than just reading:
+
+- **The timing is driven on a synthetic clock, not by sleeping.** A five-second
+  hold tested with a five-second sleep is a test nobody runs twice, and it
+  cannot express "held 4.999 seconds" at all. `ChordDetector` is split out from
+  the reading loop precisely so it can be fed `(code, value, now)` triples.
+- **Every run of the watcher is bounded by `timeout`.** This was found the
+  honest way: mutating the self-proof to `if False` made the watcher fall into
+  `select()` with no descriptors and block for ever, and the unbounded suite
+  **hung instead of failing**. A suite that hangs on the exact bug it was
+  written for reports nothing. `timeout`'s 124 now surfaces as a wrong exit
+  code, and there is a named check for the hang itself.
+
+Proven red against six deliberately broken builds: self-proof removed (5 red,
+including the hang), hold duration not enforced (the positive control goes red
+and the run stops INCOMPLETE), re-arm and cooldown removed (2 red), the launcher
+not consuming the sentinel (1 red here, 3 in `check-kiosk-url.sh`), the launcher
+ignoring the sentinel entirely (6 red there), and `PrivateDevices=yes` added to
+the unit (1 red). That last one is the trap worth naming: it is the obvious
+hardening line to add to a unit running as root, and it replaces `/dev` with a
+minimal set containing no `/dev/input` — a security setting that would silently
+disable the safety feature.
+
+**Not yet verified on the phone.** The capability probe has a real positive
+control — an evdev node on the build host that genuinely advertises both key
+codes — and the negative control is a non-evdev node advertising none. What is
+untested is this device: that `spacewar`'s volume keys appear as
+`KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` on a node the watcher can open under the Halium
+5.4 kernel. If they do not, the unit fails visibly with 78 rather than pretending
+to work, which is the point of the self-proof. Confirm with `sudo evtest` on the
+device and by holding the chord — *process state is not screen state*, so watch
+the screen, not `systemctl status`.
 
 ### The kiosk URL comes from `shell.conf`, and every fallback points at the helper
 

@@ -32,6 +32,26 @@
 # controller that is not there is a dead end; falling back to the helper is a
 # way out.
 #
+# THE WAY BACK IN
+# ---------------
+# Everything above is about a config that is missing or malformed. A config that
+# is well-formed and STALE -- the controller moved, was renamed, or the user
+# simply changed their mind -- resolves cleanly to a target that is not there,
+# every boot, forever. On a device with no keyboard that is the one-way door
+# docs/first-run-controller-choice.md requirement 1 forbids.
+#
+# So resolution starts by looking for a sentinel that taos-setup-escape.py
+# writes when the volume-up + volume-down chord is held. If it is there, this
+# start goes to the first-run helper whatever the config says, and the sentinel
+# is DELETED in the same breath, so the start after that is normal again.
+#
+# It is consumed on every resolution, including --print-url and --preflight.
+# That is deliberate rather than an oversight: one contract -- "the next
+# resolution goes to setup" -- has no special cases to get wrong, and it means
+# the test drives the same consumption the unit does. The cost is that a
+# diagnostic run over SSH eats a pending escape, and someone with an SSH shell
+# is already past needing it.
+#
 # And when the resolved target is loopback and nothing is listening, this script
 # EXITS NON-ZERO rather than launching. A kiosk showing "site can't be reached"
 # is a successful start, so Restart= and OnFailure= never fire and the screen is
@@ -59,6 +79,12 @@ if [ -z "${HOME:-}" ]; then
     export HOME
 fi
 CONF="${TAOS_SHELL_CONF:-$HOME/.config/taosmobile/shell.conf}"
+
+# Must name the same file taos-setup-escape.py writes -- the same expression in
+# two languages. It lives under XDG_RUNTIME_DIR, which is tmpfs: an orphaned
+# sentinel (written when the restart then failed) cannot survive a reboot and
+# strand the device in setup. Wrong direction to fail in would be the other one.
+SENTINEL="${TAOS_SETUP_SENTINEL:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/taos-setup-requested}"
 
 log() { echo "taos-kiosk-launch: $*" >&2; }
 
@@ -89,8 +115,31 @@ conf_get() {
     return 1
 }
 
+# Returns 0 if a setup escape is pending, and consumes it. Unlinking BEFORE
+# answering, not after, is the point: if this script then dies, the sentinel is
+# already gone and the next start is a normal one. The other order turns a crash
+# loop into a device permanently in setup.
+take_sentinel() {
+    [ -e "$SENTINEL" ] || return 1
+    if rm -f "$SENTINEL" 2>/dev/null && [ ! -e "$SENTINEL" ]; then
+        log "setup escape requested; consumed $SENTINEL"
+        return 0
+    fi
+    # Present and undeletable -- a chown that did not happen, most likely. Still
+    # honour it: the user held the buttons. It costs one more trip through the
+    # setup screen on the next start, and /run being tmpfs a reboot clears it.
+    log "setup escape requested but $SENTINEL could not be removed; honouring it once more"
+    return 0
+}
+
 resolve_url() {
     local mode url
+    # Ahead of the config on purpose. The whole point is to override a config
+    # that resolves perfectly well to somewhere the user cannot get back from,
+    # so a mode= that parses is not a reason to ignore two held buttons.
+    if take_sentinel; then
+        printf '%s\n' "$FIRSTRUN_URL"; return
+    fi
     if [ ! -r "$CONF" ]; then
         log "no readable config at $CONF -- first run"
         printf '%s\n' "$FIRSTRUN_URL"; return
