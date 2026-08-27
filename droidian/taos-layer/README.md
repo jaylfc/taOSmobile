@@ -14,6 +14,9 @@ Droidian phone. Authored ahead of the flash so it is ready to drop in.
 | `taos-kiosk-csrf-guard.service` | Watches for a taOS#2081 lockout and restarts the kiosk |
 | `kiosk-csrf-guard.sh` | The guard itself; installed to `/usr/local/lib/taos/` |
 | `check-csrf-lockout.sh` | Acceptance test: prove the device cannot lock itself out |
+| `taos-firstrun.service` | The first-run helper, loopback only |
+| `taos-firstrun.py` | The helper itself; installed to `/usr/local/lib/taos/` |
+| `check-firstrun-helper.sh` | Acceptance test: prove the helper is not a proxy |
 
 ## Design decisions, and why
 
@@ -84,6 +87,50 @@ surface on the device is taOS's.
 
 **`--prefer-binary`, not `--only-binary`.** `http-ece` is source-only but pure
 Python; `--only-binary` refuses the entire resolve because of it.
+
+### The first-run helper is not a proxy, and the test exists to keep it that way
+
+`taos.my` sends **no CORS headers**. Measured 2026-08-27 against the live host,
+with a negative control: a correctly formed preflight (`Origin` *and*
+`Access-Control-Request-Method` present — a bare `OPTIONS` proves nothing,
+because CORS middleware only answers when those headers are there) returns 404
+with no `Access-Control-Allow-Origin`, and a cross-origin `GET /api/auth/me`
+returns 401 with none either. The control matters: `GET /api/auth/login` also
+returns 404 because it is POST-only, so **404 on that host means wrong-method as
+often as absent**, and reading the GET alone reports live routes as missing.
+
+Our first-run UI is served from the phone, so every call to `taos.my` is
+cross-origin and Chromium blocks it. The page cannot make these calls. Something
+process-side has to, and that is `taos-firstrun.py`.
+
+The timing is the sharp part: it is needed **precisely in remote mode**, which is
+the mode defined by there being no local controller. So it cannot be folded into
+`taos-controller.service` — in the one case that needs it, that service is not
+running.
+
+**The upstream path is never taken from the request.** The client names an
+*action* from a fixed table and the table supplies the method and the path. There
+is no route that forwards a caller-supplied path or host. An open forwarder on
+loopback inside a kiosk browser would be worse than no helper at all: every page
+the kiosk ever loads could reach arbitrary hosts through it, with the device's
+identity. A prefix allowlist would not do — prefixes invite traversal and
+encoding tricks — whereas a closed action table has no user-controlled component
+in the URL to trick.
+
+`check-firstrun-helper.sh` runs 26 checks and, importantly, **runs its positive
+control first**: it proves forwarding actually reaches upstream before testing
+any refusal, because a dead process refuses path traversal perfectly. If the
+control fails the script exits `2` INCOMPLETE rather than reporting a pass.
+Proven red against five deliberately broken builds — open forwarder, `0.0.0.0`
+bind, missing `chmod 0600`, upstream errors swallowed as 200, and forwarding
+removed entirely — each caught by the check meant to catch it, the last as
+INCOMPLETE rather than PASS.
+
+One incidental find while writing the unit: `ProtectHome=read-write` is **not a
+valid systemd value**. systemd logs `Invalid argument` and *ignores the line*,
+leaving the default in force — the same silently-ignored-setting class as the
+`StartLimitBurst`-in-`[Service]` bug fixed in `taos-kiosk.service`. Worth
+grepping other units for settings that look plausible but are silently dropped.
 
 ## Not needed here (unlike the Ubuntu Touch attempt)
 

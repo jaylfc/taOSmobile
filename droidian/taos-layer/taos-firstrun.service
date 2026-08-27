@@ -1,0 +1,44 @@
+[Unit]
+Description=taOS first-run helper (loopback; makes taos.my calls the kiosk page cannot)
+Documentation=https://github.com/jaylfc/taOSmobile
+# Deliberately NOT After=taos-controller.service. This helper is needed in
+# REMOTE mode, which is the mode defined by there being no local controller --
+# ordering it after a service that is absent in its own use case would be a
+# start-up stall on exactly the path it exists to serve.
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+# Loopback only, and there is no option to change that -- see the module
+# docstring. The port is here rather than hardcoded so the verifier can run an
+# instance without colliding with a live one.
+Environment=TAOS_FIRSTRUN_PORT=6970
+Environment=TAOS_UPSTREAM=https://taos.my
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /usr/local/lib/taos/taos-firstrun.py
+Restart=on-failure
+RestartSec=5
+
+# This process forwards account passwords upstream. Give it the smallest
+# surface that still lets it write shell.conf: no new privileges, a private
+# /tmp, and no write access to the system outside the user's own config.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+# ProtectHome must be yes/no/read-only/tmpfs. "read-write" is NOT a value:
+# systemd parses it, logs "Invalid argument" and IGNORES the line, leaving the
+# default in force -- the same silently-ignored-setting class as the
+# StartLimitBurst-in-[Service] bug fixed in taos-kiosk.service on 2026-08-26.
+# The helper must write ~/.config/taosmobile/shell.conf, so home stays
+# reachable and ProtectSystem=strict is relaxed for exactly that one tree.
+ProtectHome=no
+ReadWritePaths=/home/%i
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

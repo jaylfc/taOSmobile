@@ -65,6 +65,13 @@ sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-kiosk.service \
 sudo cp taos-kiosk-recover.service /etc/systemd/system/
 sudo cp taos-kiosk-csrf-guard.service /etc/systemd/system/
 sudo install -D -m 755 kiosk-csrf-guard.sh /usr/local/lib/taos/kiosk-csrf-guard.sh
+# First-run helper: taos.my sends no CORS headers, so the kiosk page cannot call
+# it and something has to do it process-side. See docs/first-run-controller-choice.md
+# requirement 6, and the module docstring for why it is an action table and not
+# a proxy.
+sed "s/%i/$TAOS_USER/g; s/%U/$(id -u "$TAOS_USER")/g" taos-firstrun.service \
+    | sudo tee /etc/systemd/system/taos-firstrun.service >/dev/null
+sudo install -D -m 755 taos-firstrun.py /usr/local/lib/taos/taos-firstrun.py
 sudo systemctl daemon-reload
 
 step "start the controller and WAIT for the port"
