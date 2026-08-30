@@ -297,9 +297,26 @@ echo "== the unit's settings are actually in force =="
 # load the unit into a systemd USER manager and read the PARSED property back,
 # with an invalid value as the negative control. Same technique that caught
 # StartLimitBurst sitting in [Service] where systemd ignores it.
-grep -q '^PrivateDevices=yes' "$UNIT" \
-    && bad "PrivateDevices=yes hides /dev/input: the watcher would exit 78 forever" \
-    || ok "the unit does not set PrivateDevices=yes"
+# NO SPELLING SURFACE. This was `grep -q '^PrivateDevices=yes'`, which measured one
+# spelling out of many. Measured 2026-08-30 against a user manager: systemd parses
+# yes/true/TRUE/on/1/y/t all to yes, tolerates whitespace around the `=` and before
+# the key, and only the KEY is case-sensitive -- so `PrivateDevices=true` and
+# `  PrivateDevices=yes` both hid /dev/input while the check reported "the unit does
+# not set PrivateDevices=yes". A regex covering
+# every truthy spelling is its own bug surface, so assert the simple thing instead:
+# this unit must not mention PrivateDevices in a setting AT ALL. The authoritative
+# check is the parsed read-back added below, where a user manager is available.
+# The -r arm is not redundant with the preamble: line 45 tests -f, so a unit that
+# EXISTS but cannot be read reaches here, and the old grep called that "does not
+# set PrivateDevices=yes". Measured 2026-08-30 with the unit at mode 000.
+if [ ! -r "$UNIT" ]; then
+    bad "the unit is not readable at $UNIT, so this measures nothing about PrivateDevices"
+elif grep -qE '^[[:space:]]*PrivateDevices[[:space:]]*=' "$UNIT"; then
+    bad "the unit sets PrivateDevices ($(grep -hE '^[[:space:]]*PrivateDevices[[:space:]]*=' "$UNIT" | head -1 | tr -d '\n')):"
+    echo "        if that parses truthy it hides /dev/input and the watcher exits 78 for ever"
+else
+    ok "the unit does not set PrivateDevices at all"
+fi
 grep -q '^RestartPreventExitStatus=78' "$UNIT" \
     && ok "the unit names exit 78 as non-retryable" \
     || bad "exit 78 is not in RestartPreventExitStatus, so a blind watcher flaps"
@@ -314,13 +331,34 @@ else
     # unloadable there; the properties under test are unrelated to it.
     grep -v '^User=' "$UNIT" > "$USERD/$NAME"
     systemctl --user daemon-reload
-    v="$(systemctl --user show -p RestartPreventExitStatus --value "$NAME" 2>/dev/null)"
-    case "$v" in
-        *78*) ok "RestartPreventExitStatus=78 is parsed and in force ($v)" ;;
-        *)    bad "systemd did not take RestartPreventExitStatus (read back: '$v')" ;;
-    esac
-    v="$(systemctl --user show -p StartLimitBurst --value "$NAME" 2>/dev/null)"
-    want "StartLimitBurst is in force (it is in [Unit], where systemd reads it)" 3 "$v"
+    # PRECONDITION for every read below. If $UNIT could not be read, the copy is an
+    # EMPTY file, which still loads as a valid unit carrying systemd's defaults --
+    # and PrivateDevices defaults to "no", so the read-back below would report the
+    # safe answer about a unit that is not ours. Measured 2026-08-30 with $UNIT at
+    # mode 000: that check passed while nothing of ours had been loaded. The other
+    # two reads happen to red in that case, but relying on that is a guard by
+    # adjacency; assert the precondition once, here.
+    ls="$(systemctl --user show -p LoadState --value "$NAME" 2>/dev/null)"
+    if [ "$ls" != "loaded" ] || [ ! -s "$USERD/$NAME" ]; then
+        bad "the rendered unit did not load (LoadState='$ls'); the property read-backs"
+        echo "        are SKIPPED rather than reported -- they would describe systemd's"
+        echo "        defaults, and 'PrivateDevices=no' is a default, so it would have"
+        echo "        printed PASS about a unit that is not ours"
+    else
+        ok "the rendered unit loaded, so the read-backs below describe OUR unit"
+        v="$(systemctl --user show -p RestartPreventExitStatus --value "$NAME" 2>/dev/null)"
+        case "$v" in
+            *78*) ok "RestartPreventExitStatus=78 is parsed and in force ($v)" ;;
+            *)    bad "systemd did not take RestartPreventExitStatus (read back: '$v')" ;;
+        esac
+        v="$(systemctl --user show -p StartLimitBurst --value "$NAME" 2>/dev/null)"
+        want "StartLimitBurst is in force (it is in [Unit], where systemd reads it)" 3 "$v"
+        # The grep above cannot see how systemd RESOLVED the setting; this can. Same
+        # reason as RestartPreventExitStatus, and the property that would silently
+        # kill the volume-chord escape hatch if it ever flipped.
+        v="$(systemctl --user show -p PrivateDevices --value "$NAME" 2>/dev/null)"
+        want "PrivateDevices is parsed as off, so /dev/input stays visible" no "$v"
+    fi
 
     # NEGATIVE CONTROL: an invalid value must NOT read back as in force. If it
     # does, the check above is measuring nothing and would pass on any unit.
