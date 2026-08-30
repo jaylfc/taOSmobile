@@ -126,7 +126,29 @@ conf "mode=remote" "url=http://a.example --disable-web-security"
 want "space in url refused -> helper"    "$HELPER_URL" "$(url_for)"
 
 echo "== the launched command line follows the resolved URL =="
-argv_for() { TAOS_SHELL_CONF="$CONF" "$LAUNCH" --print-argv 2>/dev/null; }
+# TAOS_SETUP_SENTINEL is pinned here for the same reason url_for pins it, and
+# leaving it out was an omission rather than a choice: the launcher consumes a
+# real pending escape out of the tester's own XDG_RUNTIME_DIR, so the first
+# --print-argv below resolved to the helper instead of the configured URL.
+# Measured 2026-08-30 with a sentinel present: three of these checks turned RED
+# for a reason that had nothing to do with the launcher. Wrong direction to
+# fail, but a test that reads the tester's environment is not measuring the
+# launcher.
+argv_for() { TAOS_SHELL_CONF="$CONF" TAOS_SETUP_SENTINEL="$SENTINEL" \
+             "$LAUNCH" --print-argv 2>/dev/null; }
+
+# A negative grep over a command line that was never printed PASSES. Measured
+# 2026-08-30 with --print-argv mutated to print nothing at all: both negative
+# checks below reported ok. One was saved only by its neighbouring control
+# reddening on the same empty output -- a guard by adjacency, which dies on the
+# next reorder or split -- and the https one had no guard of any kind, because
+# nothing else in this file reads that argv. So make the command line's
+# EXISTENCE a separate observation before concluding anything from its absence.
+argv_present() {  # argv_present <label> <argv>
+    case "$2" in *"--app="*) return 0 ;; esac
+    bad "$1: no --app= on the command line, so a negative check over it would be vacuously true"
+    return 1
+}
 conf "mode=remote" "url=http://box.local:6969/x?a=1"
 A="$(argv_for)"
 grep -qx -- "--app=http://box.local:6969/x?a=1" <<<"$A" \
@@ -141,9 +163,11 @@ grep -qx -- "--unsafely-treat-insecure-origin-as-secure=http://box.local:6969" <
 # because a remote config resolves to a remote host: measured, the argv for
 # mode=remote contains no loopback spelling at all.
 LOOPBACK_RE='localhost|127\.0\.0\.1|\[::1\]|(^|[^0-9])0\.0\.0\.0'
-grep -qE "$LOOPBACK_RE" <<<"$A" \
-    && bad "a loopback address is still in the command line: $(grep -E "$LOOPBACK_RE" <<<"$A")" \
-    || ok "no loopback address of any spelling left in the command line"
+if argv_present "no loopback address in the command line" "$A"; then
+    grep -qE "$LOOPBACK_RE" <<<"$A" \
+        && bad "a loopback address is still in the command line: $(grep -E "$LOOPBACK_RE" <<<"$A")" \
+        || ok "no loopback address of any spelling left in the command line"
+fi
 # CONTROL for the line above: local mode MUST put a loopback URL in the argv, so
 # if the matcher cannot find one here it cannot find one anywhere and the check
 # above is passing on a pattern that never matches.
@@ -151,11 +175,15 @@ conf "mode=local"
 grep -qE "$LOOPBACK_RE" <<<"$(argv_for)" \
     && ok "control: the loopback matcher does find one in local mode" \
     || bad "control: the loopback matcher finds nothing even in local mode -- it is inert"
-conf "mode=remote" "url=http://box.local:6969/x?a=1"
+# (A conf line here set box.local and was overwritten by the next line before
+# anything read it. Removed rather than left to read as setup for this check.)
 conf "mode=remote" "url=https://box.example/"
-grep -q -- "--unsafely-treat-insecure-origin-as-secure" <<<"$(argv_for)" \
-    && bad "https origin was given the insecure-origin flag" \
-    || ok "https origin gets no insecure-origin flag"
+HA="$(argv_for)"
+if argv_present "https origin gets no insecure-origin flag" "$HA"; then
+    grep -q -- "--unsafely-treat-insecure-origin-as-secure" <<<"$HA" \
+        && bad "https origin was given the insecure-origin flag" \
+        || ok "https origin gets no insecure-origin flag"
+fi
 
 echo "== readiness: refuse the display rather than show a dead page =="
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
@@ -191,16 +219,31 @@ DEAD_PORT="$(free_port)"
 preflight TAOS_SHELL_CONF="$CONF" TAOS_FIRSTRUN_PORT="$DEAD_PORT" TAOS_KIOSK_WAIT=2
 want "dead helper -> exit 3, not a launch" 3 "$?"
 
+# :6969 may genuinely be up on a workstation running taOS, so rc 0 and rc 3 can
+# both be right -- but "the controller happens to be up" and "the loopback gate
+# was REMOVED" are the same observation, and the arm that read rc 0 as the
+# former said so out loud. Measured 2026-08-30: with is_loopback_origin made
+# blind to the spelling "localhost" while 127.* stayed gated -- so the dead
+# helper check above, which resolves to 127.0.0.1, stayed green -- mode=local
+# became completely ungated and this file still reported 42 passed / 0 failed,
+# printing "local controller is up on this host" while :6969 was refusing
+# connections. That is the dead screen on a keyboard-less device this whole
+# section exists to prevent, passing as a green.
+#
+# Narrowing the arm cannot separate those two states because the observation is
+# identical in both. Take a SECOND one: ask :6969 directly, then require the
+# answer it implies. Loopback refuses instantly, so this cannot hang.
+if (exec 3<>/dev/tcp/127.0.0.1/6969) 2>/dev/null; then LOCAL_UP=yes; else LOCAL_UP=no; fi
 conf "mode=local"
 preflight TAOS_SHELL_CONF="$CONF" TAOS_KIOSK_WAIT=2
 rc=$?
-# :6969 may genuinely be up on a workstation running taOS; either answer is
-# correct, but nothing else is.
-case "$rc" in
-    3) ok "dead local controller -> exit 3, not a launch" ;;
-    0) ok "local controller is up on this host; readiness passed" ;;
-    124) bad "local mode preflight HUNG; readiness budget not enforced" ;;
-    *) bad "local mode preflight returned $rc (want 0 or 3)" ;;
+case "$rc:$LOCAL_UP" in
+    3:no)  ok "dead local controller -> exit 3, not a launch" ;;
+    0:yes) ok "live local controller -> readiness passed" ;;
+    0:no)  bad "local mode is NOT gated: :6969 refuses connections and preflight still returned 0" ;;
+    3:yes) bad "local mode returned 3 while :6969 is listening; the probe cannot see a live controller" ;;
+    124:*) bad "local mode preflight HUNG; readiness budget not enforced" ;;
+    *)     bad "local mode preflight returned $rc with :6969 listening=$LOCAL_UP (want 0 or 3)" ;;
 esac
 
 echo "== an unreachable REMOTE controller is NOT gated =="
@@ -293,10 +336,21 @@ want "unknown argument -> exit 64" 64 "$?"
 
 echo "== the unit actually calls the launcher and can fail over =="
 if [ -f "$UNIT" ]; then
+    # Nothing below may read a conclusion out of an EMPTY file: the negative
+    # grep would find nothing and report the unit clean.
+    [ -s "$UNIT" ] || give_up "the unit file is empty, so the checks below would measure nothing"
     grep -q "^ExecStart=/usr/local/lib/taos/taos-kiosk-launch.sh$" "$UNIT" \
         && ok "unit ExecStart calls the launcher" || bad "unit ExecStart does not call the launcher"
-    grep -q -- "--app=http://localhost:6969" "$UNIT" \
-        && bad "unit still hardcodes the :6969 app URL" || ok "unit no longer hardcodes the app URL"
+    # This matched the single literal "--app=http://localhost:6969" while its
+    # message claimed the unit no longer hardcodes the app URL AT ALL -- the
+    # identical stated-wider-than-real defect that was fixed for the command
+    # line at LOOPBACK_RE above and never swept down to here. Measured
+    # 2026-08-30: an ExecStartPre carrying --app=http://127.0.0.1:6969 passed
+    # this check and the file reported 42 passed / 0 failed. The unit is
+    # supposed to carry no --app= of any spelling, so assert that instead.
+    grep -q -- "--app=" "$UNIT" \
+        && bad "unit hardcodes an app URL: $(grep -- '--app=' "$UNIT")" \
+        || ok "unit no longer hardcodes the app URL"
     # Without this, Restart=on-failure parks the unit in auto-restart instead of
     # failed, and OnFailure= never hands the display back -- the exact "dead
     # screen on a keyboard-less device" this card exists to avoid.
