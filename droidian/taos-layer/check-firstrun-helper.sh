@@ -317,14 +317,41 @@ vcheck "non-url refused"        bad_url "$(verdict "not a url")"
 vcheck "javascript: refused"    bad_url "$(verdict "javascript:alert(1)")"
 vcheck "file: refused"          bad_url "$(verdict "file:///etc/passwd")"
 
-# The check must not become a read of the upstream. Nothing from the SPA's body
-# may appear in what comes back.
-raw="$(curl -s --max-time 15 -X POST -H "$J" -d "{\"url\":\"http://127.0.0.1:$SPA_PORT\"}" \
-      "http://127.0.0.1:$HELP_PORT/api/check")"
-case "$raw" in
-    *"not a controller"*|*doctype*|*"<title"*) bad "the check echoed the upstream body back: $raw" ;;
-    *) ok "no upstream body crosses back" ;;
-esac
+# The check must not become a read of the upstream. The reply is specified as a
+# FIXED projection -- a verdict, plus agents/backends when a controller
+# answered -- so assert THAT shape, which fails on any leak at all.
+#
+# The old form here was a three-marker blacklist (*"not a controller"*|*doctype*
+# |*"<title"*) against the SPA body, with the pass on the catch-all, and it was
+# one case away from the defect it names. Measured 2026-08-30: leaking the body
+# in probe_controller's WRONG-SHAPE branch -- which the wrongjson upstream
+# reaches and the SPA never does -- echoed {"hello":"world"} straight back and
+# this check still printed "no upstream body crosses back", suite 52/0 green.
+# Adding a fourth marker would have been the same defect with a longer list: a
+# blacklist fails only on the leaks someone thought of.
+reply_keys() {  # reply_keys <target-url> -> sorted, comma-joined top-level keys
+    curl -s --max-time 15 -X POST -H "$J" -d "{\"url\":\"$1\"}" \
+        "http://127.0.0.1:$HELP_PORT/api/check" \
+    | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("UNPARSEABLE"); raise SystemExit
+print(",".join(sorted(d)) if isinstance(d, dict) else "NOT_AN_OBJECT")'
+}
+# One line per branch of probe_controller that READS an upstream body. The
+# unreachable branch is absent on purpose: it raises before the read, so it has
+# no body to leak.
+vcheck "no upstream body crosses back (spa)" \
+    verdict "$(reply_keys "http://127.0.0.1:$SPA_PORT")"
+vcheck "no upstream body crosses back (wrongjson)" \
+    verdict "$(reply_keys "http://127.0.0.1:$WJ_PORT")"
+vcheck "no upstream body crosses back (401)" \
+    verdict "$(reply_keys "http://127.0.0.1:$A4_PORT")"
+# CONTROL. The three above are rejections, and a helper that answered every
+# check with a bare {"verdict":...} would satisfy all three while having lost
+# the projection entirely. This one asserts the keys are THERE, so the set is
+# pinned from both directions rather than only from above.
+vcheck "a controller's reply is the projection and nothing more" \
+    agents,backends,verdict "$(reply_keys "http://127.0.0.1:$CTL_PORT")"
 
 # A caller-supplied path must not survive into the request. The path comes from
 # CHECK_PATH; the caller supplies a host.
