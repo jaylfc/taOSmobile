@@ -274,9 +274,17 @@ case "$argv" in
     *"--app=$HELPER_URL"*) ok "the escape reaches the chromium command line" ;;
     *) bad "the escape did not reach --app= (got: $(printf '%s' "$argv" | tr '\n' ' '))" ;;
 esac
+# The ok arm requires a command line to actually be THERE. Measured 2026-08-30:
+# with the launcher mutated to print no argv at all, the old catch-all reported
+# "the overridden URL is gone from the command line" -- true, and vacuous. It
+# was saved only by the check above reddening on the same empty $argv, which is
+# a guard by adjacency: it evaporates the moment the two are reordered or split.
+# Each arm here fails on its own.
 case "$argv" in
     *gone.example*) bad "the overridden URL is still on the command line" ;;
-    *) ok "the overridden URL is gone from the command line" ;;
+    *"--app="*)     ok  "the overridden URL is gone from the command line" ;;
+    *)              bad "no --app= on the command line, so 'the override is gone' would"
+                    echo "        be vacuously true (got: $(printf '%s' "$argv" | tr '\n' ' '))" ;;
 esac
 
 echo "== a bad argument is rejected, and is not retryable =="

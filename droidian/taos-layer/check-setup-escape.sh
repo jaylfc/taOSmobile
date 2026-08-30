@@ -328,11 +328,25 @@ else
     sed 's/^RestartPreventExitStatus=78/RestartPreventExitStatus=notanumber/' \
         "$USERD/$NAME" > "$USERD/$BADNAME"
     systemctl --user daemon-reload
+    # PROVE THE MEASUREMENT HAPPENED BEFORE READING THE VALUE. systemd handles an
+    # invalid RestartPreventExitStatus by warning and leaving the property EMPTY
+    # -- which is byte-identical to what a unit that never loaded reads back.
+    # Measured 2026-08-30 against a unit name that does not exist:
+    #     LoadState=not-found  RestartPreventExitStatus=''  -> this arm said PASS
+    # so the negative control, whose whole job is to prove the check above is not
+    # vacuous, was itself vacuous. LoadState is the discriminator; the value on
+    # its own cannot be one.
+    ls="$(systemctl --user show -p LoadState --value "$BADNAME" 2>/dev/null)"
     v="$(systemctl --user show -p RestartPreventExitStatus --value "$BADNAME" 2>/dev/null)"
-    case "$v" in
-        *78*|*notanumber*) bad "control: an invalid value read back as in force ('$v')" ;;
-        *) ok "control: an invalid value does NOT read back as in force" ;;
-    esac
+    if [ "$ls" != "loaded" ]; then
+        bad "control: the control unit did not load (LoadState='$ls'), so its empty"
+        echo "        read-back proves nothing about whether systemd refused the value"
+    else
+        case "$v" in
+            *78*|*notanumber*) bad "control: an invalid value read back as in force ('$v')" ;;
+            *) ok "control: an invalid value does NOT read back as in force (unit loaded, value empty)" ;;
+        esac
+    fi
     rm -f "$USERD/$NAME" "$USERD/$BADNAME"
     systemctl --user daemon-reload
 fi
