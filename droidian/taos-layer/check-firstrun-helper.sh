@@ -184,6 +184,13 @@ else
     check "headerless loopback caller still allowed" 200 \
         "$(code -X POST -H "$J" -d '{"mode":"local"}' "$CFG")"
 
+    # SNAPSHOT. That was the last request here that is allowed to move the file;
+    # every request below is a refusal, so from this line on any change at all
+    # is the defect. Taken from the file rather than assumed, so it also pins
+    # what the allowed writes actually produced.
+    SNAP="$WORK/csrf.snapshot"
+    cp "$CSRF_CONF" "$SNAP" 2>/dev/null || : > "$SNAP"
+
     # The attack, verbatim.
     check "foreign Origin + text/plain refused"  403 \
         "$(code -X POST -H "$ALIEN" -H 'Content-Type: text/plain' -d '{"mode":"remote","url":"http://attacker.example:6969/"}' "$CFG")"
@@ -212,12 +219,32 @@ else
     check "form encoding refused even same-origin" 415 \
         "$(code -X POST -H "$SELF" -H "$SAME" -H 'Content-Type: application/x-www-form-urlencoded' -d 'mode=local' "$CFG")"
 
-    # The point of all of it: nothing above moved the config. Grepping for the
-    # attacker's host rather than for mode= catches a partial write too.
-    if grep -q 'attacker\.example' "$CSRF_CONF"; then
-        bad "a refused request WROTE the attacker's controller into shell.conf"
-    else
+    # THE INDEPENDENT ASSERTION. Every check above reads a status CODE; this one
+    # reads the FILE, and it is the only thing in this section that can catch a
+    # refusal which took effect anyway.
+    #
+    # It used to grep for the single literal "attacker.example", which is
+    # narrower than the "changed" it claims. Measured 2026-08-30: with the
+    # helper mutated to write the config BEFORE the admission gate and then
+    # return a perfectly correct 403 -- reject-after-write, the ordinary way
+    # this bug is really written -- every refused request put
+    # url=http://x.local:6969/ into shell.conf and this file reported 55 passed
+    # / 0 failed. Every status code was right, so nothing else could see it, and
+    # the check that says "no refused request changed shell.conf" said so while
+    # every refused request had changed it. A blacklist of one host fails only
+    # on the host someone thought of. `grep` on a MISSING file also returns
+    # non-zero and read the same way.
+    #
+    # Compare the whole file to the snapshot instead: any change is a red, and
+    # the two ways of having nothing to compare are named rather than passed.
+    if [ ! -s "$SNAP" ]; then
+        bad "the snapshot is empty, so 'nothing changed it' would compare nothing to nothing"
+    elif [ ! -f "$CSRF_CONF" ]; then
+        bad "shell.conf vanished during the refusals; a refusal removed it"
+    elif cmp -s "$SNAP" "$CSRF_CONF"; then
         ok "no refused request changed shell.conf"
+    else
+        bad "a refused request CHANGED shell.conf: $(diff "$SNAP" "$CSRF_CONF" | tr '\n' ' ')"
     fi
 fi
 kill "$H4" 2>/dev/null
