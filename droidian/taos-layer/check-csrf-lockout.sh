@@ -98,12 +98,38 @@ hdr "route reachability (guards against a vacuous pass)"
 routes_ok=1
 for path in /auth/pin-login /auth/login; do
     code=$(status POST "$path" --data '{}')
+    # The PASS arm is an explicit list, and the catch-all REFUSES. Only the
+    # controller itself answers a POST with an empty body this way -- it routed
+    # the request and then validated, authenticated or accepted it. 403 belongs
+    # here on purpose: it is #2081's own symptom, so it proves the route exists
+    # and section 2 below is what judges it.
+    #
+    # This arm used to be `*) ok "$path exists"`, which is the same vacuous pass
+    # b0cc558 fixed at the other end of this file. That commit normalised the
+    # code so the 000 sentinel reaches the arms; it left the catch-all wide, so
+    # the pass came straight back through any other code. Measured 2026-08-30
+    # against a stub answering 502 for both paths -- a reverse proxy that is up
+    # while the controller behind it is down, which is exactly how this device
+    # fails in production:
+    #     PASS  /auth/pin-login exists (POST with no cookie -> 502)
+    #     PASS  /auth/pin-login -> 502 with a stale cookie (not 403)
+    # Four green checks, two of them asserting the #2081 mitigation holds, with
+    # nothing behind the proxy to measure. An unknown code is not evidence.
     case "$code" in
         000) bad "$path unreachable -- is the controller up on :$PORT?"; routes_ok=0 ;;
         404) bad "$path returns 404. This check cannot measure #2081 against a route"
              cont "that does not exist; do not read the rest as a clean bill of health."
              routes_ok=0 ;;
-        *)   ok  "$path exists (POST with no cookie -> $code)" ;;
+        200|204|302|303|400|401|403|422)
+             ok  "$path exists (POST with no cookie -> $code)" ;;
+        5*)  bad "$path answered $code. A 5xx is what a proxy returns when the controller"
+             cont "behind it is DOWN, so it does not show the route exists. Refusing to"
+             cont "measure #2081 against it."
+             routes_ok=0 ;;
+        *)   bad "$path answered $code, which does not establish that the route exists"
+             cont "(405, say, means the path is not routed for POST). Refusing to measure"
+             cont "#2081 against it."
+             routes_ok=0 ;;
     esac
 done
 
