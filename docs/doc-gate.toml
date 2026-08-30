@@ -34,6 +34,21 @@ referenced_paths_scan = [
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
   "droidian/kernel-debian/README.md",
+  "droidian/artifacts/README.md",
+  "docs/superpowers/specs/2026-07-20-taosmobile-demo-design.md",
+]
+
+# Docs that exist in the repo and are DELIBERATELY not scanned by Layer A.
+# Every .md in the repo must be in this list or in referenced_paths_scan;
+# check_config_is_live enforces that, so forgetting a new doc is a failure
+# rather than a silent hole in the coverage.
+#
+# The demo plan is a dated planning artifact from 2026-07-20. It names 16 paths
+# under bridge/ and scripts/ for work that was never built -- aspirational by
+# design. Scanning it would demand we either create those files or rewrite the
+# historical record; neither is right, so it is declared out of scope here.
+unscanned_paths = [
+  "docs/superpowers/plans/2026-07-20-taosmobile-demo-plan.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and

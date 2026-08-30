@@ -325,6 +325,14 @@ What the script does, and why each part matters:
   can mount neither (6.x and 5.10+ respectively). e2fsprogs 1.47 does not enable them by
   default, so this is belt-and-braces against a toolchain bump silently producing a
   filesystem the phone refuses to mount.
+- **Refuses to `e2fsck` while the image is mounted anywhere.** A desktop automounter
+  grabs the freshly created loop device and mounts the image somewhere of its own
+  choosing, and an `e2fsck` then rewrites a live filesystem underneath itself. That
+  happened once (`d1389b1`). The mount bookkeeping now lives in
+  `scripts/image-mount-lib.sh` and the build calls `require_released`, which is a **hard
+  stop**: if the image is still mounted the script exits 1 rather than carrying on. It
+  used to print a warning and continue, so a corrupting run still ended in `BUILD-OK`.
+  The check that proves the stop fires is `scripts/check-image-release.sh`.
 - **Builds a 40G filesystem into a 226GiB partition** (`partition-size:userdata` is
   `0x388D5D3000` = 226.21 GiB). That is deliberate: it keeps the write small and fast.
   `/data` must be grown to fill the partition after first boot — carded, do not forget it.

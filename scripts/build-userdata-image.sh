@@ -46,40 +46,39 @@ mkfs.ext4 -F -L data -m 0 \
   -E lazy_itable_init=1,lazy_journal_init=1 \
   "$W/userdata.img"
 
-# Release every mount and loop device backed by this image. A desktop automounter
-# will grab a freshly created loop device and mount it somewhere of its own choosing
-# (seen at /tmp/loop0), so unmounting only OUR mountpoint is not enough -- the image
-# stays mounted elsewhere and the e2fsck below then runs against a live filesystem and
-# corrupts it. That happened once; do not let it happen again.
-# Unmount by MOUNTPOINT, never by device name: util-linux resolves a loop mount back
-# to its backing file, so the mount table reads "userdata.img on /tmp/loop0" and a
-# match on the /dev/loopN name never fires -- leaving the image mounted while the
-# detach fails silently. Ask findmnt for the target instead.
-release_image() {
-  local img="$1" dev mp
-  for src in "$img" $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
-    while mp=$(findmnt -n -o TARGET --source "$src" 2>/dev/null | head -1); [ -n "$mp" ]; do
-      sudo umount "$mp" || break
-    done
-  done
-  for dev in $(losetup -j "$img" -O NAME --noheadings 2>/dev/null); do
-    sudo losetup -d "$dev" 2>/dev/null || true
-  done
-  sync
-  if findmnt -n --source "$img" >/dev/null 2>&1; then
-    echo "WARNING: $img is STILL mounted -- do not trust any fsck run after this" >&2
-  fi
+# Mount bookkeeping lives in image-mount-lib.sh so it can be exercised against a
+# real loop mount by check-image-release.sh. It was inline here, unreachable by
+# any check, and its post-condition queried the backing file -- which never
+# matches a loop mount -- so it could not fire. See that file for the
+# measurement and scripts/check-image-release.sh for the proof it fires now.
+# shellcheck source=scripts/image-mount-lib.sh
+. "$(dirname "$0")/image-mount-lib.sh"
+
+# Refuse to continue while the image is mounted anywhere. This is a HARD STOP,
+# not a warning. The warning it replaces was advisory: the script carried on to
+# e2fsck the live filesystem and printed BUILD-OK underneath it, so the one log
+# line saying not to trust the result was followed by a line saying the build
+# was fine. An fsck against a live filesystem is the failure this whole function
+# exists to prevent; it does not get a soft landing.
+require_released() {
+    local img="$1" held
+    release_image "$img" && return 0
+    held="$(image_mounts "$img" | tr '\n' ' ')"
+    echo "FATAL: $img is still mounted at: $held" >&2
+    echo "Refusing to fsck a live filesystem. An automounter has most likely" >&2
+    echo "grabbed the loop device; unmount it and re-run." >&2
+    exit 1
 }
 
 log "populate it exactly as the porter procedure leaves /data"
-release_image "$W/userdata.img"
+require_released "$W/userdata.img"
 mkdir -p "$W/mnt"
 sudo mount -o loop "$W/userdata.img" "$W/mnt"
 sudo cp --sparse=always "$W/rootfs32.img" "$W/mnt/rootfs.img"
 sudo ln -s /halium-system/var/lib/lxc/android/android-rootfs.img "$W/mnt/android-rootfs.img"
 sudo ls -la "$W/mnt"
 sudo umount "$W/mnt"
-release_image "$W/userdata.img"
+require_released "$W/userdata.img"
 
 log "verify (must end with a pass that modifies nothing)"
 sudo e2fsck -fy "$W/userdata.img" || true

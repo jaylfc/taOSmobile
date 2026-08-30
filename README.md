@@ -58,7 +58,10 @@ bash scripts/install-git-hooks.sh                     # wire it to pre-commit
   Config that names a tree, a doc or a rule target this repo does not have is
   an error, not coverage: the token regex would match nothing and Layer A would
   be green forever. A gate that cannot fail is worse than no gate, because it
-  gets reported as protection.
+  gets reported as protection. It also asserts the reverse direction: every
+  `.md` in the repo must be named in `referenced_paths_scan` or declared in
+  `unscanned_paths`, because Layer A's coverage is a hand-maintained list and
+  without this it shrank silently every time someone added a doc and forgot.
 - **Layer A (invariants)** — every `scripts/`, `docs/`, `droidian/`, `kiosk/`
   or `bridge/` path named in the doc set must exist on disk. This is what
   catches a procedure doc still pointing at a renamed script.

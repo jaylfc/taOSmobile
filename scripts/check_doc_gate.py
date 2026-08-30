@@ -128,6 +128,9 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
       are skipped by design (a gitignored local-only doc is legitimate), but a
       typo is indistinguishable from that and silently shrinks coverage, so
       anything skipped must be declared in `optional_scan_paths`.
+    - a doc in the repo that is in NEITHER `referenced_paths_scan` nor
+      `unscanned_paths`. Layer A's coverage is a hand-maintained list; without
+      this it silently shrinks every time someone adds a doc and forgets.
     - a rule whose `when_changed` globs are all rooted in a nonexistent tree, or
       whose `require_doc` names a file that does not exist. Either way the rule
       can never fire or can never be satisfied.
@@ -155,6 +158,28 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
                 f"config: referenced_paths_scan names '{rel}', which does not exist -- it "
                 f"would be skipped silently; fix the path or declare it in optional_scan_paths"
             )
+
+    # The OTHER direction. Everything above asks whether a LISTED path exists.
+    # Nothing asked whether an EXISTING doc is listed, so a doc added to the repo
+    # and not added to referenced_paths_scan was never scanned by Layer A and
+    # nothing said so -- the coverage was a hand-maintained list wearing the name
+    # of an invariant. Measured on 2026-08-30 (tsk-rej3yq): 14 docs in the repo,
+    # 11 in the list, 3 silently outside it. Require every doc to be either
+    # scanned or DECLARED unscanned, so the decision is recorded rather than
+    # defaulted by forgetting.
+    declared_unscanned = invariants.get("unscanned_paths", [])
+    scanned = set(files_to_scan)
+    for doc in sorted(repo_root.rglob("*.md")):
+        if any(part == ".git" for part in doc.parts):
+            continue
+        rel = doc.relative_to(repo_root).as_posix()
+        if rel in scanned or _match_any(rel, declared_unscanned):
+            continue
+        failures.append(
+            f"config: '{rel}' is in the repo but in neither referenced_paths_scan nor "
+            f"unscanned_paths -- Layer A does not look at it and would not say so; add "
+            f"it to one of them"
+        )
 
     for rule in config.get("rules", []):
         name = rule.get("name", "?")
