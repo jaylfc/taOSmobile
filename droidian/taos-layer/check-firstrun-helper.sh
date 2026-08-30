@@ -369,10 +369,19 @@ for pid in $CTL_PIDS; do kill "$pid" 2>/dev/null; done
 echo "== bind is loopback only =="
 # Ask the kernel, not the source. A helper that bound 0.0.0.0 would pass every
 # check above and still be exposed to the LAN.
-if python3 - "$HELP_PORT" <<'PYEOF'
+#
+# The probe returns 0 = refused (good), 1 = reachable (bad), 2 = this host has
+# no non-loopback address to test from. It used to be inline with no control,
+# which made it the tsk-n26qlg shape: OSError is the PASS branch, and a dropped
+# SYN -- a local firewall, a slow route -- is an OSError, so on such a host it
+# passed regardless of what the helper actually bound. Nothing anywhere showed
+# it could see a listener it was SUPPOSED to see. So bind one deliberately and
+# make it prove that first.
+offloopback_probe() {
+    python3 - "$1" <<'PROBEEOF'
 import socket, sys
 port = int(sys.argv[1])
-# Find a non-loopback address of this host and try to reach the helper on it.
+# Find a non-loopback address of this host and try to reach the port on it.
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 try:
     s.connect(("192.0.2.1", 9)); addr = s.getsockname()[0]
@@ -384,13 +393,44 @@ if addr is None or addr.startswith("127."):
     sys.exit(2)          # no external address to test from; cannot measure
 t = socket.socket(); t.settimeout(2)
 try:
-    t.connect((addr, port)); sys.exit(1)   # reachable off-loopback: BAD
+    t.connect((addr, port)); sys.exit(1)   # reachable off-loopback
 except OSError:
-    sys.exit(0)                            # refused: good
+    sys.exit(0)                            # refused
 finally:
     t.close()
-PYEOF
-then ok "not reachable on a non-loopback address"
+PROBEEOF
+}
+
+# POSITIVE CONTROL. Bind 0.0.0.0 on a free port and require the probe to SEE it.
+# If it cannot, the probe cannot detect exposure at all and the verdict below is
+# worth nothing, so withhold the verdict rather than issue a green from a dead
+# instrument.
+CTRL_PORT=$(python3 -c "
+import socket
+s = socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[1]); s.close()")
+python3 - "$CTRL_PORT" >"$WORK/ctrl-bind.log" 2>&1 <<'CTRLEOF' &
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", int(sys.argv[1]))); s.listen(8)
+time.sleep(20)
+CTRLEOF
+CTRL_PID=$!
+sleep 1
+offloopback_probe "$CTRL_PORT"; ctrl_rc=$?
+kill "$CTRL_PID" 2>/dev/null
+CTRL_DEAD=0
+case "$ctrl_rc" in
+    1) ok "control: the probe SEES a socket deliberately bound to 0.0.0.0" ;;
+    2) echo "  SKIP  no non-loopback address on this host; the probe cannot measure here" ;;
+    *) bad "control: the probe cannot see a socket bound to 0.0.0.0 -- it would report"
+       bad "  any helper as loopback-only, so no bind verdict is issued from it"
+       CTRL_DEAD=1 ;;
+esac
+
+if [ "$CTRL_DEAD" = "1" ]; then
+    echo "  SKIP  bind verdict withheld: the probe failed its own control"
+elif offloopback_probe "$HELP_PORT"; then
+    ok "not reachable on a non-loopback address"
 else
     rc=$?
     [ "$rc" = "2" ] && echo "  SKIP  no non-loopback address on this host" || bad "helper is reachable off-loopback"

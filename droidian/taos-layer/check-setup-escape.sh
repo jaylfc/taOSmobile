@@ -274,9 +274,22 @@ want "the launcher honours it" "http://127.0.0.1:6970/" "$got"
 # and the next start of the kiosk -- including one forced with the power button
 # -- still has to land on setup. The unit named above does not exist, so the
 # systemctl call above genuinely failed.
-grep -q "restart of taos-no-such-unit-control.service failed\|setup requested" "$WORK/fire.log" \
+# The `\|setup requested` alternative that used to be here made this check
+# UNFAILABLE. request_setup() logs the sentinel line unconditionally at
+# taos-setup-escape.py:273, before the restart is even attempted, and the check
+# two lines above has already asserted the sentinel was written -- so the second
+# alternative matched on every run and the first was dead. It passed while the
+# failure it is named for was genuinely being swallowed: subprocess.run uses
+# check=False, systemctl EXITS NONZERO for a missing unit rather than raising,
+# and only OSError/TimeoutExpired were caught. Match the failure line alone.
+grep -q "restart of taos-no-such-unit-control.service failed" "$WORK/fire.log" \
     && ok "a failed restart is logged, not swallowed" \
     || bad "nothing was logged about the restart attempt"
+# Negative control for the line above: the sentinel line must NOT be sufficient.
+# If this ever stops being true the check has gone vacuous again.
+grep -q "setup requested" "$WORK/fire.log" \
+    && ok "control: the sentinel line is present, so the check above is not passing on its absence" \
+    || bad "control: no sentinel line at all -- the fixture did not run"
 
 echo "== the unit's settings are actually in force =="
 # systemd-analyze verify is BLIND to RestartPreventExitStatus -- it accepts

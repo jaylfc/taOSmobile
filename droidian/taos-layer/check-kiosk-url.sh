@@ -134,9 +134,24 @@ grep -qx -- "--app=http://box.local:6969/x?a=1" <<<"$A" \
 grep -qx -- "--unsafely-treat-insecure-origin-as-secure=http://box.local:6969" <<<"$A" \
     && ok "insecure-origin flag names the ORIGIN, not the URL" \
     || bad "insecure-origin flag wrong: $(grep -- '--unsafely' <<<"$A")"
-grep -q "localhost:6969" <<<"$A" \
-    && bad "the old hardcoded :6969 is still in the command line" \
-    || ok "no hardcoded :6969 left in the command line"
+# This used to match the single literal "localhost:6969" while its message
+# claimed no hardcoded :6969 was left ANYWHERE -- so a regression spelled
+# 127.0.0.1:6969 or [::1]:6969 passed it while reading as covered. Match every
+# loopback spelling instead. It cannot false-positive on the configured URL,
+# because a remote config resolves to a remote host: measured, the argv for
+# mode=remote contains no loopback spelling at all.
+LOOPBACK_RE='localhost|127\.0\.0\.1|\[::1\]|(^|[^0-9])0\.0\.0\.0'
+grep -qE "$LOOPBACK_RE" <<<"$A" \
+    && bad "a loopback address is still in the command line: $(grep -E "$LOOPBACK_RE" <<<"$A")" \
+    || ok "no loopback address of any spelling left in the command line"
+# CONTROL for the line above: local mode MUST put a loopback URL in the argv, so
+# if the matcher cannot find one here it cannot find one anywhere and the check
+# above is passing on a pattern that never matches.
+conf "mode=local"
+grep -qE "$LOOPBACK_RE" <<<"$(argv_for)" \
+    && ok "control: the loopback matcher does find one in local mode" \
+    || bad "control: the loopback matcher finds nothing even in local mode -- it is inert"
+conf "mode=remote" "url=http://box.local:6969/x?a=1"
 conf "mode=remote" "url=https://box.example/"
 grep -q -- "--unsafely-treat-insecure-origin-as-secure" <<<"$(argv_for)" \
     && bad "https origin was given the insecure-origin flag" \

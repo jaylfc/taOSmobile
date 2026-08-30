@@ -272,11 +272,20 @@ def request_setup() -> None:
         return
     log(f"setup requested; sentinel at {path}, restarting {KIOSK_UNIT}")
     try:
-        subprocess.run(
+        # check=False and stderr to DEVNULL together mean the RETURN CODE is the
+        # only evidence this call leaves. systemctl does not raise for a unit
+        # that does not exist, a masked unit or a failed start -- it exits
+        # nonzero and says why on a stderr nobody reads. Leaving the code
+        # unread made the failure invisible while check-setup-escape.sh still
+        # reported "a failed restart is logged, not swallowed", because that
+        # check was matching the unconditional sentinel line below instead.
+        cp = subprocess.run(
             ["systemctl", "restart", KIOSK_UNIT],
             check=False, timeout=60,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        if cp.returncode != 0:
+            log(f"restart of {KIOSK_UNIT} failed: exit {cp.returncode}")
     except (OSError, subprocess.TimeoutExpired) as exc:
         # Say so and carry on. The sentinel is already written, so the next
         # start of the kiosk -- including one the user forces by holding power

@@ -239,7 +239,15 @@ Two more things that came out of the same measurement, both worth keeping:
   treating a failed check as a wall. A controller that is merely switched off is
   a legitimate thing to configure.
 
-`check-firstrun-helper.sh` runs 51 checks and, importantly, **runs its positive
+The **bind-is-loopback-only** probe now proves itself before it is believed. It
+reports "not reachable" from an `OSError`, and a dropped SYN — a local firewall,
+a slow route — is an `OSError`, so on such a host it passed regardless of what
+the helper actually bound, with nothing anywhere showing it could see a listener
+it was *supposed* to see. A socket is now bound to `0.0.0.0` deliberately and
+the same probe must find it; if it cannot, the bind verdict is withheld rather
+than issued green from a dead instrument.
+
+`check-firstrun-helper.sh` runs 52 checks and, importantly, **runs its positive
 control first**: it proves forwarding actually reaches upstream before testing
 any refusal, because a dead process refuses path traversal perfectly. If the
 control fails the script exits `2` INCOMPLETE rather than reporting a pass. The
@@ -332,7 +340,21 @@ a JSON key that does not exist). So at start it asks the kernel, via
 `RestartPreventExitStatus`, so that refusal reaches `failed` and stays visible
 while a transient crash is still retried.
 
-`check-setup-escape.sh` runs 31 checks. Two things in it are worth copying
+**A failed restart is logged rather than swallowed — and the check that says so
+used to be unfailable.** `request_setup()` writes the sentinel, then asks
+systemd to restart the kiosk. `subprocess.run` was called with `check=False` and
+only `OSError`/`TimeoutExpired` were caught, but systemctl does not raise for a
+unit that is missing, masked or failing to start: it **exits non-zero** and
+explains itself on a stderr going to `DEVNULL`. The return code was never read,
+so the failure left no trace at all. The check meant to catch that matched
+`"…failed\|setup requested"`, and the second alternative is the unconditional
+sentinel line logged one statement earlier — so it matched on every run in which
+the sentinel was written, which the preceding check already asserts. It passed
+while the failure it is named for was being swallowed. The return code is read
+now, and the check matches the failure line alone with the sentinel line kept
+beside it as a control (`tsk-rej3yq`).
+
+`check-setup-escape.sh` runs 32 checks. Two things in it are worth copying
 rather than just reading:
 
 - **The timing is driven on a synthetic clock, not by sleeping.** A five-second
@@ -413,7 +435,14 @@ puts in the UI. Only loopback targets are gated.
 grammar rejects commas: that flag takes a *comma-separated list*, so a comma in
 `shell.conf` would grant a secure context to an origin nobody chose.
 
-`check-kiosk-url.sh` runs 32 checks off-device against constructed `shell.conf`
+**No loopback address of any spelling reaches the command line in remote mode.**
+The check for this matched the single literal `localhost:6969` while its message
+claimed no hardcoded `:6969` was left anywhere, so a regression spelled
+`127.0.0.1:6969` would have passed it while reading as covered. It now matches
+every loopback spelling, and local mode — where a loopback URL *is* expected —
+serves as the control proving the matcher is not inert.
+
+`check-kiosk-url.sh` runs 42 checks off-device against constructed `shell.conf`
 files. Its positive control is **different from the helper's**, because the trap
 here is different: most expected answers are the helper URL, so a launcher that
 ignored `shell.conf` entirely and always printed the helper would pass most of
