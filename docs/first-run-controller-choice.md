@@ -141,6 +141,19 @@ the preflight headers present, because a bare `OPTIONS` proves nothing — CORS
 middleware only answers when `Origin` and `Access-Control-Request-Method` are
 there, so the first bare probe was not evidence.)
 
+> **Which of those two observations actually carries the finding — re-measured
+> 2026-08-31 with the negative control this card's own method note demands.**
+> Both still hold, but they are not equal evidence. `OPTIONS` on a path that
+> *cannot* exist (`/api/definitely-not-a-real-endpoint-9f3a`) returns the **same
+> 404 with no ACAO**, so the preflight line alone cannot separate "no CORS
+> middleware" from "this path does not answer `OPTIONS` at all" — two states,
+> one observation, exactly the trap the note warns about, and the note did not
+> get applied to its own headline probe. The **401** is what discriminates:
+> that path is proven to exist, because the nonexistent one answers 404 and it
+> answers 401, and it still carries no `Access-Control-Allow-Origin`. The apex
+> `GET /` returns 200 from `uvicorn`, so a 404 here is a real answer from a live
+> host rather than a dead name. Quote the 401 when this finding is cited.
+
 **Consequence: the kiosk page cannot `fetch()` taos.my.** Our first-run UI is
 served from the phone, not from taos.my, so every one of these calls is
 cross-origin and the browser will block it. "Render our own form and POST it"
