@@ -22,6 +22,7 @@ Droidian phone. Authored ahead of the flash so it is ready to drop in.
 | `check-firstrun-helper.sh` | Acceptance test: prove the helper is not a proxy |
 | `taos-kiosk-launch.sh` | Resolves the kiosk URL from `shell.conf`, then becomes the kiosk |
 | `check-kiosk-url.sh` | Acceptance test: prove the kiosk never opens a dead page |
+| `selftest-kiosk-url-mutants.py` | Breaks the launcher and the unit eighteen ways and requires the check that names each defect to go red |
 | `taos-setup-escape.service` | Watches the volume keys for the way back to setup |
 | `taos-setup-escape.py` | The watcher itself; installed to `/usr/local/lib/taos/` |
 | `check-setup-escape.sh` | Acceptance test: prove the escape fires, and only on purpose |
@@ -479,11 +480,39 @@ here is different: most expected answers are the helper URL, so a launcher that
 ignored `shell.conf` entirely and always printed the helper would pass most of
 the file. The control therefore proves the launcher *discriminates* — a good
 remote config yields the configured URL and a local config yields the controller
-— and exits `2` INCOMPLETE if it does not. Proven red against eight deliberately
-broken builds: config ignored (caught as INCOMPLETE, not FAIL), fallbacks
-pointed at `:6969`, launching anyway on a dead target, the origin flag hardcoded
-back, `RestartPreventExitStatus` deleted, a loosened URL grammar, remote targets
-gated, and the unit's `ExecStart` reverted.
+— and exits `2` INCOMPLETE if it does not.
+
+That "proven red" claim used to be a sentence describing eight broken builds
+made by hand, which is exactly the decay this repo keeps being bitten by: a
+proof nobody can re-execute becomes a sentence, and a sentence reads as
+satisfied. It is now a committed harness:
+
+```
+./selftest-kiosk-url-mutants.py       # eighteen defects; each must be caught
+```
+
+It plants one defect at a time in `taos-kiosk-launch.sh` **or**
+`taos-kiosk.service` — half this card's deliverable is the unit, and a suite
+that only read the script would not notice the unit reverting — and requires the
+check that *names* that defect to fail. Two things it does that are not obvious:
+
+- **A catch by control counts, and is not the same as "not measured".** A
+  launcher that ignores `shell.conf` produces no FAIL line at all; it trips
+  positive control 1 and the suite exits `2`, correctly declining to certify
+  forty fallback checks that would every one have passed on a constant. So a
+  control catch is matched on the *text* of the INCOMPLETE line, never on the
+  exit code — `2` also means "python3 is missing".
+- **An inert edit must stay green.** Eighteen catches are only attributable to
+  eighteen defects if the suite does not simply redden whenever the launcher is
+  rewritten, restaged, or its mtime moves — all three of which happen to every
+  mutant. A negative control changes a comment and requires green first.
+
+One mutant, the gate going blind to a single loopback spelling, is reported
+NOT MEASURED rather than caught on any host where `127.0.0.1:6969` is up: the
+check that catches it distinguishes "the gate was removed" from "the controller
+is genuinely running" by asking `:6969` directly, and where it answers, the two
+states look identical. A pass arm that can mean "unmeasured" is the defect, not
+the reporting of it.
 
 Every readiness call in the checker runs under an **outer** `timeout`, and the
 probe bounds each connect attempt. A bare `/dev/tcp` connect to an address that
