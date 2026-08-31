@@ -97,6 +97,13 @@ Then: flash the Droidian **GSI rootfs** (`droidian-images` publishes
      stale at boot, the guard covers a session that lapses while the kiosk is
      running, and neither covers the other's case. Rationale and the acceptance
      test (`check-csrf-lockout.sh`) are in `droidian/taos-layer/README.md`.
+     That test is itself re-provable off-device: `selftest-csrf-lockout.sh`
+     re-runs it in ten named states against `csrf-stub-controller.py` and
+     asserts each verdict and exit code, and `selftest-csrf-lockout-mutants.py`
+     breaks it nine ways and requires each state to catch the defect it names.
+     The five states this replaces were recorded in a comment and could not be
+     re-run, which is how `b0cc558` and `d4a1935` each shipped a suite that read
+     green against nothing at all.
    - Acceptance is **not** "the controller answers on `:6969`". taOS#2080 makes
      a broken install serve 200s with no SPA mounted (`app.py:1702` guards the
      static mount with `if static_dir.exists()`), so the check has to be that

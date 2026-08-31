@@ -14,6 +14,9 @@ Droidian phone. Authored ahead of the flash so it is ready to drop in.
 | `taos-kiosk-csrf-guard.service` | Watches for a taOS#2081 lockout and restarts the kiosk |
 | `kiosk-csrf-guard.sh` | The guard itself; installed to `/usr/local/lib/taos/` |
 | `check-csrf-lockout.sh` | Acceptance test: prove the device cannot lock itself out |
+| `selftest-csrf-lockout.sh` | Off-device harness: re-runs `check-csrf-lockout.sh` in ten named states and asserts each verdict and exit code |
+| `csrf-stub-controller.py` | The stub controller those states run against; no taOS, no root |
+| `selftest-csrf-lockout-mutants.py` | Breaks the acceptance test nine ways and requires the harness to catch each |
 | `taos-firstrun.service` | The first-run helper, loopback only |
 | `taos-firstrun.py` | The helper itself; installed to `/usr/local/lib/taos/` |
 | `check-firstrun-helper.sh` | Acceptance test: prove the helper is not a proxy |
@@ -74,6 +77,34 @@ Upstream fixed the root cause in taOS PR #2543 — `verify_csrf` now exempts
 credential-establishing routes *by path* rather than by the accident of having
 no cookie, and `pin-panel.js` reads `detail` as well as `error`. We ship the
 mitigation anyway: the device must not depend on an upstream release landing.
+
+**And the acceptance test has its own acceptance test.** `check-csrf-lockout.sh`
+was called done on the strength of five states it had been red-proven in — and
+the stub that produced them was thrown away, so not one could be re-run. Two
+later commits then each found a state nobody could re-run that had gone
+silently wrong: `b0cc558` (an absent controller printed `000000`, matched no
+arm, and four checks read green against nothing) and `d4a1935` (a 5xx from a
+proxy read as "the route exists"). A proof that cannot be re-executed decays
+into a sentence, and a sentence that reads as satisfied is this repo's
+recurring failure. So the stub is committed:
+
+```
+./selftest-csrf-lockout.sh            # ten states, verdict AND exit code
+./selftest-csrf-lockout-mutants.py    # nine defects; each must be caught
+```
+
+Both run on a workstation — no phone, no taOS, no root. The HTTP side is
+`csrf-stub-controller.py`; the systemd side is two throwaway **user** units and
+a `systemctl` shim that re-points the suite at the user manager, so real systemd
+still decides what `is-active` and `list-unit-files` return rather than this
+harness guessing. Before each state runs, the harness probes the fixture itself
+and reports `INCOMPLETE` rather than a verdict if it is not in the state that
+run claims: a mutant that did not apply prints an ordinary green.
+
+The mutant script is not decoration. Its first run found that no state reached
+section 1's `*)` catch-all — every mode landed on an explicit arm — so the
+pre-`d4a1935` `*) ok "$path exists"` could have been restored with all nine
+states still green. That is what the 405 state is for.
 
 **The guard fails rather than watching nothing.** Its only input is uvicorn's
 access log on the controller's journal. If access logging is off, or the unit
@@ -476,7 +507,9 @@ instrument that stopped reporting.
 2. Run `TAOS_PIN=… ./check-csrf-lockout.sh` and get a `PASS`. `INCOMPLETE`
    (exit 2) means a check did not run, which is not the same as a clean device;
    exit **3** is the check disqualifying *itself* and says nothing about the
-   phone — fix the check, then re-run.
+   phone — fix the check, then re-run. If you have changed that suite, run
+   `./selftest-csrf-lockout.sh` on the workstation first: a green suite whose
+   own states no longer reproduce is not evidence about the device.
 3. Confirm what the kiosk would open: `./taos-kiosk-launch.sh --print-url`. On an
    unconfigured device this is the first-run helper, and
    `systemctl is-active taos-firstrun.service` must say `active` — otherwise the
