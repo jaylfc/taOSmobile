@@ -39,6 +39,8 @@ bridge/     Rust hardware bridge (SMS/dial/battery over D-Bus) — scaffold
 kiosk/      Kiosk surface: launchers, systemd units, Plymouth theme, polyfills
 droidian/   Droidian port: kernel packaging (debian/, config fragments, CI)
 scripts/    Device introspection and deployment helpers
+            check-device-presence.sh -- is the phone on USB, and in what state?
+            Run it on the Linux USB host; exits 0/2/3/4/5, never guesses.
 docs/       Specs, scopes, and the record of what was tried
 ```
 

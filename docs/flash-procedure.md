@@ -184,6 +184,58 @@ that the device was dead. A Droidian that booted perfectly would look identical 
 Use a **Linux** USB host for any RNDIS or SSH-over-USB diagnosis. macOS is fine for
 `fastboot` and `adb` and nothing else.
 
+### Ask `scripts/check-device-presence.sh` — do not reassemble the check by hand
+
+Run it **on the Linux USB host** (the Pi) after any reboot or flash. It is one name that
+replaces a pipeline that was being rewritten from memory every session, and it exits on a
+code a caller can branch on:
+
+```
+scripts/check-device-presence.sh
+#  0 PRESENT      -- verdict line says BOOTED, FASTBOOT or ADB
+#  2 INCOMPLETE   -- an instrument was missing; NOT a statement about the device
+#  3 ABSENT       -- everything that matters ran, and all of it says no
+#  4 DISAGREEMENT -- the signals conflict; believe none of them yet
+#  5 EDL          -- 05c6:9008, emergency download mode. Stop.
+```
+
+**Why it exists — `tsk-wtc2zn`.** A freshness pass checked presence with
+`ip -o link | grep -ci "usb\|rndis"` and got **3**. All three were false: `ptusb0` (the
+Pi's own USB gadget) and the Incus bridges `incusbr0` / `incusbr-999`, every one
+NO-CARRIER and state DOWN. An RNDIS link up on this host is the strongest evidence there
+is that the phone has **booted Droidian**, so that 3 would have reported a successful
+flash against an absent device. It was caught only because it disagreed with
+fastboot=0 / adb=0 / lsusb=0.
+
+So the script matches interface names **exactly** (`usb0`, `usb1`, `rndis0`, `rndis1`),
+requires a **carrier**, and requires `ping 172.16.42.1` to **answer** before it will say
+the phone is present — the link is the medium, not the device. It keeps fastboot, adb and
+lsusb as cross-checks and reports **disagreement** loudly instead of picking a winner:
+`lsusb` seeing a device that `fastboot` cannot is the udev-permissions case, and it must
+never read as "the phone is not plugged in".
+
+A missing instrument yields **INCOMPLETE, never ABSENT**. Reporting an absent phone
+because `fastboot` is not installed is the same defect one level up.
+
+Two things it deliberately does not do. It does not run `fastboot` under `sudo` — that
+would make it unrunnable non-interactively, and the permissions case surfaces as a
+disagreement anyway. And its `lsusb` id list (`18d1:`, `2d95:`) is **unverified against
+the real device**, so no ABSENT verdict rests on it; confirm those ids the first time
+spacewar appears on the bus.
+
+Proven off-device, with no phone and no sudo:
+
+```
+scripts/selftest-device-presence.sh          # 30 states, verdict AND exit code
+scripts/selftest-device-presence-mutants.py  # 12 defects, each must turn a state red
+```
+
+The harness seals `PATH` to a directory of stubs, so it can reach the states hardware
+cannot be made to produce on demand — including the PRESENT case, the EDL case and every
+disagreement. Its absent fixture is the **real** `ip -o link` from the Pi, and it asserts
+that the original `grep -ci "usb\|rndis"` still returns 3 against that fixture, so the
+regression is provably still being tested rather than quietly drifting honest.
+
 Also note, from the same session:
 
 - Our built `recovery.img` is **not a recovery image**. `fastboot boot recovery.img` runs
