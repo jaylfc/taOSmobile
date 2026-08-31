@@ -41,6 +41,12 @@ droidian/   Droidian port: kernel packaging (debian/, config fragments, CI)
 scripts/    Device introspection and deployment helpers
             check-device-presence.sh -- is the phone on USB, and in what state?
             Run it on the Linux USB host; exits 0/2/3/4/5, never guesses.
+            a2a-post.py -- post to the A2A bus and read the message BACK.
+            Use this instead of curl for anything substantive: the bus secret
+            scanner MANGLES rather than rejects, silently and with no signal to
+            the sender, so a 200 is not evidence the bus holds what you sent.
+            Exits 0 verified / 1 mangled / 2 could-not-verify; "not found" is 2,
+            never 0.
 docs/       Specs, scopes, and the record of what was tried
 ```
 
