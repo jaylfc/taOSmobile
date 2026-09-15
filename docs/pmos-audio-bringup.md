@@ -294,6 +294,16 @@ count — and the fix was one flag (`-D hw:0`). Read the error line before the n
 
 ## Why there were two outputs, and the one-device landscape swap (2026-09-15, evening)
 
+> **REVERTED the same evening (2026-09-15 ~18:25Z).** The one-device route PCM below could not be
+> re-opened after PulseAudio suspended the sink on idle, so the phone is back to the two-entry setup:
+> UCM `Speaker` on `hw:${CardId},0` plus the Pulse remap drop-in `10-landscape-swap.pa` (default sink
+> `speakers_landscape`). Play → suspend → play verified. `pmos/landscape-swap.patch` is kept in the repo
+> with a REVERTED header and must not be applied; the section is kept for the three lessons at the end. The proper fix is to swap the
+> channels in the device tree (top amp `codec@34` → `sound-channel 1`, bottom `codec@35` → `0`, kernel
+> `pkgrel` bump, flash from the build host), after which the remap drop-in goes away and one device
+> remains without any route PCM.
+
+
 Jay saw two selectable outputs that sounded the same: *Built-in Audio Speaker & Earpiece Playback*
 (channels reversed) and *Speakers* (correct). They were the same hardware twice. The first is the
 real ALSA sink from the UCM `Speaker` device, whose upstream comment says "Speaker & Earpiece"
@@ -330,3 +340,29 @@ mixer device`. With the `ctl-remap` include dropped (upstream PR #9, commit 2) n
 `ctl.default` in the UCM namespace, so `PlaybackMixer "default:${CardId}"` resolves to nothing and
 volume is software-only. Harmless today (the amps have no volume controls to bind anyway) but the PR
 should probably switch the mixer to `hw:${CardId}` or say so.
+
+## The channel swap moves into the device tree (2026-09-15, night) — built, not yet flashed
+
+The landscape L/R swap belongs in the DT, not in a Pulse remap or a UCM route PCM. The patch we
+already own for the amp names and channels now assigns them for the fixed landscape mount: the top
+amplifier `codec@34` (right-hand side in landscape) gets `sound-channel 1` / `Amplifier R`, the
+bottom `codec@35` gets `sound-channel 0` / `Amplifier L`. A copy lives at `pmos/kernel/` (the
+live one is in the pmaports checkout on the build host, `pkgrel` bumped 1→2, `pmbootstrap
+checksum` run). `pmbootstrap build linux-postmarketos-qcom-sc7280` produced
+`linux-postmarketos-qcom-sc7280-7.2.2-r2.apk` in about seven minutes.
+
+Two things blocked the way there:
+
+- **`pmbootstrap shutdown` did not unmount a busy chroot sysfs.** The build aborted three times on
+  `umount …/chroot_rootfs_nothing-spacewar/sys/devices: target is busy` with `fuser` naming only the
+  kernel itself. `sudo umount -l` on that path (and the native chroot's) cleared all 38 mounts;
+  the next build ran through.
+- **Rebooting into fastboot needs root.** `systemctl reboot --reboot-argument=bootloader` fails with
+  `Permission denied` on the reboot parameter file for an ssh user, and logind's
+  `SetRebootParameter` demands interactive auth. So the flash from the build host waits on the
+  phone's sudo password or a hand-held key combo.
+
+After the flash, and only after `speaker-test -c2` on plain `hw:0,0` puts the left test tone on the
+left speaker in landscape: remove `/etc/pulse/default.pa.d/10-landscape-swap.pa`, let the default
+sink fall back to the UCM `Speaker` sink, and the second output entry disappears with no route PCM
+involved.

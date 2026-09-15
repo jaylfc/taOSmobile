@@ -1,0 +1,47 @@
+From: jaylfc <jaylfc25@gmail.com>
+Date: Tue, 15 Sep 2026 00:00:00 +0000
+Subject: [PATCH] arm64: dts: qcom: sm7325-nothing-spacewar: prefix and channel the amps
+
+The two tfa9873 amplifiers register "Speaker" and "PWUP" as component-level
+DAPM widgets. With no sound-name-prefix on either node the second instance
+overwrites the first ("ASoC: sink widget PWUP overwritten"), the DAPM graph
+never completes, and no backend DAI enables for MultiMedia1 -- leaving the
+card with HDMI/DisplayPort controls only and no speaker path at all.
+
+Give each amp a distinct prefix so the widgets no longer collide, and set
+sound-channel so the pair renders true stereo rather than both amps playing
+the same content. Also correct the stale EAR/SPK comments: these are the top
+and bottom speakers of a stereo pair, not an earpiece and a main speaker.
+---
+--- a/arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts
++++ b/arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts
+@@ -1021,21 +1021,27 @@
+ 	clock-frequency = <100000>;
+ 	status = "okay";
+ 
+-	tfa9873_l: codec@34 { /* EAR */
++	tfa9873_l: codec@34 { /* Top speaker: RIGHT in the fixed landscape mount */
+ 		compatible = "nxp,tfa9873",
+ 			     "nxp,tfa9872";
+ 		reg = <0x34>;
+ 		reset-gpio = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+ 
++		sound-channel = <1>;
++		sound-name-prefix = "Amplifier R";
++
+ 		#sound-dai-cells = <1>;
+ 	};
+ 
+-	tfa9873_r: codec@35 { /* SPK */
++	tfa9873_r: codec@35 { /* Bottom speaker: LEFT in the fixed landscape mount */
+ 		compatible = "nxp,tfa9873",
+ 			     "nxp,tfa9872";
+ 		reg = <0x35>;
+ 		reset-gpio = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+ 
++		sound-channel = <0>;
++		sound-name-prefix = "Amplifier L";
++
+ 		#sound-dai-cells = <1>;
+ 	};
+ };

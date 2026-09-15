@@ -1,3 +1,7 @@
+# REVERTED 2026-09-15 ~18:25Z. Kept for the record only; do NOT apply.
+# The route PCM this declares could not be re-opened after PulseAudio suspended the sink on
+# idle. The phone runs the two-entry setup (UCM Speaker on hw:${CardId},0 + Pulse remap
+# drop-in). See docs/pmos-audio-bringup.md, "Why there were two outputs".
 diff -ruN a/ucm2/Nothing/spacewar/HiFi.conf inst/Nothing/spacewar/HiFi.conf
 --- a/ucm2/Nothing/spacewar/HiFi.conf	2026-09-15 16:03:00.752337283 +0000
 +++ b/ucm2/Nothing/spacewar/HiFi.conf	2026-09-15 16:52:53.871132919 +0000
