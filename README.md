@@ -47,6 +47,10 @@ scripts/    Device introspection and deployment helpers
             the sender, so a 200 is not evidence the bus holds what you sent.
             Exits 0 verified / 1 mangled / 2 could-not-verify; "not found" is 2,
             never 0.
+            phone-checkpoint.sh -- reflashable backup of the pmOS install
+            (userdata + active boot slot), taken over ssh from the build host,
+            lz4 on the phone, raw bytes counted and hashed on the host. See
+            docs/pmos-checkpoint-images.md; restore needs a fresh go-ahead.
 docs/       Specs, scopes, and the record of what was tried
 ```
 
@@ -108,3 +112,7 @@ device runs; the speakers need two properties per amp (`sound-name-prefix` and
 `sound-channel`), testable by editing the dtb on `/boot` and rebooting rather
 than by flashing anything. The microphone is genuinely open. There is no
 headphone jack — Bluetooth audio already works.
+
+Reflashable checkpoint images of the phone (what `fastboot flash userdata`
+actually covers, how to take one, how to restore) are in
+`docs/pmos-checkpoint-images.md`.
