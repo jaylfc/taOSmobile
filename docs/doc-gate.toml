@@ -31,6 +31,7 @@ referenced_paths_scan = [
   "docs/custom-image-scope.md",
   "docs/device-notes.md",
   "docs/first-run-controller-choice.md",
+  "docs/pmos-audio-bringup.md",
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
   "droidian/kernel-debian/README.md",

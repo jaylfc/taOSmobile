@@ -101,3 +101,9 @@ Found while bringing taOS up on the device:
 Findings from the device are in `docs/device-notes.md` — including that
 `/home/phablet` ships world-writable and root-owned, which makes sshd's
 `StrictModes` silently reject every key.
+
+Audio bring-up under postmarketOS is in `docs/pmos-audio-bringup.md` — including
+the correction that the speaker's backend dai-link was never missing (it already
+binds `PRIMARY_MI2S_RX` to both tfa9873 amps); what is missing is a
+`sound-name-prefix` on each amp, without which the two register the same DAPM
+widget names and no backend enumerates at all.
