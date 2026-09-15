@@ -347,7 +347,7 @@ The landscape L/R swap belongs in the DT, not in a Pulse remap or a UCM route PC
 already own for the amp names and channels now assigns them for the fixed landscape mount: the top
 amplifier `codec@34` (right-hand side in landscape) gets `sound-channel 1` / `Amplifier R`, the
 bottom `codec@35` gets `sound-channel 0` / `Amplifier L`. A copy lives at `pmos/kernel/` (the
-live one is in the pmaports checkout on the build host, `pkgrel` bumped 1→2, `pmbootstrap
+live one is in the pmaports checkout on the build host, `pkgrel` bumped 1→2 and later 2→3, `pmbootstrap
 checksum` run). `pmbootstrap build linux-postmarketos-qcom-sc7280` produced
 `linux-postmarketos-qcom-sc7280-7.2.2-r2.apk` in about seven minutes.
 
@@ -366,3 +366,11 @@ After the flash, and only after `speaker-test -c2` on plain `hw:0,0` puts the le
 left speaker in landscape: remove `/etc/pulse/default.pa.d/10-landscape-swap.pa`, let the default
 sink fall back to the UCM `Speaker` sink, and the second output entry disappears with no route PCM
 involved.
+
+**r3 adds one kernel config line so fastboot is reachable from ssh.** The device tree already carries
+a `reboot-mode` node, but `CONFIG_NVMEM_REBOOT_MODE` was unset, so nothing bound to it:
+`systemctl reboot --reboot-argument=bootloader` run as root rebooted straight back into Linux. r3
+sets it to `y`. The config hunk is kept at `pmos/kernel/config-r3-nvmem-reboot-mode.diff`.
+`linux-postmarketos-qcom-sc7280-7.2.2-r3.apk` is built on the build host and not yet flashed. The
+running r1 kernel can only reach fastboot through the Vol-down + Power key combo. After the r3
+flash, the reboot argument should land in fastboot, and that is the first thing to test.

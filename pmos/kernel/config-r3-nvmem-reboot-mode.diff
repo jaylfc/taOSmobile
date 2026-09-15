@@ -1,0 +1,13 @@
+diff --git i/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64 w/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
+index 7db6604ba4..3efeab490d 100644
+--- i/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
++++ w/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
+@@ -3535,7 +3535,7 @@ CONFIG_POWER_RESET_QCOM_PON=y
+ # CONFIG_POWER_RESET_SYSCON_POWEROFF is not set
+ CONFIG_REBOOT_MODE=y
+ # CONFIG_SYSCON_REBOOT_MODE is not set
+-# CONFIG_NVMEM_REBOOT_MODE is not set
++CONFIG_NVMEM_REBOOT_MODE=y
+ # CONFIG_POWER_RESET_QEMU_VIRT_CTRL is not set
+ CONFIG_POWER_SEQUENCING=y
+ CONFIG_POWER_SEQUENCING_QCOM_WCN=m
