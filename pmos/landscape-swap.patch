@@ -1,0 +1,50 @@
+diff -ruN a/ucm2/Nothing/spacewar/HiFi.conf inst/Nothing/spacewar/HiFi.conf
+--- a/ucm2/Nothing/spacewar/HiFi.conf	2026-09-15 16:03:00.752337283 +0000
++++ b/ucm2/Nothing/spacewar/HiFi.conf	2026-09-15 16:52:53.871132919 +0000
+@@ -36,12 +36,12 @@
+ }
+ 
+ SectionDevice."Speaker" {
+-	Comment "Speaker & Earpiece Playback"
++	Comment "Speakers"
+ 
+ 	Value {
+ 		PlaybackChannels 2
+ 		PlaybackPriority 100
+-		PlaybackPCM "hw:${CardId},0"
++		PlaybackPCM "spacewar_landscape"
+ 		PlaybackMixer "default:${CardId}"
+ 	}
+ }
+diff -ruN a/ucm2/Nothing/spacewar/NP1.conf inst/Nothing/spacewar/NP1.conf
+--- a/ucm2/Nothing/spacewar/NP1.conf	2026-09-15 16:02:36.605489389 +0000
++++ b/ucm2/Nothing/spacewar/NP1.conf	2026-09-15 16:52:53.422135762 +0000
+@@ -9,6 +9,28 @@
+ 
+ Include.card-init.File "/lib/card-init.conf"
+ 
++# taOSmobile (local, not upstream): the phone is used in a fixed landscape
++# orientation where the top amplifier (Amplifier L, sound-channel 0) sits on the
++# RIGHT. Swap L/R at the ALSA layer so PulseAudio sees ONE correctly-oriented
++# device; HiFi.conf points the Speaker device at this PCM. PulseAudio opens UCM
++# PCMs inside a private namespace, so /etc/asound.conf is NOT consulted -- the
++# PCM has to be declared here. The slave format MUST be pinned: unset, the route
++# plugin picks parameters the q6asm PCM rejects at hw_params, and a rejected
++# hw_params leaves the DSP session registered so every later open fails EINVAL
++# until "PRI_MI2S_RX Audio Mixer MultiMedia1" is toggled off and on.
++LibraryConfig.landscape.Config {
++	pcm.spacewar_landscape {
++		type route
++		slave {
++			pcm "hw:NP1,0"
++			channels 2
++			format S16_LE
++		}
++		ttable.0.1 1
++		ttable.1.0 1
++	}
++}
++
+ # The WCD9385 codec is only present in the device tree on kernels that carry
+ # the wcd938x/SoundWire/LPASS-macro nodes. Without it none of these controls
+ # exist, and an unconditional BootSequence makes the whole profile fail to

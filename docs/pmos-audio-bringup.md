@@ -291,3 +291,42 @@ package's files (originals in `~/ucm-backup/` there) — **an `apk upgrade` of
 **Retained lesson:** a control count was read as a property of the kernel when it was a property of
 the tool. The tell was there the whole time — the `snd_hctl_elem_info` error line printed *above* the
 count — and the fix was one flag (`-D hw:0`). Read the error line before the number.
+
+## Why there were two outputs, and the one-device landscape swap (2026-09-15, evening)
+
+Jay saw two selectable outputs that sounded the same: *Built-in Audio Speaker & Earpiece Playback*
+(channels reversed) and *Speakers* (correct). They were the same hardware twice. The first is the
+real ALSA sink from the UCM `Speaker` device, whose upstream comment says "Speaker & Earpiece"
+because on the Phone (1) the top amplifier (`codec@34`, `Amplifier L`, `sound-channel 0`) *is* the
+earpiece: there is no separate earpiece transducer, Android drives the top speaker alone for calls.
+The second was a `module-remap-sink` layered on the first to swap L/R for the fixed landscape
+mount. The amps expose no per-amp mixer controls (`amixer -D hw:0 controls | grep -i amp` is empty),
+so an earpiece-only device would need its own PCM routing and is not something the kiosk needs.
+
+**Now there is one device**, swapped at the ALSA layer: `pmos/landscape-swap.patch` applied over
+`pmos/ucm2/` declares a `route` PCM `spacewar_landscape` (ttable 0↔1) in `NP1.conf` and points the
+`Speaker` device's `PlaybackPCM` at it, comment "Speakers". The Pulse drop-in
+`/etc/pulse/default.pa.d/10-landscape-swap.pa` is gone (kept disabled in `~/ucm-backup/` on the
+phone). PulseAudio shows a single `Built-in Audio Speakers` sink; `speaker-test -D pulse -t wav`
+plays through it. Three things cost an hour and are worth keeping:
+
+- **PulseAudio never consults `/etc/asound.conf` for UCM PCMs.** It opens them inside a private
+  namespace (`_ucm0001.<name>`), so the PCM must be declared in the UCM profile via a top-level
+  `LibraryConfig.<id>.Config { pcm.<name> { … } }` block (the Fairphone 5 profile is the example).
+  `${CardId}` is **not** substituted inside that block (`Cannot get card index for ${CardId}`); use
+  the card name, `hw:NP1,0`.
+- **The route slave's `format` must be pinned.** Left unset, the route plugin negotiates hw params
+  the q6asm PCM rejects, and a rejected `hw_params` leaves the DSP stream registered so *every* later
+  open fails `EINVAL`, including plain `hw:0,0`, with no dmesg line. Recovery is toggling
+  `PRI_MI2S_RX Audio Mixer MultiMedia1` off and on (the UCM verb does that on the next PulseAudio
+  start). Related: `hw:0,0` cannot be opened at all while that mixer route is 0 (`Routing not setup
+  for MultiMedia-1 Session`), so any test with PulseAudio stopped must set it to 1 first.
+- **PulseAudio respawns itself** here (D-Bus/autospawn under `systemd --user`; there is no
+  `pulseaudio.service`), so `pkill` alone never gives a clean daemon. Drop
+  `autospawn = no` into `~/.config/pulse/client.conf` for the duration of a test and remove it after.
+
+Still open from the same log: PulseAudio warns `Invalid CTL default:NP1 … Failed to find a working
+mixer device`. With the `ctl-remap` include dropped (upstream PR #9, commit 2) nothing defines
+`ctl.default` in the UCM namespace, so `PlaybackMixer "default:${CardId}"` resolves to nothing and
+volume is software-only. Harmless today (the amps have no volume controls to bind anyway) but the PR
+should probably switch the mixer to `hw:${CardId}` or say so.
