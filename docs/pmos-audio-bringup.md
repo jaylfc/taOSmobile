@@ -143,3 +143,60 @@ entries (gpio15/gpio42) visible in Qualcomm's **SoC** dtb are generic reference-
 **not** this board's amp pins. Stock drives the speaker purely through the vendor driver's own
 `TFA_CHIP_SELECTOR` / `TFA Profile` controls, which mainline does not expose — so the stock mixer
 file is a reference for the backend port, not a recipe to replay.
+
+## Route (a): the change as a kernel-package patch — the durable form
+
+The quick route (edit `/boot/<dtb>`, `boot-deploy`, flash) does not survive a kernel upgrade. The
+durable form is a patch carried by the pmOS kernel package, which is what this section records.
+
+On the build host, `device/community/linux-postmarketos-qcom-sc7280/APKBUILD` (pmaports, kernel
+7.2.2, tag `v7.2.2-sc7280`) carried **no patches at all** before this. The change adds one:
+
+```
+source="
+	https://github.com/sc7280-mainline/$_repo/archive/refs/tags/$_tag/$_repo-$_tag.tar.gz
+	$_config
+	0001-arm64-dts-qcom-sm7325-nothing-spacewar-name-and-chann.patch
+"
+```
+
+The patch touches `arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts` only, adding
+`sound-channel` and `sound-name-prefix` to `tfa9873_l: codec@34` and `tfa9873_r: codec@35` and
+correcting the stale `/* EAR */` / `/* SPK */` comments to top/bottom speaker. Upstream already
+labels the nodes `_l` and `_r`, so the labels needed no change.
+
+Both patch anchors were asserted to match **exactly once** before substitution rather than
+replaced blind — a silent zero-match or double-match is the failure mode that produces a patch
+that applies cleanly and changes nothing.
+
+## Verifying the dtb without the device
+
+The patched dtb can be produced and checked entirely off-device, which is worth doing because a
+dtb staged on the phone by an earlier session is otherwise unverified:
+
+```
+dtc -I dtb -O dts -o pristine.dts sm7325-nothing-spacewar.dtb.pristine
+fdtput -t s out.dtb /soc@0/geniqup@9c0000/i2c@988000/codec@34 sound-name-prefix "Amplifier L"
+fdtput -t u out.dtb /soc@0/geniqup@9c0000/i2c@988000/codec@34 sound-channel 0
+```
+
+(and the same for `codec@35` with `"Amplifier R"` / `1`). **Read the properties back out of the
+binary with `fdtget`**, then decompile both dtbs and diff them — the diff must be exactly the four
+added lines and nothing else. Writing a property and not reading it back is how a typo'd node path
+becomes a silent no-op: `fdtput` will happily create a node that the kernel never looks at.
+
+**Do not compare two independently patched dtbs by sha256.** The local build here is
+`0921a547…` while the copy staged on the phone is `6c42fbe7…`; the difference is padding/growth
+from a different patching method, not a difference in content. The meaningful comparison is the
+decompiled diff, not the hash. A hash is only good for confirming a file did not change in
+transit — which is what `SHA256SUMS` in `~/.taos-team/spacewar-audio-refs/` is for.
+
+## Still not proven
+
+The build produces a kernel package; it does not prove audio works. The outcome is unknown until a
+boot.img carrying the new dtb is flashed to the **active** slot and the device boots. The checks
+that decide it, in order: `sound-name-prefix` present under
+`/sys/firmware/devicetree/base/.../codec@34`, the `widget overwritten` lines **gone** from dmesg,
+control count above 18 with `MI2S` among them, and only then `speaker-test`. The first three are
+what distinguish "the change landed and did not work" from "the change never landed" — the exact
+ambiguity that wasted the first attempt.
