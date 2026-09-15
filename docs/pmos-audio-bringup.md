@@ -248,3 +248,46 @@ this command as a rollback, because it is not one while a newer local package ex
 **Two ways in, and the second one saved this session.** Tailscale took minutes to reconnect after
 boot, but pmOS brings up USB networking: the phone is `172.16.42.1` from the build host. When the
 tailnet is down, that path still works.
+
+## Correction — the backend was registered all along; the instrument was broken (2026-09-15, later)
+
+**Speakers work.** Measured on the device with the r1 kernel already flashed: stereo playback through
+`speaker-test -D plughw:0,0` and, after the UCM fix below, through PulseAudio
+(`alsa_output.platform-sound.HiFi__Speaker__sink`, default sink, audible).
+
+**Everything in the two sections above that says "18 controls", "no `MI2S` mixer" or "the
+`PRIMARY_MI2S_RX` backend never registers with q6routing" was wrong, and wrong for one reason:**
+`amixer -c 0` opens `sysdefault:0`, and on this card that listing aborts at element 19 with
+`snd_hctl_elem_info error: No such file or directory`. Everything after `DISPLAY_PORT_RX` was cut off.
+`amixer -D hw:0 controls` returns **1050** controls, including `PRI_MI2S_RX Audio Mixer MultiMedia1..8`
+(numids 75–82). The kernel side was complete: `q6routing.c` names the widget `PRI_MI2S_RX Audio Mixer`
+(the `PRIMARY_MI2S_RX` spelling is only the DT-binding constant), `q6afe-dai.c` has the `PRI_MI2S_RX`
+AIF widget, debugfs shows both on the card, and `sm8250.c` never sets `disable_route_checks`, so a
+failed route would have failed the whole card bind. The `-22` from `speaker-test` was the ordinary
+DPCM state with no mixer switch on — precisely what a UCM profile exists to set.
+
+**Why the listing broke:** the shipped UCM profile includes `/lib/ctl-remap.conf`, which wraps
+`ctl.default` in alsa-lib's `remap` plugin. With it, the `default:0`/`sysdefault:0` control listing
+stops at 20 lines; with that one include removed, the same command lists all 1050. PulseAudio opens
+the mixer through the same `default:${CardId}` path. ~20 upstream profiles include the same file, so
+this is either spacewar-specific or an alsa-lib edge case — not yet root-caused, only measured.
+
+**Why PulseAudio had no sink:** pmOS ships `alsa-ucm-conf-qcom-sc7280`, which already carries
+`ucm2/Nothing/spacewar/{NP1,HiFi}.conf` (upstream `sc7280-mainline/alsa-ucm-conf`, byte-identical).
+It was written for the PR #29 kernel: its `BootSequence` sets `HPHL Volume`/`ADC1 Volume` and it
+includes `codecs/wcd938x/init.conf`, none of which exist without wcd938x, so `snd_use_case_mgr_open`
+fails and `module-alsa-card` logs *"Failed to find a working profile"*. Note the daemon that owns the
+card here is **PulseAudio** (`/etc/xdg/autostart/pulseaudio.desktop`), not WirePlumber — WirePlumber
+runs, but only hosts the loopback filters.
+
+**The fix** is `pmos/ucm2/Nothing/spacewar/`: the same profile with every wcd938x-dependent part
+wrapped in `If … { Condition { Type ControlExists Control "name='HPHL Volume'" } }`, so it opens on the
+shipped kernel and regains headphones/mics automatically when the codec lands; and the `ctl-remap`
+include dropped. Verified: `alsaucm -c NP1 set _verb HiFi list _devices` → only `Speaker`; PA
+`Active Profile: HiFi`; listing 1050; playback audible. Installed on the phone by copying over the
+package's files (originals in `~/ucm-backup/` there) — **an `apk upgrade` of
+`alsa-ucm-conf-qcom-sc7280` will overwrite it** until the change is upstream and repackaged.
+
+**Retained lesson:** a control count was read as a property of the kernel when it was a property of
+the tool. The tell was there the whole time — the `snd_hctl_elem_info` error line printed *above* the
+count — and the fix was one flag (`-D hw:0`). Read the error line before the number.

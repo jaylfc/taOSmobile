@@ -20,7 +20,7 @@ trailer = "Docs-Reviewed:"
 [invariants]
 # taOSmobile has no tinyagentos/ or desktop/ tree; naming another repo's
 # directories here would make Layer A permanently dead config.
-path_prefixes = ["scripts", "docs", "droidian", "kiosk", "bridge"]
+path_prefixes = ["scripts", "docs", "droidian", "kiosk", "bridge", "pmos"]
 
 referenced_paths_scan = [
   "README.md",
