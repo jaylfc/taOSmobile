@@ -374,3 +374,11 @@ sets it to `y`. The config hunk is kept at `pmos/kernel/config-r3-nvmem-reboot-m
 `linux-postmarketos-qcom-sc7280-7.2.2-r3.apk` is built on the build host and not yet flashed. The
 running r1 kernel can only reach fastboot through the Vol-down + Power key combo. After the r3
 flash, the reboot argument should land in fastboot, and that is the first thing to test.
+
+**Flashed 2026-09-15, evening, and confirmed by ear.** On r3, Jay reported the raw UCM sink
+(*Built-in Audio Speaker & Earpiece Playback*) correct in landscape and the *Speakers* remap reversed,
+which is the double swap expected once the DT does the swap. `10-landscape-swap.pa` is removed from
+the phone (copy in `~/unit-backup/`), PulseAudio restarted, and one sink remains as the default. The
+flash needed one more step: the rootfs modules from r1 were all rejected by the r3 kernel, because
+each build signs its own modules, so the r3 `usr/lib/modules/7.2.2` from the apk was installed on the
+phone by hand before wifi and the battery gauge came back.
