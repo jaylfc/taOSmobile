@@ -89,27 +89,31 @@ tree. (Izzo predicted they would stop being necessary once Val Packett's driver 
 **Still unproven:** that the DTS change alone is enough on 7.2.2. Izzo's result was on 7.0.y *with*
 the reverts. The mechanism is confirmed at source level; the outcome is not, until it is booted.
 
-## Test loop — no flashing required
+## Test loop — it DOES need a boot-partition write (claim retracted)
 
-**Correction to an earlier plan that called for a dtb rebuild and a partition flash.** That is not
-how this device boots and not what is needed.
+**An earlier version of this document said "no flashing required". That was wrong, and it was tested
+and disproved on 2026-09-15.** Recording the disproof because the reasoning was superficially sound.
 
-`/boot` is a writable ext2 filesystem (loop over the real block device `/dev/sda10`) using
-systemd-boot, and `/boot/loader/entries/pmos.conf` names the device tree as a plain file:
+The mistake: `/boot` is a writable filesystem holding `sm7325-nothing-spacewar.dtb`, and
+`/boot/loader/entries/pmos.conf` names that file as `devicetree`. It looks like an editable UEFI
+boot. **It is not.** `/boot` is **ext2**, which UEFI firmware cannot read, so those files are staging
+inputs, not what the firmware loads. The dtb is baked into `boot.img` (it contains `nxp,tfa9873`)
+which is flashed to the boot partition, and that is what the kernel actually uses.
 
-```
-linux linux.efi
-devicetree sm7325-nothing-spacewar.dtb
-```
+Measured proof: the patched dtb was installed to `/boot` and the device rebooted cleanly, but
+`/sys/firmware/devicetree/base/.../codec@34/sound-name-prefix` **did not exist**, the control count
+stayed at 18, and dmesg still showed both `widget overwritten` lines. The edit was inert.
 
-So the loop is: **back up `/boot/sm7325-nothing-spacewar.dtb`, decompile it, add the four properties,
-recompile, reboot.** No `pmbootstrap`, no kernel rebuild, no write to `boot`/`dtbo`, nothing near
-`xbl`/`abl`. Reverting is restoring one file. A maintainer building from source would instead patch
-the DTS and rebuild the kernel package, but for *testing the hypothesis* the file swap is equivalent
-and far cheaper.
+**The device is running slot `_b`** (`androidboot.slot_suffix=_b` in `/proc/cmdline`), so the flash
+target is `boot_b`, **not** `boot_a`. Backing up `boot_a` — the obvious-looking name — backs up the
+*inactive* slot and would give false confidence in a recovery path.
 
-Caveat: `deviceinfo_flash_kernel_on_update="true"`, so a kernel package upgrade will overwrite the
-edited dtb. This is a test, not a durable fix — the durable fix is the DTS change upstream.
+So the real loop is: edit `/boot/<dtb>`, run `boot-deploy` to regenerate `boot.img`, write it to the
+**active** slot, reboot. `deviceinfo_flash_method="fastboot"`, `deviceinfo_generate_bootimg="true"`.
+Recovery is fastboot with a backup of the active slot; the bootloader is unlocked. Still nowhere near
+`xbl`/`abl`.
+
+Note `/tmp` on the device is tmpfs in RAM — do not stage 100 MB partition dumps there.
 
 ## Microphone — genuinely open
 
