@@ -200,3 +200,51 @@ that decide it, in order: `sound-name-prefix` present under
 control count above 18 with `MI2S` among them, and only then `speaker-test`. The first three are
 what distinguish "the change landed and did not work" from "the change never landed" — the exact
 ambiguity that wasted the first attempt.
+
+## Result of the first real test — 2026-09-15, patched kernel booted and measured
+
+The 4-property DTS patch was built as `linux-postmarketos-qcom-sc7280-7.2.2-r1`, flashed, and
+booted. **The widget collision is fixed. Audio still does not work.** Both halves matter.
+
+**Fixed, measured on the running device:**
+
+- `sound-name-prefix` is live in the DT: `codec@34` = `Amplifier L`, `codec@35` = `Amplifier R`,
+  with `sound-channel` 0 and 1.
+- The two `ASoC: sink widget PWUP/Speaker overwritten` lines are **gone** from dmesg. Confirmed
+  against a control (`grep -c "Linux version"` = 1) so that the zero is a real absence and not an
+  unreadable `dmesg` — `sudo dmesg` without `-S` returns nothing and reads as a clean result.
+
+**Not fixed:**
+
+- Still exactly 18 mixer controls, still only HDMI (8) + `DISPLAY_PORT_RX` (8) + the two jacks.
+  **No `Amplifier L/R` controls and no `MI2S` mixer appear.**
+- `speaker-test -D hw:0,0` still fails with `Playback open error: -22`, and the kernel says
+  `MultiMedia1: ASoC: no backend DAIs enabled for MultiMedia1, possibly missing ALSA mixer-based
+  routing or UCM profile`.
+- PipeWire still lists zero sinks and zero sources. `qcom-q6afe: Unknown cmd 0x100f6` persists.
+
+So `sound-name-prefix` was **necessary but not sufficient**, exactly as predicted above. Removing
+the DAPM collision did not cause the `PRIMARY_MI2S_RX` backend to register with q6routing: the
+per-backend mixers that q6routing creates exist for HDMI and DisplayPort but not for MI2S. The next
+question is therefore why the `i2s-dai-link` backend does not register, not anything about the amps
+— both amps probe, both are prefixed, neither is routed to.
+
+## The boot hang, and what actually caused it
+
+Installing the r1 apk **on the device** produced a boot that hung after `pmos_continue_boot` with no
+visible error. The same kernel and the same dtb, packaged into `boot.img` by `pmbootstrap flasher
+flash_kernel` on the build host, **boots fine.** So the hang was caused by the on-device
+`boot-deploy`/`mkinitfs` path, not by the DTS change.
+
+This was only distinguishable because the two routes build `boot.img` differently. Rolling back
+would have hidden it: the device would have booted and the patch would have been blamed.
+
+**`pmbootstrap flasher flash_kernel` flashes what is installed in the rootfs chroot, and it
+upgrades that chroot from the local package repo first.** The chroot held r0 before the flash and
+r1 after, and its dtb went from 147967 to 148079 bytes. So the "recovery" flash actually shipped the
+*patched* kernel. That was lucky rather than intended — verify the chroot's version before treating
+this command as a rollback, because it is not one while a newer local package exists.
+
+**Two ways in, and the second one saved this session.** Tailscale took minutes to reconnect after
+boot, but pmOS brings up USB networking: the phone is `172.16.42.1` from the build host. When the
+tailnet is down, that path still works.
