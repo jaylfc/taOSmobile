@@ -23,6 +23,13 @@
 # controller and root. That is not a widening of what the device allows --
 # holding the physical power key already powers it off from the lock screen,
 # without signing in. This gives the software path what the hardware path had.
+# ⚠ --no-block IS LOAD-BEARING, NOT TIDINESS. This script runs INSIDE
+# taos-power.service, and `systemctl poweroff` blocks until the transition is
+# done -- but that transition has to STOP taos-power.service, which cannot exit
+# until this blocking call returns. systemd waits for the service, the service
+# waits for systemd, and the phone sits on the shutdown splash forever. Jay hit
+# exactly that: "I seem to be stuck on the taOS mobile splash". --no-block
+# queues the job and returns, so the service exits and the transition proceeds.
 set -eu
 
 REQ=/run/taos-power/request
@@ -39,11 +46,11 @@ rm -f "$REQ"
 case "$verb" in
     poweroff)
         logger -t taos-power "power menu: poweroff"
-        exec systemctl poweroff
+        exec systemctl --no-block poweroff
         ;;
     reboot)
         logger -t taos-power "power menu: reboot"
-        exec systemctl reboot
+        exec systemctl --no-block reboot
         ;;
     *)
         # A verb that is not on the list is dropped and said out loud. No
