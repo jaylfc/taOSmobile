@@ -1,0 +1,23 @@
+# Let the taOS controller set the panel brightness.
+#
+# WHY: the brightness slider in the lock screen's pull-down shade is served by
+# the controller, which runs as `taos` (uid 999). The kernel ships
+# /sys/class/backlight/*/brightness as root:root 0644 -- readable by anyone,
+# writable by root alone -- so without this the slider can show the current
+# level and change nothing. Measured on the handset before writing this:
+#   -rw-r--r-- root root /sys/class/backlight/ae94000.dsi.0/brightness
+#   brightness 2866, max_brightness 4095
+#
+# WHY THE `video` GROUP AND NOT `uaccess`: TAG+="uaccess" hands access to the
+# user of the ACTIVE SEAT via logind ACLs, and this controller's session is
+# `manager-early` rather than an active seat session -- the same reason logind
+# answers "challenge" to its power-off requests. Group ownership does not depend
+# on seat state, and `taos` is already in `video` (23=input, 27=video), so this
+# grants nothing that user did not already have for the rest of the display
+# stack. It is also exactly what brightnessctl's own packaging does.
+#
+# SCOPE: the brightness attribute only. max_brightness stays read-only, because
+# nothing should ever be writing it.
+ACTION=="add|change", SUBSYSTEM=="backlight", \
+    RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", \
+    RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"

@@ -1,0 +1,54 @@
+#!/bin/sh
+# Turn the panel off or on, and gate TOUCH with it.
+#
+# WHY THIS EXISTS AS ITS OWN SCRIPT: "the screen is off" is two facts, not one --
+# the output is powered down AND the digitiser must not reach the page. Three
+# callers need both (the idle watcher, the power key, the double-tap watcher),
+# and when each did its own half they drifted apart. Jay, from the glass:
+# "Touchscreen is still registering events when the screen is off" -- taps in a
+# pocket were pressing whatever was under the finger on the lock screen.
+#
+# THE REGRESSION THIS FIXES IS MINE. sway used to swallow the first touch
+# because swayidle's `resume` was what powered the output back on, so the touch
+# that woke the phone never reached the surface. Requiring a DOUBLE tap meant
+# removing that `resume`, which also removed the swallowing -- so single touches
+# started landing on the page while the screen was dark. The gate has to be
+# explicit now that the wake is.
+#
+# ORDER IS DELIBERATE IN BOTH DIRECTIONS, and it is the whole point:
+#   off: disable touch FIRST, then power down -- otherwise there is a window
+#        where the screen is dark and the digitiser is still live, which is
+#        exactly the bug.
+#   on:  power up FIRST, then enable touch -- otherwise there is a window where
+#        touch is live and the user cannot see what they are pressing.
+#
+# ⚠ SAFETY: with touch disabled, the ONLY way back is the power key, which is
+# bound in sway with --locked and calls this script with `on`. So a dead
+# double-tap watcher costs the double-tap, never the phone. Do not add a path
+# that disables touch without leaving that key able to re-enable it.
+set -eu
+
+# type:touch rather than the identifier 0:0:fts_ts: a replacement digitiser or a
+# kernel that renames the device would silently stop matching, and the failure
+# mode of a non-matching selector here is the pocket-touch bug coming back with
+# nothing in the logs.
+TOUCH='type:touch'
+
+touch_events() {
+    swaymsg "input $TOUCH events $1" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+off)
+    touch_events disabled
+    exec swaymsg "output * power off"
+    ;;
+on)
+    swaymsg "output * power on" >/dev/null 2>&1 || true
+    touch_events enabled
+    ;;
+*)
+    echo "usage: taos-kiosk-screen off|on" >&2
+    exit 2
+    ;;
+esac

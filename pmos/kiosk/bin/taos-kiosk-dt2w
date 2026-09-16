@@ -72,7 +72,13 @@ def panel_is_off() -> bool:
 
 
 def wake() -> None:
-    subprocess.run(["swaymsg", "output * power on"], timeout=5)
+    """Power the panel up AND let touch through again.
+
+    taos-kiosk-screen owns both halves. Calling `swaymsg "output * power on"`
+    from here would light the screen and leave the digitiser gated, so the phone
+    would look awake and ignore every tap.
+    """
+    subprocess.run(["/usr/local/bin/taos-kiosk-screen", "on"], timeout=8)
 
 
 def main() -> int:

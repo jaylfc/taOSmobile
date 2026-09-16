@@ -30,10 +30,10 @@ if [ "$state" = "true" ]; then
     curl -sS --max-time 2 -X POST \
         "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-screen-off" \
         >/dev/null 2>&1 || true
-    exec swaymsg "output * power off"
+    exec /usr/local/bin/taos-kiosk-screen off
 fi
 
-swaymsg "output * power on"
+/usr/local/bin/taos-kiosk-screen on
 
 # RE-ARM THE IDLE WATCHER. This is the whole reason this is not a two-line
 # script. Powering the output on over the IPC produces NO INPUT EVENT, so
