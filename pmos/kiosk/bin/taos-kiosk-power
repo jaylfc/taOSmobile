@@ -19,6 +19,17 @@ state=$(swaymsg -t get_outputs --raw 2>/dev/null \
         | sed 's/.*: *//')
 
 if [ "$state" = "true" ]; then
+    # Tell the page the screen is going dark so it can put an open sheet away.
+    # Jay: "if I turn the screen off on the power menu it should also dismiss
+    # the menu" -- otherwise the menu is still up behind a black screen and the
+    # next wake lands on a stale one, which reads as the phone being stuck.
+    #
+    # Fired BEFORE the panel goes off, while the page can still act on it, and
+    # with a short timeout so a wedged controller can never stop the screen
+    # turning off. The screen is the point; the dismissal is the courtesy.
+    curl -sS --max-time 2 -X POST \
+        "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-screen-off" \
+        >/dev/null 2>&1 || true
     exec swaymsg "output * power off"
 fi
 
