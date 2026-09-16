@@ -1,0 +1,21 @@
+#!/bin/sh
+# Start the double-tap watcher, replacing any previous instance.
+#
+# WHY A WRAPPER AND NOT `exec_always taos-kiosk-dt2w` DIRECTLY: exec_always
+# re-runs on every `swaymsg reload`, so without dropping the old process each
+# reload would leave another watcher holding /dev/input/event3 -- and two
+# watchers means the second tap of a pair can be counted twice, waking the panel
+# when the user meant to leave it dark. taos-kiosk-idle carries this same
+# pkill-first shape for exactly the same reason; see the note in it about sway's
+# `;` being its OWN command separator, which is why this cannot be inlined.
+set -eu
+
+# -f because the process name is python3, not the script name: -x would never
+# match. Matching the full command line risks matching THIS shell, so the
+# pattern names the interpreter and script together and $$ is excluded.
+for pid in $(pgrep -f 'taos-kiosk-dt2w$' 2>/dev/null || true); do
+    [ "$pid" = "$$" ] && continue
+    kill "$pid" 2>/dev/null || true
+done
+
+exec /usr/local/bin/taos-kiosk-dt2w
