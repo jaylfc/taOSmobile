@@ -46,6 +46,26 @@ off)
 on)
     swaymsg "output * power on" >/dev/null 2>&1 || true
     touch_events enabled
+    # RE-ARM THE IDLE WATCHER. This lived in taos-kiosk-power until the power-on
+    # moved here, and leaving it behind reintroduced the exact bug that comment
+    # was written for: powering the output on over the IPC produces NO INPUT
+    # EVENT, so swayidle never sees its `resume`, stays latched in the idle
+    # state it entered, and never reaches its timeout again. Jay, minutes after
+    # the move: "The screen doesnt seem to be turning off after 30 seconds".
+    #
+    # It belongs HERE because this is now the only place that powers the panel
+    # on, so every wake path gets it -- the power key, the double tap, and
+    # anything added later.
+    #
+    # Respawned through `swaymsg exec` rather than backgrounded from here: the
+    # compositor then owns the watcher, starting it inside the sway session with
+    # the session's environment and cgroup. A plain `setsid ... &` from this
+    # script was MEASURED being reaped immediately on this image, leaving no
+    # idle watcher at all -- strictly worse than the latched one.
+    #
+    # taos-kiosk-idle kills the previous instance before starting, so this
+    # cannot stack watchers however often the screen is woken.
+    swaymsg exec -- /usr/local/bin/taos-kiosk-idle >/dev/null 2>&1 || true
     ;;
 *)
     echo "usage: taos-kiosk-screen off|on" >&2
