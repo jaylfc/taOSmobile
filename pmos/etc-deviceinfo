@@ -1,0 +1,26 @@
+# Installed to /etc/deviceinfo on the handset.
+#
+# taOSmobile: disable boot-deploy's automatic flash of the ACTIVE boot slot.
+#
+# Any `apk add` on the device fires postmarketos-mkinitfs -> boot-deploy ->
+# flash_updated_boot_parts(), which on this A/B device silently re-flashed boot_b
+# (2026-09-16, during `apk add incus`) and left an r1 kernel paired with r3
+# modules: no wifi, battery 0, no ssh on the next boot. There is no working
+# out-of-band access on this handset, so that is a recovery trip, not a reboot.
+#
+# Gate: /usr/share/boot-deploy/boot-deploy-functions.sh:925 requires this to be
+# "true" to flash. It flashes ${deviceinfo_flash_fastboot_partition_kernel:-boot},
+# i.e. the plain `boot` alias = whichever slot is ACTIVE.
+#
+# Why /etc/deviceinfo and not the package-owned file: source_deviceinfo() takes
+# the elif branch into /usr/share/misc/source_deviceinfo (devicepkg-utils), which
+# sources /usr/share/deviceinfo/deviceinfo and THEN /etc/deviceinfo. The inline
+# fallback at boot-deploy-functions.sh:245 does the same. So /etc/deviceinfo wins
+# on BOTH paths, without editing a package-owned file, and survives an upgrade of
+# device-nothing-spacewar.
+#
+# Deliberate kernel flashes go through `pmbootstrap flasher flash_kernel` from the
+# build host, which writes via fastboot; boot-deploy returns early in a chroot.
+#
+# Card: tsk-znywum (mirror of taOS tsk-fgjbuj).
+deviceinfo_flash_kernel_on_update="false"
