@@ -1,0 +1,37 @@
+#!/bin/sh
+# Volume keys -> the lock screen. Press and release, both reported.
+#
+# Jay's spec: "if the user presses up it activates the volume slider (doesnt
+# change volume yet) then they can use both volume buttons to change the volume.
+# if they press down then a carousel type animation slides out from the left of
+# the screen where the buttons are with the agents avatars/faces, pressing the
+# volume buttons up and down cycles them ... holding a volume buttons activates
+# voice comms with the agent like a walkie talkie."
+#
+# WHY THIS SCRIPT DECIDES NOTHING. It reports "up was pressed", "down was
+# released", and stops there. All of the behaviour above is STATE -- which
+# surface is open, which agent is focused, whether the first press has been
+# spent -- and that state lives in the page. Splitting the decision between a
+# shell script and the page would mean two places that both think they know
+# whether the slider is showing, and they would disagree the first time a key
+# repeat or a lost event got through.
+#
+# THE KEYS, measured from the capability bitmaps in /proc/bus/input/devices
+# rather than guessed: KEY_VOLUMEDOWN (114) is pmic_resin/event1 and
+# KEY_VOLUMEUP (115) is gpio-keys/event2. The headset jack reports both as well,
+# which is why sway binds the KEYSYM and not a device.
+set -eu
+
+KEY="${1:-}"
+ACTION="${2:-}"
+
+case "$KEY" in up|down) ;; *) echo "usage: taos-kiosk-volume up|down press|release" >&2; exit 2 ;; esac
+case "$ACTION" in press|release) ;; *) echo "usage: taos-kiosk-volume up|down press|release" >&2; exit 2 ;; esac
+
+# --max-time so a wedged controller can never leave these stacking up behind a
+# user leaning on the volume rocker.
+curl -sS --max-time 2 -X POST \
+    -H 'Content-Type: application/json' \
+    -d "{\"key\":\"$KEY\",\"action\":\"$ACTION\"}" \
+    "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-volume-key" \
+    >/dev/null 2>&1 || true
