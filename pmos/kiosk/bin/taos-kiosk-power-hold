@@ -1,0 +1,51 @@
+#!/bin/sh
+# The power key: tap toggles the screen, hold raises the menu.
+#
+# Jay's spec, verbatim: "Power button tap screen on/off, hold for 1.5/2 seconds
+# menu appears".
+#
+# HOW THE TWO ARE TOLD APART. sway fires a bindsym on PRESS and, with --release,
+# again on RELEASE. There is no "held for N seconds" binding, so the press arm
+# drops a marker and starts a timer, and the release arm races it:
+#
+#   held >= HOLD_SECS -> the timer wins, removes the marker, raises the menu.
+#                        The later release finds no marker and does nothing.
+#   released sooner   -> the release wins, removes the marker, toggles the
+#                        screen. The timer wakes, finds no marker, exits.
+#
+# The marker is what makes that a race with exactly one winner rather than two
+# handlers both acting. `mkdir` would be the airtight way to claim it, but the
+# claim here is a REMOVAL -- whoever unlinks the file first owns the event --
+# and unlink is atomic, so a tap can never both toggle and open the menu.
+set -eu
+
+MARK="${XDG_RUNTIME_DIR:?taos-kiosk-power-hold: XDG_RUNTIME_DIR unset}/taos-power-hold"
+HOLD_SECS="${TAOS_KIOSK_POWER_HOLD_SECS:-1.5}"
+URL="http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-power-menu"
+
+case "${1:-}" in
+press)
+    : > "$MARK"
+    (
+        sleep "$HOLD_SECS"
+        # Still held? Claim the event by removing the marker. If the release
+        # arm already removed it this exits without touching the screen.
+        rm "$MARK" 2>/dev/null || exit 0
+        # --max-time so a wedged controller cannot leave this subshell around
+        # for the rest of the session.
+        curl -sS --max-time 3 -X POST "$URL" >/dev/null 2>&1 \
+            || logger -t taos-power "menu request failed (controller down?)"
+    ) &
+    ;;
+release)
+    # Claim it the same way. A release arriving after the timer has already
+    # fired finds nothing and must NOT also toggle the screen -- otherwise
+    # every long press would open the menu and blank the display under it.
+    rm "$MARK" 2>/dev/null || exit 0
+    exec /usr/local/bin/taos-kiosk-power
+    ;;
+*)
+    echo "usage: taos-kiosk-power-hold press|release" >&2
+    exit 2
+    ;;
+esac

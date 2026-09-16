@@ -1,0 +1,55 @@
+#!/bin/sh
+# Carry out a power request from the lock screen's power menu. Runs as ROOT,
+# started by taos-power.path when /run/taos-power/request appears.
+#
+# WHY NOT POLKIT: the controller runs as `taos`, whose logind session is
+# `manager-early`, not an active seat. logind answers "challenge" to both
+# CanPowerOff and CanReboot from there -- and on a handset with no keyboard and
+# no polkit agent a challenge is a refusal. A polkit JS rule granting `taos`
+# those two actions was written, installed and MEASURED NOT TO FIRE: a probe
+# rule that logged unconditionally on every action produced zero hits, so the
+# rules were not being consulted for these checks at all. polkitd does link
+# duktape, so this is not missing JS support; rather than keep guessing at
+# someone else's policy engine, the privileged step lives here where it can be
+# read in full.
+#
+# WHY NOT SUDO: /etc/sudoers on this image carries no includedir line, so a
+# drop-in in /etc/sudoers.d would be silently ignored -- exactly the kind of
+# "installed but inert" control this repo has been bitten by before. Editing
+# the main sudoers file to add one rule is a worse trade than this unit.
+#
+# THE TRUST BOUNDARY: anything that can write /run/taos-power/request can power
+# the phone off. The directory is 0700 owned by taos, so that means the
+# controller and root. That is not a widening of what the device allows --
+# holding the physical power key already powers it off from the lock screen,
+# without signing in. This gives the software path what the hardware path had.
+set -eu
+
+REQ=/run/taos-power/request
+
+[ -r "$REQ" ] || exit 0
+verb=$(head -c 32 "$REQ" 2>/dev/null | tr -d '[:space:]')
+
+# Removed BEFORE acting, not after. `poweroff` never returns, so a request
+# deleted afterwards would never be deleted at all -- and the .path unit would
+# re-trigger on the still-present file on the next boot, powering the phone off
+# as soon as it came up. That is a boot loop that looks like dead hardware.
+rm -f "$REQ"
+
+case "$verb" in
+    poweroff)
+        logger -t taos-power "power menu: poweroff"
+        exec systemctl poweroff
+        ;;
+    reboot)
+        logger -t taos-power "power menu: reboot"
+        exec systemctl reboot
+        ;;
+    *)
+        # A verb that is not on the list is dropped and said out loud. No
+        # catch-all that "does something sensible": the whole point of this file
+        # is that the set of privileged outcomes is finite and visible.
+        logger -t taos-power "power menu: refusing unknown verb '$verb'"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,14 @@
+[Unit]
+Description=Watch for a power request from the taOS lock screen
+# The lock screen's power menu cannot power the phone off itself: the controller
+# runs as `taos` and logind answers "challenge" to that user. It drops a verb in
+# this file instead, and the service below acts on it as root.
+
+[Path]
+PathExists=/run/taos-power/request
+# The unit must be able to fire more than once per boot -- the user may cancel
+# the menu, come back and choose again.
+Unit=taos-power.service
+
+[Install]
+WantedBy=multi-user.target

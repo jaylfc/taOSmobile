@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply a power request from the taOS lock screen
+# Triggered by taos-power.path, never enabled directly.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/taos-power-apply
+# The helper removes the request file before acting, so a refused or malformed
+# verb cannot leave the phone powering itself off on every boot.
