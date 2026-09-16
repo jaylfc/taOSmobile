@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore taOS display brightness to 70 percent
+After=multi-user.target taos-kiosk.service
+
+[Service]
+Type=simple
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/taos-brightness
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Restore the panel backlight to a fixed percentage of its max after boot.
+#
+# The panel driver REJECTS brightness writes with EINVAL while the panel is
+# blanked (bl_power != 0), and on a phone the screen is usually off at boot.
+# A plain oneshot therefore fails and leaves the screen at the dim default
+# exactly when the user next wakes it. So poll until the panel is powered and
+# one write actually succeeds, then exit. The value survives later blank/
+# unblank cycles, so a single successful write per boot is enough.
+PCT=70
+MAX_WAIT=43200   # 12h; fail loudly rather than spin forever
+INTERVAL=5
+deadline=$(( $(date +%s) + MAX_WAIT ))
+
+while :; do
+    for d in /sys/class/backlight/*/; do
+        [ -w "$d/brightness" ] || continue
+        m=$(cat "$d/max_brightness" 2>/dev/null) || continue
+        [ -n "$m" ] && [ "$m" -gt 0 ] 2>/dev/null || continue
+        p=$(cat "$d/bl_power" 2>/dev/null || echo 0)
+        [ "$p" = "0" ] || continue          # blanked: a write would EINVAL
+        if echo $(( m * PCT / 100 )) > "$d/brightness" 2>/dev/null; then
+            echo "taos-brightness: set $d to $(( m * PCT / 100 ))/$m (${PCT}%)"
+            exit 0
+        fi
+    done
+    [ "$(date +%s)" -ge "$deadline" ] && break
+    sleep "$INTERVAL"
+done
+echo "taos-brightness: no panel accepted a write within ${MAX_WAIT}s" >&2
+exit 1
