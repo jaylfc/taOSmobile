@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=taOS mobile
+Description=taOS mobile wordmark, white on true black, with a slow glow
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/taos
+ScriptFile=/usr/share/plymouth/themes/taos/taos.script

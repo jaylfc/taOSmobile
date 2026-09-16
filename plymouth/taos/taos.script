@@ -1,0 +1,181 @@
+# taOS mobile boot splash
+#
+# White wordmark on true black, centred, with a slow glow.
+#
+# Black is set to exactly 0,0,0 rather than a near-black: the panel is OLED, so
+# those pixels are switched off entirely instead of lit dark grey. A #010101
+# background would light the whole screen to show it.
+
+#========================================
+# Configuration
+#========================================
+
+# Fraction of the screen width the "taOS" lockup occupies.
+global.lockup_width_pct = 0.56;
+
+# One full breath, in seconds. Deliberately long -- this is a slow glow, not a
+# blink, and a boot that ends mid-cycle should still have looked calm.
+global.glow_period = 4.0;
+
+# The text itself never drops far; the halo behind it does the visible work.
+global.text_min_opacity = 0.72;
+global.text_max_opacity = 1.0;
+global.glow_min_opacity = 0.0;
+global.glow_max_opacity = 0.55;
+
+# Opening fade, in seconds.
+global.intro_duration = 0.9;
+
+# Plymouth refreshes at 50Hz.
+global.frame_seconds = 0.02;
+
+#========================================
+# Background -- true black, both stops
+#========================================
+
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+#========================================
+# Images
+#========================================
+
+# wordmark.png and wordmark-glow.png are rendered onto ONE shared canvas by
+# plymouth/tools/render-wordmark.py, so they are the same size and stay in
+# register under identical scaling. Do not scale them by different ratios.
+text_image = Image("wordmark.png");
+glow_image = Image("wordmark-glow.png");
+
+scale = (Window.GetWidth() * lockup_width_pct) / text_image.GetWidth();
+
+text_image = text_image.Scale(text_image.GetWidth() * scale, text_image.GetHeight() * scale);
+glow_image = glow_image.Scale(glow_image.GetWidth() * scale, glow_image.GetHeight() * scale);
+
+lockup_x = Window.GetX() + (Window.GetWidth() - text_image.GetWidth()) / 2;
+lockup_y = Window.GetY() + (Window.GetHeight() - text_image.GetHeight()) / 2;
+
+# Halo first, so it sits behind the text.
+glow_sprite = Sprite(glow_image);
+glow_sprite.SetPosition(lockup_x, lockup_y, 1);
+glow_sprite.SetOpacity(0);
+
+text_sprite = Sprite(text_image);
+text_sprite.SetPosition(lockup_x, lockup_y, 2);
+text_sprite.SetOpacity(0);
+
+#========================================
+# Animation state
+#========================================
+
+global.elapsed = 0;
+# Wraps every glow_period. Kept separate from elapsed so the phase is computed
+# without a modulo helper, and so a long boot cannot accumulate rounding in it.
+global.glow_time = 0;
+global.status = "normal";
+
+#========================================
+# Glow
+#========================================
+
+# A triangle wave eased by smoothstep. Written out in arithmetic on purpose:
+# it depends on no Math.* helper, so it cannot break on a Plymouth build whose
+# script math library differs from the one on the build host. The eased curve
+# is what makes this read as a glow rather than a linear ramp -- a raw triangle
+# visibly changes direction at the peak.
+fun smooth_pulse(t)
+{
+    phase = t / glow_period;
+
+    u = phase * 2;
+    if (u > 1)
+        u = 2 - u;
+
+    return u * u * (3 - 2 * u);
+}
+
+fun refresh_callback()
+{
+    elapsed += frame_seconds;
+    glow_time += frame_seconds;
+    if (glow_time >= glow_period)
+        glow_time -= glow_period;
+
+    if (status == "error")
+    {
+        # Hold the wordmark solid and stop breathing. A glow that keeps pulsing
+        # calmly through a failure tells the viewer the wrong thing.
+        glow_sprite.SetOpacity(0);
+        text_sprite.SetOpacity(1);
+        return;
+    }
+
+    pulse = smooth_pulse(glow_time);
+
+    text_opacity = text_min_opacity + (text_max_opacity - text_min_opacity) * pulse;
+    glow_opacity = glow_min_opacity + (glow_max_opacity - glow_min_opacity) * pulse;
+
+    # Fade the whole lockup up on the first breath so it does not pop in.
+    if (elapsed < intro_duration)
+    {
+        intro = elapsed / intro_duration;
+        text_opacity = text_opacity * intro;
+        glow_opacity = glow_opacity * intro;
+    }
+
+    text_sprite.SetOpacity(text_opacity);
+    glow_sprite.SetOpacity(glow_opacity);
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+#========================================
+# Status
+#========================================
+
+fun update_status_callback(new_status)
+{
+    if (new_status == "error")
+        global.status = "error";
+    else
+        global.status = "normal";
+}
+
+Plymouth.SetUpdateStatusFunction(update_status_callback);
+
+#========================================
+# Messages
+#========================================
+
+# Boot messages are deliberately not drawn. The splash is a wordmark on black;
+# pmOS emits routine messages that would otherwise print over it.
+
+fun display_message_callback(text)
+{
+}
+
+fun hide_message_callback(text)
+{
+}
+
+Plymouth.SetDisplayMessageFunction(display_message_callback);
+Plymouth.SetHideMessageFunction(hide_message_callback);
+
+#========================================
+# Password prompt
+#========================================
+
+# The rootfs is not encrypted today, so there is no prompt to draw. If FDE is
+# ever enabled this MUST be implemented -- without it the device would sit on a
+# glowing wordmark with no indication it is waiting for a passphrase.
+
+#========================================
+# Quit
+#========================================
+
+fun quit_callback()
+{
+    text_sprite.SetOpacity(1);
+    glow_sprite.SetOpacity(0);
+}
+
+Plymouth.SetQuitFunction(quit_callback);
