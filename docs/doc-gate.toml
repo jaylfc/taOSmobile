@@ -51,6 +51,12 @@ referenced_paths_scan = [
 # historical record; neither is right, so it is declared out of scope here.
 unscanned_paths = [
   "docs/superpowers/plans/2026-07-20-taosmobile-demo-plan.md",
+  # The kernel-patch note deliberately names paths OUTSIDE this repo: the
+  # pmaports package directory it is applied in, and the two ~/.taos-team
+  # records that carry the camera measurements and the flash rules. Scanning it
+  # would demand those exist here, and copying pmaports into this repo to
+  # satisfy a linter would be the tail wagging the dog.
+  "pmos/kernel/README.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and
