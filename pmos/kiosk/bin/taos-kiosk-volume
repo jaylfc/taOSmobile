@@ -62,9 +62,6 @@ if panel_off; then
         exit 0
     fi
     SCREEN=off
-    # Wake it, so the arc has something to appear on. taos-kiosk-screen also
-    # re-enables touch and re-arms the idle watcher.
-    [ "$ACTION" = press ] && /usr/local/bin/taos-kiosk-screen on >/dev/null 2>&1 || true
 fi
 
 # `screen` tells the page this began on a dark screen, so it can show the arc
@@ -78,3 +75,24 @@ curl -sS --max-time 2 -X POST \
     -d "{\"key\":\"$KEY\",\"action\":\"$ACTION\",\"screen\":\"$SCREEN\"}" \
     "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-volume-key" \
     >/dev/null 2>&1 || true
+
+# WAKE THE PANEL *AFTER* TELLING THE PAGE, NOT BEFORE.
+#
+# Jay: "when i activate the rotary menu with the screen off the lock screen
+# flashes into view first, it breaks the visual appeal." It did, and the order
+# here was why: waking first meant the panel lit showing the whole lock screen,
+# and only then did the event arrive and the page hide it. The flash was a
+# genuinely lit frame, not a rendering artefact.
+#
+# Reversed, the page has already hidden the lock screen by the time the panel
+# comes up, so the FIRST LIT FRAME is the arc on black. The wake is also what
+# re-enables touch and re-arms the idle watcher, so it still has to happen.
+#
+# The pause is for the page to apply the change: curl returns once the
+# controller has pushed the event, which is before the browser has painted it.
+# 150ms is a frame or two at 60Hz with room to spare, and it is imperceptible
+# against a screen that was dark anyway -- if anything it reads as deliberate.
+if [ "$SCREEN" = off ] && [ "$ACTION" = press ]; then
+    sleep 0.15
+    /usr/local/bin/taos-kiosk-screen on >/dev/null 2>&1 || true
+fi
