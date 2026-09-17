@@ -195,3 +195,33 @@ is using it.
 
 ⚠ **And `pmbootstrap build ... | tail` exits 0 even when the build FAILED.** The pipeline's status
 is `tail`'s. Assert on the artefact — `ls .../linux-...-r<N>.apk` — never on the return code.
+
+---
+
+# ⚠ CORRECTION: `config-r6-dma-heaps.diff` DIAGNOSED THE WRONG HEAP
+
+Measured on the handset after flashing r7 (system heap present, CMA back to 16 MiB):
+
+```
+cma: __cma_alloc_frozen: reserved: alloc failed, req-size: 3888 pages, ret: -16
+=> 3072 free of 4096 total pages
+```
+
+**libcamera 0.7.2 allocates from the CMA-backed `reserved` heap, not `/dev/dma_heap/system`.**
+All three heaps (`system`, `reserved`, `default_cma_region`) exist and capture still fails, so
+`CONFIG_DMABUF_HEAPS_SYSTEM=y` was never the blocker. It is harmless and may stay.
+
+The blocker is CMA **size**: one front-camera frame wants 3888 pages (15.2 MiB) and the whole region
+is 4096 pages (16 MiB) with 3072 free. The rear 50MP frame wants **49152 pages (192 MiB)**.
+
+**And `CONFIG_CMA_SIZE_MBYTES=512` is actively dangerous here.** It cannot be reserved —
+`cma: Failed to reserve 512 MiB`, leaving `CmaTotal: 0 kB` — because CMA lives only in ZONE_DMA
+(`0x80000000-0x100000000`, `DMA32 empty`, `Normal` starts at 4 GiB) which ~20 `no-map` carveouts
+shred. With CMA at zero the remoteprocs never start, and on this SoC that takes out **wifi (WPSS)
+and the battery gauge (ADSP `charger_pd` over PMIC GLINK)** together, while the display keeps
+working — a very misleading symptom set that looks exactly like a module mismatch. It is not one:
+`dmesg` showed zero module errors.
+
+⇨ The fix to carry forward is **`CONFIG_CMA_SIZE_MBYTES=256`**, stepping DOWN (192/128/64) if it
+fails to reserve, never up. After any change to it, the first check is `grep CmaTotal /proc/meminfo`
+plus wifi and battery, because a failed reservation is silent in userspace.
