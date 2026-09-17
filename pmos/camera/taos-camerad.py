@@ -47,6 +47,12 @@ from PIL import Image
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TAOS_CAMERAD_PORT", "6971"))
+#: The app page, beside this file when run from the repo and in /usr/lib/taos
+#: once installed. Served by camerad itself rather than by the controller: the
+#: camera is device hardware, and this makes the camera the first taOS app to
+#: run as its OWN window (chromium --app), which is the shape every app is
+#: meant to take.
+APP_HTML = Path(os.environ.get("TAOS_CAMERAD_APP", str(Path(__file__).with_name("app.html"))))
 PHOTOS = Path(os.environ.get("TAOS_CAMERAD_DIR", str(Path.home() / "Pictures" / "taOS")))
 PREVIEW = (1280, 960)
 #: How long a still may wait for a frame newer than the shutter press. A still
@@ -252,6 +258,18 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         try:
+            if u.path in ("/", "/index.html"):
+                if not APP_HTML.is_file():
+                    return self._json({"error": "app.html is missing"}, 500)
+                body = APP_HTML.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                # The page changes when the service is reinstalled and the
+                # window is long-lived, so it must not be cached.
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if u.path == "/health":
                 err = _SESSION.error if _SESSION else None
                 return self._json({"ok": err is None, "cameras": sorted(_cameras()),

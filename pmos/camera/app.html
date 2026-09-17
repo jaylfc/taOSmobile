@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Camera</title>
+<style>
+  /* The lock screen's vocabulary, deliberately: this is the first taOS app to
+     run in its own window, and it should not look like a different product
+     from the screen it is launched off. Same near-black, same card radius,
+     same type stack. */
+  :root {
+    --bg: #05060a;
+    --fg: #f4f5f8;
+    --dim: rgba(244,245,248,.55);
+    --line: rgba(244,245,248,.14);
+    --card: rgba(244,245,248,.06);
+    --shutter: #f4f5f8;
+    --danger: #ff5a52;
+    --r: 22px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px/1.35 -apple-system, "SF Pro Text", Inter, "Noto Sans", system-ui, sans-serif;
+    overscroll-behavior: none; user-select: none;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* The viewfinder owns the screen; everything else floats over it. */
+  #stage {
+    position: relative; flex: 1 1 auto; min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #000; overflow: hidden;
+  }
+  #view {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    /* The FRONT camera is a mirror. Every phone does this: an unmirrored
+       selfie preview makes people move the wrong way. The SAVED file is not
+       mirrored -- only what you are looking at is. */
+    transition: opacity .18s ease;
+  }
+  body[data-cam="front"] #view { transform: scaleX(-1); }
+  #view[data-loading="1"] { opacity: .25; }
+
+  #hint {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    color: var(--dim); font-size: 14px; text-align: center; pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  #hint[hidden] { display: none; }
+
+  /* Status line: the honest one. It says what the camera cannot do rather
+     than letting the user find out by pressing something that lies. */
+  #note {
+    position: absolute; left: 12px; right: 12px; top: 12px;
+    background: rgba(5,6,10,.62); backdrop-filter: blur(12px);
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 8px 12px; font-size: 12px; color: var(--dim);
+  }
+
+  #bar {
+    flex: 0 0 auto; padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
+  }
+  .round {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--card); border: 1px solid var(--line); color: var(--fg);
+    display: grid; place-items: center; font-size: 20px; cursor: pointer;
+  }
+  .round:active { background: rgba(244,245,248,.16); }
+  #shutter {
+    width: 74px; height: 74px; border-radius: 50%;
+    background: var(--shutter); border: 4px solid rgba(5,6,10,.9);
+    box-shadow: 0 0 0 3px var(--shutter); cursor: pointer; justify-self: center;
+  }
+  #shutter:active { transform: scale(.94); }
+  #shutter[disabled] { opacity: .4; }
+  #last { justify-self: end; overflow: hidden; padding: 0; }
+  #last img { width: 100%; height: 100%; object-fit: cover; }
+
+  /* Gallery: a sheet, not a page. Closing it must put the viewfinder back
+     exactly as it was, so the stream is never torn down. */
+  #gallery {
+    position: fixed; inset: 0; background: rgba(5,6,10,.94);
+    backdrop-filter: blur(20px); display: flex; flex-direction: column;
+    transform: translateY(101%); transition: transform .28s cubic-bezier(.2,.8,.2,1);
+    z-index: 5;
+  }
+  #gallery[data-open="1"] { transform: none; }
+  #ghead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 16px 10px; font-weight: 600;
+  }
+  #ghead button {
+    background: none; border: 0; color: var(--dim); font: inherit; font-weight: 500;
+    cursor: pointer; padding: 6px;
+  }
+  #grid {
+    flex: 1 1 auto; overflow-y: auto; display: grid; gap: 6px; padding: 0 16px 24px;
+    grid-template-columns: repeat(3, 1fr); align-content: start;
+  }
+  .tile {
+    position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile button {
+    position: absolute; right: 5px; top: 5px; width: 28px; height: 28px;
+    border-radius: 50%; border: 0; background: rgba(5,6,10,.72); color: var(--danger);
+    font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  #empty { grid-column: 1 / -1; color: var(--dim); text-align: center; padding: 40px 0; }
+  #toast {
+    position: fixed; left: 50%; bottom: 120px; transform: translate(-50%, 8px);
+    background: rgba(5,6,10,.9); border: 1px solid var(--line); border-radius: 12px;
+    padding: 9px 14px; font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease; z-index: 9;
+  }
+  #toast[data-on="1"] { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body data-cam="front">
+  <div id="stage">
+    <img id="view" alt="Viewfinder">
+    <div id="hint">Opening the camera…</div>
+    <div id="note">No autofocus on this device yet, and colour is uncalibrated.</div>
+  </div>
+
+  <div id="bar">
+    <button class="round" id="flip" title="Switch camera" aria-label="Switch camera">⟳</button>
+    <button id="shutter" aria-label="Take a photo"></button>
+    <button class="round" id="last" title="Photos" aria-label="Photos"></button>
+  </div>
+
+  <section id="gallery" aria-hidden="true">
+    <div id="ghead"><span>Photos</span><button id="gclose">Done</button></div>
+    <div id="grid"></div>
+  </section>
+
+  <div id="toast" role="status"></div>
+
+<script>
+(function () {
+  "use strict";
+  var view = document.getElementById("view");
+  var hint = document.getElementById("hint");
+  var flip = document.getElementById("flip");
+  var shutter = document.getElementById("shutter");
+  var lastBtn = document.getElementById("last");
+  var gallery = document.getElementById("gallery");
+  var grid = document.getElementById("grid");
+  var toastEl = document.getElementById("toast");
+  var cam = "front";
+  var toastTimer = null;
+
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.setAttribute("data-on", "1");
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(function () {
+      toastEl.removeAttribute("data-on");
+    }, 1800);
+  }
+
+  // The stream is a plain <img> on an MJPEG multipart response: no decoding
+  // code here, no canvas, no WebRTC. The cache-buster matters -- without it a
+  // re-opened stream can be served from the browser's copy of the FIRST frame
+  // and the viewfinder freezes on a still image that looks like a hung camera.
+  function openStream() {
+    view.setAttribute("data-loading", "1");
+    hint.hidden = false;
+    view.src = "/preview.mjpg?cam=" + cam + "&t=" + Date.now();
+  }
+  view.addEventListener("load", function () {
+    view.removeAttribute("data-loading");
+    hint.hidden = true;
+  });
+  view.addEventListener("error", function () {
+    hint.hidden = false;
+    hint.textContent = "The camera did not answer. Retrying…";
+    window.setTimeout(openStream, 1500);
+  });
+
+  flip.addEventListener("click", function () {
+    cam = cam === "front" ? "rear" : "front";
+    document.body.setAttribute("data-cam", cam);
+    hint.textContent = cam === "front" ? "Front camera…" : "Rear camera…";
+    hint.hidden = false;
+    // Switching reconfigures the sensor, which takes a moment. Drop the old
+    // stream FIRST: leaving it attached leaves the previous camera's last
+    // frame on screen, which reads as the flip having done nothing.
+    view.removeAttribute("src");
+    fetch("/switch?cam=" + cam, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function () { openStream(); })
+      .catch(function () { toast("Could not switch camera"); openStream(); });
+  });
+
+  shutter.addEventListener("click", function () {
+    shutter.disabled = true;
+    fetch("/capture?cam=" + cam, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) throw new Error((d && d.error) || "capture failed");
+        setThumb(d.name);
+        toast("Saved");
+      })
+      .catch(function (e) { toast(String(e.message || e)); })
+      .then(function () { shutter.disabled = false; });
+  });
+
+  function setThumb(name) {
+    lastBtn.textContent = "";
+    var img = document.createElement("img");
+    img.src = "/photo/" + encodeURIComponent(name);
+    img.alt = "";
+    lastBtn.appendChild(img);
+  }
+
+  function loadPhotos() {
+    return fetch("/photos").then(function (r) { return r.json(); }).then(function (d) {
+      var shots = (d && d.photos) || [];
+      grid.textContent = "";
+      if (!shots.length) {
+        var none = document.createElement("div");
+        none.id = "empty";
+        none.textContent = "No photos yet.";
+        grid.appendChild(none);
+        return shots;
+      }
+      shots.forEach(function (p) {
+        var tile = document.createElement("div");
+        tile.className = "tile";
+        var img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = "/photo/" + encodeURIComponent(p.name);
+        img.alt = p.name;
+        var del = document.createElement("button");
+        del.textContent = "✕";
+        del.title = "Delete";
+        del.setAttribute("aria-label", "Delete " + p.name);
+        del.addEventListener("click", function () {
+          // Removed from the grid only once the SERVER has confirmed. A tile
+          // that vanishes on tap and comes back on the next open is worse
+          // than one that takes a moment.
+          fetch("/photo/" + encodeURIComponent(p.name), { method: "DELETE" })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (!res || !res.ok) throw new Error("delete failed");
+              tile.remove();
+              if (!grid.children.length) loadPhotos();
+              refreshThumb();
+              toast("Deleted");
+            })
+            .catch(function () { toast("Could not delete"); });
+        });
+        tile.appendChild(img);
+        tile.appendChild(del);
+        grid.appendChild(tile);
+      });
+      return shots;
+    });
+  }
+
+  function refreshThumb() {
+    fetch("/photos").then(function (r) { return r.json(); }).then(function (d) {
+      var shots = (d && d.photos) || [];
+      if (shots.length) setThumb(shots[0].name);
+      else lastBtn.textContent = "▦";
+    }).catch(function () {});
+  }
+
+  lastBtn.addEventListener("click", function () {
+    loadPhotos().then(function () {
+      gallery.setAttribute("data-open", "1");
+      gallery.setAttribute("aria-hidden", "false");
+    });
+  });
+  document.getElementById("gclose").addEventListener("click", function () {
+    gallery.removeAttribute("data-open");
+    gallery.setAttribute("aria-hidden", "true");
+  });
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && gallery.hasAttribute("data-open")) {
+      document.getElementById("gclose").click();
+    }
+  });
+
+  openStream();
+  refreshThumb();
+})();
+</script>
+</body>
+</html>

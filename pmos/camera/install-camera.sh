@@ -12,6 +12,7 @@ apk add --no-interactive py3-libcamera py3-pillow >/dev/null
 
 echo "==> service"
 install -D -m 0755 "$(dirname "$0")/taos-camerad.py" /usr/lib/taos/taos-camerad.py
+install -D -m 0644 "$(dirname "$0")/app.html" /usr/lib/taos/app.html
 install -D -m 0644 "$(dirname "$0")/taos-camerad.service" \
   /etc/systemd/system/taos-camerad.service
 install -d -o taos -g taos -m 0755 /home/taos/Pictures /home/taos/Pictures/taOS
