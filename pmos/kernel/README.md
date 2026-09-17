@@ -106,3 +106,92 @@ This exact trap is already documented in
 `pmos/kiosk/install-kiosk-continuity.sh`, in a comment about the PNG header
 check, and I hit it regardless. Read DT cells with python3's `struct.unpack`
 on this device, never `od --endian`.
+
+---
+
+# ⇨ FLASHED AND VERIFIED ON THE HANDSET — 2026-09-17 ~16:00Z
+
+`pmbootstrap flasher flash_kernel` from omarchy, `r5`, into **boot_b** (`current-slot: b`,
+`unlocked: yes`, `partition-size:boot_b 0x6000000`). Booted first try: `7.2.2
+#6-postmarketos-qcom-sc7280`, wifi up in ~30s, battery 98%.
+
+## THIS ALSO DISCHARGES "STEP 4"
+
+STEP 4 was owed: *prove a deliberate kernel change actually reaches boot_b via the omarchy
+`flash_kernel` path.* It now has a direct reading from the RUNNING kernel's own device tree:
+
+```
+soc@0/cci@ac4a000/i2c-bus@0/camera@1a/port/endpoint/link-frequencies -> [600000000]   # imx471, untouched
+soc@0/cci@ac4b000/i2c-bus@0/camera@2d/port/endpoint/link-frequencies -> [700000000]   # s5kjn1, MY CHANGE
+```
+
+Read with python3 `int.from_bytes(..., "big")`, **not** `od --endian` — see the trap above. The
+600MHz neighbour is the control: it proves the reading discriminates, rather than printing 700MHz
+for everything.
+
+## THE HYPOTHESIS WAS RIGHT: THE REAR SENSOR WAS BLOCKING THE FRONT
+
+`CAMERA-taosmobile-dev.md` inferred that CAMSS creates sensor links only in its async-notifier
+COMPLETE callback, so the failing rear sensor meant NO links were created for either camera. That
+was explicitly flagged as inference. It is now measured:
+
+| | before | after |
+|---|---|---|
+| `s5kjn1` (rear) probe | `-EINVAL` MCLK, then `-ENOENT` link freq | **binds** (`18-002d`) |
+| `imx471` (front) links | **0 links** | **1 link** → `msm_csiphy0` |
+| `/dev/v4l-subdev*` | absent | present (29 nodes) |
+| `dmesg \| grep s5kjn1` | two errors | **silent** |
+| `cam -l` | `No sensor found for /dev/media0` | **both cameras listed** |
+
+```
+Available cameras:
+1: Internal back camera  (/base/soc@0/cci@ac4b000/i2c-bus@0/camera@2d)   SGRBG10_1X10/8160x6144
+2: Internal front camera (/base/soc@0/cci@ac4a000/i2c-bus@0/camera@1a)   SGRBG10_1X10/2304x1728
+```
+
+Jay's call to fix BOTH sensors in one flash rather than disabling the rear one (Option A in the
+camera notes) is what produced this: Option A would have got the front camera working and left the
+50MP rear permanently off.
+
+## ⇨ THE REMAINING BLOCKER IS NOT THE CAMERA — IT IS DMA HEAPS (r6)
+
+`cam -C3` configures both cameras, then fails in the ALLOCATOR:
+
+```
+ERROR DmaBufAllocator dma_buf_allocator.cpp:173 dma-heap allocation failure for frame-0
+```
+
+Measured cause, three independent readings agreeing:
+
+1. `/dev/dma_heap/` contains **only `reserved`** — because
+   `# CONFIG_DMABUF_HEAPS_SYSTEM is not set`. There is no `system` heap, so the only heap
+   libcamera can reach is CMA-backed.
+2. That CMA area is **16 MiB** (`CONFIG_CMA_SIZE_MBYTES=16`; `CmaTotal: 16384 kB`).
+3. The kernel names the exact shortfall:
+   `cma: __cma_alloc_frozen: reserved: alloc failed, req-size: 3888 pages, ret: -16` (≈15.2 MiB,
+   front) and `req-size: 49152 pages` (**192 MiB**, the 50MP rear), with only
+   `range 0: +3072@1024` (12 MiB) contiguous free. `-16` is `-EBUSY`.
+
+So a 16 MiB CMA area cannot satisfy even the FRONT camera, let alone a 50MP frame.
+
+**`config-r6-dma-heaps.diff` is the fix** — two hunks, config-only, no source change:
+`CONFIG_DMABUF_HEAPS_SYSTEM=y` (gives `/dev/dma_heap/system`, ordinary pages, no contiguity
+requirement — CAMSS is behind an IOMMU, so scatter-gather is fine) and
+`CONFIG_CMA_SIZE_MBYTES=512` as belt-and-braces for any consumer that really does want contiguous
+memory. CMA reservation is not lost memory: the area accepts movable allocations when no DMA client
+is using it.
+
+## TWO FLASHER TRAPS HIT THIS SESSION — BOTH COST A CYCLE
+
+- **`pmbootstrap flasher` globs `config-*` in the aport dir.** A leftover
+  `config-postmarketos-qcom-sc7280.aarch64.bak-sdam` made it abort with
+  *"...bak-sdam is not a valid kernel configname"* — and it aborted at the `mkinitfs` step,
+  AFTER "install device-nothing-spacewar", which reads like a device-package problem rather than a
+  stray file. The `pmbootstrap build` of the same package tolerated the file, so the build passing
+  is NOT evidence the flasher will. **Keep config backups OUTSIDE the aport directory.**
+- **The config is in `source=` and is checksummed.** Editing it fails the build in ~1 second with
+  `config-...aarch64: FAILED / 1 of 1 computed checksums did NOT match`. Run
+  `pmbootstrap checksum linux-postmarketos-qcom-sc7280` after ANY config edit.
+
+⚠ **And `pmbootstrap build ... | tail` exits 0 even when the build FAILED.** The pipeline's status
+is `tail`'s. Assert on the artefact — `ls .../linux-...-r<N>.apk` — never on the return code.

@@ -1,0 +1,20 @@
+--- i/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
++++ w/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
+@@ -6608,7 +6608,7 @@
+ CONFIG_UDMABUF=y
+ # CONFIG_DMABUF_DEBUG is not set
+ CONFIG_DMABUF_HEAPS=y
+-# CONFIG_DMABUF_HEAPS_SYSTEM is not set
++CONFIG_DMABUF_HEAPS_SYSTEM=y
+ CONFIG_DMABUF_HEAPS_CMA=y
+ # end of DMABUF options
+ 
+@@ -8702,7 +8702,7 @@
+ #
+ # Default contiguous memory area size:
+ #
+-CONFIG_CMA_SIZE_MBYTES=16
++CONFIG_CMA_SIZE_MBYTES=512
+ CONFIG_CMA_SIZE_SEL_MBYTES=y
+ # CONFIG_CMA_SIZE_SEL_PERCENTAGE is not set
+ # CONFIG_CMA_SIZE_SEL_MIN is not set
