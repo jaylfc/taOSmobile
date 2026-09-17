@@ -38,14 +38,38 @@ touch_events() {
     swaymsg "input $TOUCH events $1" >/dev/null 2>&1 || true
 }
 
+# Tell the page the panel is going down or coming up.
+#
+# WHY THIS MATTERS AND IS NOT COSMETIC: the page CANNOT PAINT while the output
+# is off -- Wayland stops delivering frame callbacks to a surface on a
+# powered-down output. So whatever a waking panel shows is the last frame
+# painted BEFORE it blanked, held in the scanout buffer. Jay, twice: "the lock
+# screen still flashes into view first." It was that stale frame, not a
+# transition.
+#
+# So the page is blackened here, while a compositor is still listening, and the
+# pause is for it to actually paint that frame. Told on the way back too, or it
+# would stay black on a lit panel.
+page() {
+    curl -sS --max-time 2 -X POST \
+        "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-screen-$1" \
+        >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
 off)
+    page off
+    # One frame at 60Hz is 16ms; 120 leaves room for chromium to lay out and
+    # composite on a phone that may be busy. It is spent on a screen the user
+    # has already stopped looking at.
+    sleep 0.12
     touch_events disabled
     exec swaymsg "output * power off"
     ;;
 on)
     swaymsg "output * power on" >/dev/null 2>&1 || true
     touch_events enabled
+    page on
     # RE-ARM THE IDLE WATCHER. This lived in taos-kiosk-power until the power-on
     # moved here, and leaving it behind reintroduced the exact bug that comment
     # was written for: powering the output on over the IPC produces NO INPUT
