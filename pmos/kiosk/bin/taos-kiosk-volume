@@ -28,10 +28,53 @@ ACTION="${2:-}"
 case "$KEY" in up|down) ;; *) echo "usage: taos-kiosk-volume up|down press|release" >&2; exit 2 ;; esac
 case "$ACTION" in press|release) ;; *) echo "usage: taos-kiosk-volume up|down press|release" >&2; exit 2 ;; esac
 
+# IS THE PANEL OFF? The keys are bound --locked so they work while it is, which
+# is what lets the rotary chooser appear on a dark screen -- but it also means a
+# press in a pocket used to reach the page and act where nobody could see it.
+# Jay: "the phone is registering volume button presses when screen is off."
+panel_off() {
+    swaymsg -t get_outputs --raw 2>/dev/null \
+        | grep -o '"power": *[a-z]*' | head -1 | grep -q false
+}
+
+# THE POCKET GATE, and it is PROXIMITY, not light.
+#
+# Jay suggested the ambient light sensor. Both exist here -- iio-sensor-proxy
+# reports HasAmbientLight and HasProximity, live -- but light alone is the wrong
+# signal: a pocket is dark AND near, while a dark bedroom at 2am is dark and NOT
+# near. Gating on darkness would block legitimate use in exactly the conditions
+# the phone is most likely to be used in bed. Proximity is what separates the
+# two, so it is the gate; light is not consulted at all.
+#
+# Fails OPEN. If the sensor cannot be read the press goes through: a gate that
+# swallowed every keypress whenever iio-sensor-proxy was down would be a phone
+# whose volume keys silently stopped working, which is worse than a pocket wake.
+in_pocket() {
+    busctl --system get-property net.hadess.SensorProxy /net/hadess/SensorProxy \
+        net.hadess.SensorProxy ProximityNear 2>/dev/null | grep -q "true"
+}
+
+SCREEN=on
+if panel_off; then
+    if in_pocket; then
+        # Dropped entirely, and not logged per press: someone leaning on the
+        # rocker in a pocket would fill the journal.
+        exit 0
+    fi
+    SCREEN=off
+    # Wake it, so the arc has something to appear on. taos-kiosk-screen also
+    # re-enables touch and re-arms the idle watcher.
+    [ "$ACTION" = press ] && /usr/local/bin/taos-kiosk-screen on >/dev/null 2>&1 || true
+fi
+
+# `screen` tells the page this began on a dark screen, so it can show the arc
+# over black rather than over the full lock screen -- Jay: "it will look nice
+# against the black oled screen".
+#
 # --max-time so a wedged controller can never leave these stacking up behind a
 # user leaning on the volume rocker.
 curl -sS --max-time 2 -X POST \
     -H 'Content-Type: application/json' \
-    -d "{\"key\":\"$KEY\",\"action\":\"$ACTION\"}" \
+    -d "{\"key\":\"$KEY\",\"action\":\"$ACTION\",\"screen\":\"$SCREEN\"}" \
     "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-volume-key" \
     >/dev/null 2>&1 || true

@@ -1,6 +1,14 @@
 #!/bin/sh
-# Carry out a power request from the lock screen's power menu. Runs as ROOT,
-# started by taos-power.path when /run/taos-power/request appears.
+# Carry out a privileged request from the lock screen. Runs as ROOT, started by
+# taos-power.path when /run/taos-power/request appears.
+#
+# It began as the power menu's helper and now also serves the quick-settings
+# radio switches, because the obstacle is identical: the controller runs as
+# `taos`, and the thing it needs is refused for that user. logind answers
+# "challenge" to CanPowerOff, and NetworkManager answers `no` to
+# enable-disable-wifi -- measured with `nmcli general permissions`. One drop box
+# with one closed list of verbs is easier to audit than a second mechanism that
+# solves the same problem differently.
 #
 # WHY NOT POLKIT: the controller runs as `taos`, whose logind session is
 # `manager-early`, not an active seat. logind answers "challenge" to both
@@ -52,11 +60,32 @@ case "$verb" in
         logger -t taos-power "power menu: reboot"
         exec systemctl --no-block reboot
         ;;
+    wifi-on)
+        logger -t taos-power "quick settings: wifi on"
+        exec nmcli radio wifi on
+        ;;
+    wifi-off)
+        # ⚠ THIS CAN STRAND A HEADLESS DEVICE. The handset is reachable over the
+        # tailnet, which rides on wifi; with USB disconnected, turning it off
+        # from here leaves no way back in until someone touches the phone. That
+        # is correct behaviour for a switch the USER flicks -- every phone lets
+        # you do it -- but it is why nothing automated may ever write this verb.
+        logger -t taos-power "quick settings: wifi off"
+        exec nmcli radio wifi off
+        ;;
+    bt-on)
+        logger -t taos-power "quick settings: bluetooth on"
+        exec rfkill unblock bluetooth
+        ;;
+    bt-off)
+        logger -t taos-power "quick settings: bluetooth off"
+        exec rfkill block bluetooth
+        ;;
     *)
         # A verb that is not on the list is dropped and said out loud. No
         # catch-all that "does something sensible": the whole point of this file
         # is that the set of privileged outcomes is finite and visible.
-        logger -t taos-power "power menu: refusing unknown verb '$verb'"
+        logger -t taos-power "refusing unknown verb '$verb'"
         exit 1
         ;;
 esac

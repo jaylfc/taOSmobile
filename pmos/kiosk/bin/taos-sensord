@@ -1,0 +1,29 @@
+#!/bin/sh
+# Hold a claim on the light and proximity sensors, so their readings stay live.
+#
+# WHY A CLAIM IS NEEDED AT ALL: iio-sensor-proxy only polls a sensor while some
+# client has claimed it. Its D-Bus properties are readable without a claim --
+# `busctl get-property ... ProximityNear` answers straight away -- but what it
+# answers is whatever was last read, which may be from whenever the last client
+# disconnected. A pocket gate reading a stale "not near" would let every pocket
+# press through, and it would look like the gate simply did not work.
+#
+# WHY monitor-sensor: a claim lives for as long as the claiming CONNECTION, so
+# `busctl call ... ClaimProximity` is useless -- busctl exits and the claim goes
+# with it. Holding one needs a process that stays on the bus, and
+# monitor-sensor is the only thing on this image that claims and stays. It is a
+# debug tool being used as a claim holder, which is a stand-in: if this ever
+# needs to do more than hold the claim, replace it with a real D-Bus client
+# rather than parsing its output.
+#
+# Its stdout is discarded ON PURPOSE. Nothing here consumes it -- readers ask
+# iio-sensor-proxy for the properties directly, which is a stable interface,
+# where monitor-sensor's human-readable lines are not.
+set -eu
+
+command -v monitor-sensor >/dev/null 2>&1 || {
+    echo "taos-sensord: monitor-sensor not installed; sensors will read stale" >&2
+    exit 1
+}
+
+exec monitor-sensor >/dev/null 2>&1
