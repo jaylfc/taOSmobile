@@ -62,3 +62,47 @@ In pmaports, `device/community/linux-postmarketos-qcom-sc7280/`:
    `apk add`, which boots but hangs after `pmos_continue_boot`
    (see `FLASHING-taosmobile-dev.md`), and install matching modules as root
    (see the `flash_kernel` modules lesson).
+
+
+## 0003-s5kjn1-link-freq-700mhz.patch — THE SECOND HALF, found by testing the first
+
+With 0002 applied the MCLK error is GONE and the driver fails one step later:
+
+```
+s5kjn1 18-002d: no matching link frequencies found
+s5kjn1 18-002d: error -ENOENT: failed to check HW configuration
+```
+
+The fork's DTS declares `link-frequencies = /bits/ 64 <600000000>` for the
+s5kjn1 endpoint (line ~937), and the driver supports only
+`S5KJN1_LINK_FREQ_700MHZ`. Upstream patch 2/2 uses `700000000`, so that is what
+this sets. `data-lanes = <1 2 3 4>` already matches upstream and is untouched.
+
+⚠ **ONLY the s5kjn1 endpoint changes.** The imx471 endpoint also declares
+600MHz and its driver ACCEPTS it — that camera already binds, and "fix both
+endpoints" would break a working one.
+
+### HOW 0002 WAS PROVEN WITHOUT A FLASH
+
+`s5kjn1` is a loadable MODULE and 0002 touches only that one file, so the
+rebuilt `s5kjn1.ko.zst` was installed on the live handset and the driver
+reloaded — no flash. vermagic matched (`7.2.2 SMP preempt mod_unload aarch64`,
+same pkgrel), and `v4l2-async` waits indefinitely rather than timing out, so a
+late-registering subdev is still eligible. The original module is backed up
+on-device at `s5kjn1.ko.zst.orig`.
+
+That is why the flash is now low-risk: the driver half is already known to work
+on this hardware, and only the DTB value is unproven. **The DTB cannot be
+hot-loaded, so the flash is still required for 0003.**
+
+## ⚠ A MEASUREMENT TRAP I FELL INTO ANYWAY
+
+Reading `link-frequencies` with `od -An -tu8 --endian=big` printed NOTHING, and
+I read that as "the property does not exist" and wrote it up as such. **busybox
+`od` has no `--endian`** — the flag makes od fail and emit nothing, so an absent
+property and an unreadable one look identical.
+
+This exact trap is already documented in
+`pmos/kiosk/install-kiosk-continuity.sh`, in a comment about the PNG header
+check, and I hit it regardless. Read DT cells with python3's `struct.unpack`
+on this device, never `od --endian`.

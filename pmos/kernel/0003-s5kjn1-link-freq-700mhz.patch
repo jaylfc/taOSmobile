@@ -1,0 +1,27 @@
+From: jaylfc <jaylfc25@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sm7325-nothing-spacewar: s5kjn1 link freq 700MHz
+
+The s5kjn1 endpoint declares a 600MHz link frequency, but the driver only
+supports S5KJN1_LINK_FREQ_700MHZ. With the 19.2MHz MCLK patch applied the
+sensor gets past its clock check and then fails here instead:
+
+  s5kjn1 18-002d: no matching link frequencies found
+  s5kjn1 18-002d: error -ENOENT: failed to check HW configuration
+
+700000000 is the value upstream uses for this sensor on this board (patch 2/2
+of Danila Tikhonov"s ultra-wide series). Only the s5kjn1 endpoint is touched:
+the imx471 endpoint also declares 600MHz and its driver accepts it, so
+changing that would break a camera that already binds.
+
+--- a/arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts
++++ b/arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts
+@@ -933,8 +933,8 @@
+ 		port {
+ 			camera_s5kjn1_ep: endpoint {
+ 				data-lanes = <1 2 3 4>;
+ 				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+-				link-frequencies = /bits/ 64 <600000000>;
++				link-frequencies = /bits/ 64 <700000000>;
+ 				remote-endpoint = <&csiphy2_ep>;
+ 			};
+ 		};
