@@ -81,6 +81,22 @@ case "$verb" in
         logger -t taos-power "quick settings: bluetooth off"
         exec rfkill block bluetooth
         ;;
+    app-camera)
+        # OPEN THE CAMERA APP. It lands here rather than in a second drop box
+        # for the reason this file already gives: one box with one closed list
+        # of verbs is easier to audit than a second mechanism solving the same
+        # problem differently. The privilege needed is the same shape, too --
+        # the launcher uses systemd-run --uid, which `taos` cannot do.
+        #
+        # THE TRUST BOUNDARY, stated as plainly as the poweroff one: this opens
+        # the CAMERA, pre-auth, on a phone anyone could be holding. That is what
+        # every phone does, and it is worth being exact about why it is not a
+        # widening -- the app shows a viewfinder and the photos taken FROM it.
+        # It is not a way into the gallery of a signed-in user, because the lock
+        # screen has no signed-in user and camerad serves one fixed directory.
+        logger -t taos-power "lock screen: open camera"
+        exec /usr/local/bin/taos-app-launch camera http://camera.taos:6971/
+        ;;
     *)
         # A verb that is not on the list is dropped and said out loud. No
         # catch-all that "does something sensible": the whole point of this file
