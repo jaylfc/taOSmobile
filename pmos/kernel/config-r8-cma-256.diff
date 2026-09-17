@@ -1,0 +1,34 @@
+# r8 — THE CONFIG THAT MAKES BOTH CAMERAS CAPTURE. Proven on the handset
+# 2026-09-17 18:0xZ: CmaTotal 262144 kB, wifi up, battery 100%, `cam -c 1 -C20`
+# and `cam -c 2 -C1` both return frames.
+#
+# This supersedes config-r6-dma-heaps.diff, which asked for 512 MiB and got
+# ZERO: a CMA reservation that fails is silent in userspace, and CmaTotal 0
+# kills every remoteproc, which on this SoC takes wifi (WPSS) and the battery
+# gauge (ADSP charger_pd) with it. ZONE_DMA here is 0x80000000-0x100000000,
+# shredded by ~20 no-map carveouts, so there is no 512 MiB contiguous block.
+# If 256 ever fails to reserve, step DOWN (192, 128, 64) — never up, and read
+# `dmesg | grep "cma:"` before believing a boot.
+#
+# DMABUF_HEAPS_SYSTEM stays on but is NOT what fixed this: libcamera 0.7.2
+# allocates from the CMA-backed `reserved` heap and never picks `system`.
+--- i/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
++++ w/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
+@@ -6608,7 +6608,7 @@
+ CONFIG_UDMABUF=y
+ # CONFIG_DMABUF_DEBUG is not set
+ CONFIG_DMABUF_HEAPS=y
+-# CONFIG_DMABUF_HEAPS_SYSTEM is not set
++CONFIG_DMABUF_HEAPS_SYSTEM=y
+ CONFIG_DMABUF_HEAPS_CMA=y
+ # end of DMABUF options
+ 
+@@ -8702,7 +8702,7 @@
+ #
+ # Default contiguous memory area size:
+ #
+-CONFIG_CMA_SIZE_MBYTES=16
++CONFIG_CMA_SIZE_MBYTES=256
+ CONFIG_CMA_SIZE_SEL_MBYTES=y
+ # CONFIG_CMA_SIZE_SEL_PERCENTAGE is not set
+ # CONFIG_CMA_SIZE_SEL_MIN is not set

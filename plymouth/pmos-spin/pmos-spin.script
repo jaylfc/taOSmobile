@@ -1,0 +1,283 @@
+# postmarketOS "spin" Plymouth Theme Script
+
+#========================================
+# Configuration
+#========================================
+
+# Animation timing (in seconds)
+global.logo_fade_duration = 0.3;
+global.logo_pause_duration = 0;
+
+# Max logo size (in pixels)
+global.max_logo_width = Window.GetWidth() / 4;
+global.max_logo_height = Window.GetHeight() / 6;
+
+#========================================
+# Background
+#========================================
+
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+#========================================
+# Load Images
+#========================================
+
+right_image = Image("right.png");
+top_image = Image("top.png");
+left_image = Image("left.png");
+error_image = Image("error.png");
+
+# Scale to fit screen
+target_height_pct = Window.GetHeight() * 0.4;
+target_width_pct = Window.GetWidth() * 0.7;
+
+target_height = Math.Min(target_height_pct, max_logo_height);
+target_width = Math.Min(target_width_pct, max_logo_width);
+
+height_ratio = target_height / right_image.GetHeight();
+width_ratio = target_width / right_image.GetWidth();
+scale_ratio = Math.Min(height_ratio, width_ratio);
+
+right_image = right_image.Scale(
+    right_image.GetWidth() * scale_ratio,
+    right_image.GetHeight() * scale_ratio
+);
+top_image = top_image.Scale(
+    top_image.GetWidth() * scale_ratio,
+    top_image.GetHeight() * scale_ratio
+);
+left_image = left_image.Scale(
+    left_image.GetWidth() * scale_ratio,
+    left_image.GetHeight() * scale_ratio
+);
+error_image = error_image.Scale(
+    error_image.GetWidth() * scale_ratio,
+    error_image.GetHeight() * scale_ratio
+);
+
+#========================================
+# Create Logo Sprites
+#========================================
+
+# Text fonts
+global.message_font = "Sans " + 100 * scale_ratio;
+
+logo_x = Window.GetX() + Window.GetWidth() / 2 - right_image.GetWidth() / 2;
+
+# Location where the logo starts before the drop animation
+# After the animation, the logo will be located at logo_y_final
+logo_y = Window.GetY() + Window.GetHeight() / 2 - right_image.GetHeight();
+logo_y_final = Window.GetY() + Window.GetHeight() / 2 - right_image.GetHeight() / 2;
+
+right_sprite = Sprite(right_image);
+right_sprite.SetPosition(logo_x, logo_y, 0);
+right_sprite.SetOpacity(0);
+
+top_sprite = Sprite(top_image);
+top_sprite.SetPosition(logo_x, logo_y, 1);
+top_sprite.SetOpacity(0);
+
+left_sprite = Sprite(left_image);
+left_sprite.SetPosition(logo_x, logo_y, 2);
+left_sprite.SetOpacity(0);
+
+error_sprite = Sprite(error_image);
+error_sprite.SetPosition(logo_x, logo_y_final, 3);
+error_sprite.SetOpacity(0);
+
+#========================================
+# Animation State
+#========================================
+
+global.animation_time = 0;
+global.cycle_duration = (logo_fade_duration * 6) + logo_pause_duration;
+global.frame_skip = 0;
+global.last_right_opacity = -1;
+global.last_top_opacity = -1;
+global.last_left_opacity = -1;
+global.message_height = 0;
+
+# Values:
+# - normal
+# - warning
+# - error
+global.status = "normal";
+global.anim_status = "start";
+
+#========================================
+# Main Animation Loop
+#========================================
+
+fun refresh_callback()
+{
+    frame_skip = 1 - frame_skip;
+    if (frame_skip)
+        return;
+
+    if (status == "error")
+    {
+        right_sprite.SetOpacity(0);
+        top_sprite.SetOpacity(0);
+        left_sprite.SetOpacity(0);
+        error_sprite.SetOpacity(1);
+        return;
+    }
+    error_sprite.SetOpacity(0);
+    if (anim_status == "start")
+    {
+        opacity = right_sprite.GetOpacity() + 0.1;
+        if (opacity >= 1) opacity = 1;
+        right_sprite.SetOpacity(opacity);
+        top_sprite.SetOpacity(opacity);
+        left_sprite.SetOpacity(opacity);
+        logo_y = logo_y + 35 * scale_ratio;
+        if (logo_y >= logo_y_final)
+        {
+            logo_y = logo_y_final;
+            anim_status = "idle";
+        }
+        right_sprite.SetY(logo_y);
+        top_sprite.SetY(logo_y);
+        left_sprite.SetY(logo_y);
+    }
+    else if (anim_status == "idle")
+    {
+        animation_time += 0.02;
+        if (animation_time >= cycle_duration)
+        {
+            animation_time = 0;
+        }
+
+        # Skip opacity calcs when in a pause period
+        pause_start = fade_duration * 6;
+        if (animation_time >= pause_start)
+            return;
+
+        right_opacity = 1;
+        top_opacity = 1;
+        left_opacity = 1;
+
+        # Right spins (0 - logo_fade_duration*2)
+        if (animation_time < logo_fade_duration)
+        {
+            right_opacity = 1 - (animation_time / logo_fade_duration);
+        }
+        else if (animation_time < logo_fade_duration * 2)
+        {
+            right_opacity = (animation_time - logo_fade_duration) / logo_fade_duration;
+        }
+
+        # Top spins (logo_fade_duration*2 - logo_fade_duration*4)
+        top_start = logo_fade_duration * 2;
+        if (animation_time >= top_start && animation_time < top_start + logo_fade_duration)
+        {
+            top_opacity = 1 - ((animation_time - top_start) / logo_fade_duration);
+        }
+        else if (animation_time >= top_start + logo_fade_duration && animation_time < top_start + (logo_fade_duration * 2))
+        {
+            top_opacity = (animation_time - top_start - logo_fade_duration) / logo_fade_duration;
+        }
+
+        # Left spins (logo_fade_duration*4 - logo_fade_duration*6)
+        left_start = logo_fade_duration * 4;
+        if (animation_time >= left_start && animation_time < left_start + logo_fade_duration)
+        {
+            left_opacity = 1 - ((animation_time - left_start) / logo_fade_duration);
+        }
+        else if (animation_time >= left_start + logo_fade_duration && animation_time < left_start + (logo_fade_duration * 2))
+        {
+            left_opacity = (animation_time - left_start - logo_fade_duration) / logo_fade_duration;
+        }
+
+        if (right_opacity != last_right_opacity)
+        {
+            right_sprite.SetOpacity(right_opacity);
+            last_right_opacity = right_opacity;
+        }
+        if (top_opacity != last_top_opacity)
+        {
+            top_sprite.SetOpacity(top_opacity);
+            last_top_opacity = top_opacity;
+        }
+        if (left_opacity != last_left_opacity)
+        {
+            left_sprite.SetOpacity(left_opacity);
+            last_left_opacity = left_opacity;
+        }
+    }
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+#========================================
+# Message Display
+#========================================
+
+message_sprite = Sprite();
+message_sprite.SetPosition(10, 10, 10000);
+
+fun display_message_callback(text)
+{
+
+    if (status == "error")
+        # red
+        text_image = Image.Text(text, 1, 0.3, 0.2, 1, message_font, "center");
+    else if (status == "warning")
+        # yellow
+        text_image = Image.Text(text, 1, 1, 0, 1, message_font, "center");
+    else
+        # grey
+        text_image = Image.Text(text,  0.8, 0.8, 0.8, 0.8, message_font, "center");
+
+    message_sprite.SetImage(text_image);
+    message_height = text_image.GetHeight();
+
+    message_x = Window.GetX() + Window.GetWidth() / 2 - text_image.GetWidth() / 2;
+    message_y = Window.GetY() + Window.GetHeight() - (5 * text_image.GetHeight());
+    message_sprite.SetPosition(message_x, message_y, 10000);
+}
+
+fun hide_message_callback(text)
+{
+    message_sprite = Sprite();
+    message_sprite.SetPosition(10, 10, 10000);
+    message_height = 0;
+    status = "normal";
+}
+
+Plymouth.SetDisplayMessageFunction(display_message_callback);
+Plymouth.SetHideMessageFunction(hide_message_callback);
+
+#========================================
+# Status Updates
+#========================================
+
+fun update_status_callback(status)
+{
+    if (status == "warning" || status == "error")
+        global.status = status;
+    else
+        global.status = "normal";
+
+    # reset opacity cache so the animation "works" again if moving back to the
+    # "normal" state
+    last_right_opacity = -1;
+    last_top_opacity = -1;
+    last_left_opacity = -1;
+}
+
+Plymouth.SetUpdateStatusFunction(update_status_callback);
+
+#========================================
+# Quit
+#========================================
+
+fun quit_callback()
+{
+    right_sprite.SetOpacity(1);
+    top_sprite.SetOpacity(1);
+    left_sprite.SetOpacity(1);
+}
+
+Plymouth.SetQuitFunction(quit_callback);

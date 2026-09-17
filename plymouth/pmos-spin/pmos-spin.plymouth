@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=postmarketOS spin theme
+Description=postmarketOS logo "spin"
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/pmos-spin
+ScriptFile=/usr/share/plymouth/themes/pmos-spin/pmos-spin.script

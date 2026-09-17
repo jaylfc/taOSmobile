@@ -225,3 +225,33 @@ working — a very misleading symptom set that looks exactly like a module misma
 ⇨ The fix to carry forward is **`CONFIG_CMA_SIZE_MBYTES=256`**, stepping DOWN (192/128/64) if it
 fails to reserve, never up. After any change to it, the first check is `grep CmaTotal /proc/meminfo`
 plus wifi and battery, because a failed reservation is silent in userspace.
+
+---
+
+# ✅ r8 — BOTH CAMERAS CAPTURE. PROVEN ON THE HANDSET 2026-09-17 ~18:0xZ
+
+`CONFIG_CMA_SIZE_MBYTES=256` (+ `DMABUF_HEAPS_SYSTEM=y`, kept but not the fix) is in
+`config-r8-cma-256.diff`. Flashed by **dd over USB, no fastboot chord**, read back and verified
+byte-identical before reboot.
+
+| check | r7 | r8 |
+|---|---|---|
+| `CmaTotal` | 16384 kB | **262144 kB** |
+| wifi / battery | up / 100% | **up / 100%** (tailnet returned in 145s) |
+| `/dev/dma_heap/` | 3 heaps | 3 heaps |
+| `cam -c 1 -C20` (front) | `dma-heap allocation failure` | **20 frames, 24 fps, 2296x1728 ABGR8888** |
+| `cam -c 2 -C1` (rear, 50MP) | not reached | **1 frame, 8152x6144, 201326592 bytes** |
+
+`dmesg | grep "cma:"` is SILENT — no failed reservation, no allocation failure. The rear frame
+alone is 192 MiB, which is why 256 was the number and why anything under ~200 would have served
+the front camera only.
+
+**What the pictures look like:** real, recognisable scenes. Exposure needs ~20 frames to settle —
+a `-C1` grab is nearly black and reads like a broken sensor, so **capture a burst and keep the
+last frame**. Colour carries a magenta cast, which is the known missing calibration
+(`IPASoft: Failed to create camera sensor helper` for both sensors; no AWB tuning), not a
+pipeline fault. Raw frames are ABGR8888 with a PADDED stride — front 2304 px for 2296 visible,
+rear 8192 for 8152 — so convert with `ffmpeg -f rawvideo -pix_fmt rgba -s <stride>x<h>` and crop.
+
+⚠ `/tmp` on the phone is tmpfs in RAM. A 20-frame front burst is 318 MB and one rear frame is
+201 MB; delete them after converting.
