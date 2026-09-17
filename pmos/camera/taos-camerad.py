@@ -30,11 +30,14 @@ the live stream instead of configuring a one-shot.
 """
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import mmap
+import struct
 import os
 import selectors
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -43,7 +46,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import libcamera as lc
-from PIL import Image
+from PIL import Image, ImageStat
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TAOS_CAMERAD_PORT", "6971"))
@@ -61,17 +64,76 @@ SHUTTER_TIMEOUT = 2.0
 #: A cold open costs about a second before the first frame lands.
 FIRST_FRAME_TIMEOUT = 5.0
 
+# ---------------------------------------------------------------------------
+# EXPOSURE AND COLOUR, done here because libcamera cannot do them on this
+# device. Its own warnings say why, per sensor:
+#
+#   IPASoft: Failed to create camera sensor helper for imx471
+#   No static properties available for 'imx471'
+#   No sensor delays found in the database
+#   Configuration file 'imx471.yaml' not found for IPA module
+#
+# Without a sensor helper the soft IPA cannot convert a gain code to a real
+# gain, so its AE has no working handle on the sensor -- which is why frames
+# come out at a mean of ~9/255 in a room that is merely dim. The proper fix is
+# to add imx471/s5kjn1 to libcamera's sensor helpers and ship tuning files;
+# that is upstream work. Until then this service closes the loop itself.
+#
+# ⚠ THE ORDER MATTERS. Exposure is corrected AT THE SENSOR (real photons) and
+# only what is left over is corrected in software. Brightening a dark frame in
+# PIL amplifies its noise; asking the sensor for more light does not.
+#: Mean luminance to aim for, 0-255. 100 is a touch under the midpoint: phone
+#: scenes are usually backlit, and chasing 128 blows the highlights out.
+AE_TARGET = 100.0
+#: Only act on a miss bigger than this, or the loop hunts forever on noise.
+AE_DEADBAND = 8.0
+#: Per-step cap. A full correction in one frame reads as a strobe.
+AE_STEP = 0.35
+AE_EXPOSURE_RANGE = (200, 66_000)      # microseconds
+AE_GAIN_RANGE = (1.0, 16.0)
+#: Grey-world AWB. Clamped hard: an unclamped grey-world on a scene that really
+#: IS one colour (a wall, a sky) tints the whole frame the other way.
+AWB_CLAMP = (0.55, 1.9)
+AWB_SMOOTH = 0.25
+#: Ceiling on software gain. Past this it is all noise, and a grey mush reads
+#: worse than an honestly dark picture.
+SOFT_GAIN_MAX = 8.0
+
 PHOTOS.mkdir(parents=True, exist_ok=True)
 
 
-def _rgb_from_plane(data: bytes, stride: int, size) -> Image.Image:
+# A dmabuf mapped straight with mmap() is NOT coherent with the device that
+# wrote it. On this SoC the camera writes through the IOMMU while the CPU holds
+# stale cache lines, so a read without this bracket returns a frame that is
+# part new and part old -- which is the corruption Jay reported in the gallery,
+# and it is a RACE, so some frames look fine and only some are torn.
+#
+# libcamera's own MappedFrameBuffer does exactly this; the python bindings on
+# this device do not ship libcamera.utils, so it is done by hand.
+DMA_BUF_SYNC_READ = 1 << 0
+DMA_BUF_SYNC_START = 0
+DMA_BUF_SYNC_END = 1 << 2
+DMA_BUF_IOCTL_SYNC = 0x40086200          # _IOW('b', 0, struct dma_buf_sync)
+
+
+def _dma_sync(fd: int, end: bool) -> None:
+    flags = DMA_BUF_SYNC_READ | (DMA_BUF_SYNC_END if end else DMA_BUF_SYNC_START)
+    try:
+        fcntl.ioctl(fd, DMA_BUF_IOCTL_SYNC, struct.pack("Q", flags))
+    except OSError:
+        # A heap that does not implement the ioctl is not a reason to stop
+        # capturing; it only means the frame may tear.
+        pass
+
+
+def _rgb_from_plane(data: bytes, stride: int, width: int, height: int) -> Image.Image:
     """ABGR8888 with a PADDED stride -- front 2304 px for 2296 visible.
 
     Decoding at the VISIBLE width instead of the stride shears the image
     diagonally, which reads as a broken sensor rather than as arithmetic.
     """
-    img = Image.frombytes("RGBA", (stride // 4, size.height), data).convert("RGB")
-    return img.crop((0, 0, size.width, size.height))
+    img = Image.frombytes("RGBA", (stride // 4, height), data).convert("RGB")
+    return img.crop((0, 0, width, height))
 
 
 class CameraSession:
@@ -90,6 +152,12 @@ class CameraSession:
         self.tag = CameraSession._next_tag
         CameraSession._next_tag += 1
         self.error: str | None = None
+        self.exposure = 16_000.0      # us, a sane indoor starting point
+        self.gain = 2.0
+        self.awb = [1.0, 1.0]         # red, blue gains
+        self.controls_ok = True       # cleared if the sensor refuses controls
+        self.mean = 0.0
+        self.soft_gain = 1.0
         self.lock = threading.Lock()
         self.latest: bytes | None = None      # JPEG
         self.latest_at = 0.0
@@ -103,9 +171,54 @@ class CameraSession:
         cfg = cam.generate_configuration([lc.StreamRole.Viewfinder])
         scfg = cfg.at(0)
         scfg.size = lc.Size(*PREVIEW)
-        cfg.validate()
+        status = cfg.validate()
         cam.configure(cfg)
+        # RE-FETCH THE STREAM CONFIG AFTER configure(), and keep `cfg` alive.
+        #
+        # `cfg.at(0)` hands back a reference INTO the configuration, and
+        # validate()/configure() can move what it points at. Reading the old
+        # reference afterwards returned a width of 2304 -- which is stride/4,
+        # not any size libcamera ever validated (2296) -- so frames were
+        # decoded at the wrong geometry: vertical-striped noise across the
+        # left third and black for the rest, which is the corruption Jay saw.
+        self.cfg = cfg
+        scfg = cfg.at(0)
         self.scfg = scfg
+        self.width = int(scfg.size.width)
+        self.height = int(scfg.size.height)
+        self.stride = int(scfg.stride)
+        self.frame_bytes = self.stride * self.height
+        # A size that came back different from the one asked for is not fatal,
+        # but it must be VISIBLE: it changes every buffer arithmetic below.
+        if (self.width, self.height) != PREVIEW:
+            print("camerad: asked %dx%d, got %dx%d (validate: %s)"
+                  % (PREVIEW[0], PREVIEW[1], self.width, self.height, status),
+                  flush=True)
+        # RAW MEANS THE CONVERTER IS MISSING, AND RAW MUST NEVER REACH A JPEG.
+        #
+        # A converted stream is ABGR8888, so its stride is 4 bytes per pixel.
+        # This camera came back with stride 2880 for a 2304-wide frame --
+        # 2304 x 1.25, which is 10-bit PACKED BAYER. libcamera had registered
+        # the camera with no software ISP attached, so `Viewfinder` could only
+        # be satisfied by the sensor's own raw output, and validate() said
+        # Adjusted rather than failing.
+        #
+        # Decoding that as ABGR is what produced the striped left third and
+        # black remainder in the gallery. It is not recoverable in here: the
+        # converter is chosen when the CameraManager enumerates, which has
+        # already happened. Exiting lets systemd bring the process back with a
+        # fresh manager, which is the one thing that fixes it.
+        if self.stride < self.width * 4:
+            print("camerad: FATAL: %s came up RAW (stride %d for %d px = packed "
+                  "bayer, not ABGR). libcamera registered it with no software "
+                  "ISP. Exiting so systemd restarts with a fresh CameraManager."
+                  % (self.cam.id, self.stride, self.width), flush=True)
+            # Not an exception: this thread is not the one that can fix it, and
+            # a raise here would leave the service up and serving garbage.
+            os._exit(75)          # EX_TEMPFAIL
+        print("camerad: %s at %dx%d stride %d, %d bytes/frame"
+              % (self.cam.id.split("/")[-1], self.width, self.height,
+                 self.stride, self.frame_bytes), flush=True)
         self.stream = scfg.stream
         self.alloc = lc.FrameBufferAllocator(cam)
         self.alloc.allocate(self.stream)
@@ -127,6 +240,7 @@ class CameraSession:
         reqs = []
         for b in self.bufs:
             r = cam.create_request(self.tag)
+            self._apply_controls(r)
             r.add_buffer(stream, b)
             reqs.append(r)
         cam.start()
@@ -146,6 +260,7 @@ class CameraSession:
                         self._publish(fb)
                     req.reuse()
                     if not self.stop_flag.is_set():
+                        self._apply_controls(req)
                         cam.queue_request(req)
         except Exception as exc:  # noqa: BLE001
             # RECORDED, not swallowed. This runs in a thread, so an exception
@@ -157,11 +272,108 @@ class CameraSession:
             cam.stop()
             cam.release()
 
+    def _apply_controls(self, req) -> None:
+        """Ask the sensor for the exposure this service worked out.
+
+        Wrapped because a sensor that refuses a control raises, and a raise
+        here would kill the capture loop over a nicety. If it refuses once it
+        is not asked again, and _publish falls back to correcting in software.
+        """
+        if not self.controls_ok:
+            return
+        try:
+            req.set_control(lc.controls.ExposureTime, int(self.exposure))
+            req.set_control(lc.controls.AnalogueGain, float(self.gain))
+        except Exception as exc:  # noqa: BLE001
+            self.controls_ok = False
+            print("camerad: sensor refused exposure controls (%s); "
+                  "falling back to software gain" % exc, flush=True)
+
+    def _auto_expose(self, mean: float) -> None:
+        """One step of AE, at the sensor.
+
+        Exposure time first, gain only once time is spent: gain is noise, time
+        is light. Coming back DOWN reverses that order for the same reason.
+        """
+        self.mean = mean
+        if abs(mean - AE_TARGET) <= AE_DEADBAND:
+            return
+        # A frame with nothing in it at all gives no usable ratio.
+        want = AE_TARGET / max(mean, 1.0)
+        want = 1.0 + (want - 1.0) * AE_STEP
+        if want > 1.0:
+            room = AE_EXPOSURE_RANGE[1] / self.exposure
+            take = min(want, room)
+            self.exposure *= take
+            left = want / take
+            if left > 1.0:
+                self.gain = min(self.gain * left, AE_GAIN_RANGE[1])
+        else:
+            floor = AE_GAIN_RANGE[0] / self.gain
+            take = max(want, floor)
+            self.gain *= take
+            left = want / take
+            if left < 1.0:
+                self.exposure = max(self.exposure * left, AE_EXPOSURE_RANGE[0])
+
+    def _auto_white_balance(self, img: Image.Image) -> Image.Image:
+        """Grey world, smoothed, clamped.
+
+        The scene averages to grey, so whatever the channel means disagree
+        about is the cast. Smoothed because a per-frame correction visibly
+        breathes on a preview, and clamped because a genuinely monochrome
+        scene is not a cast.
+        """
+        stat = ImageStat.Stat(img)
+        r, g, b = stat.mean[:3]
+        if g < 2:
+            return img
+        want_r = max(AWB_CLAMP[0], min(AWB_CLAMP[1], g / max(r, 1.0)))
+        want_b = max(AWB_CLAMP[0], min(AWB_CLAMP[1], g / max(b, 1.0)))
+        self.awb[0] += (want_r - self.awb[0]) * AWB_SMOOTH
+        self.awb[1] += (want_b - self.awb[1]) * AWB_SMOOTH
+        if abs(self.awb[0] - 1.0) < 0.02 and abs(self.awb[1] - 1.0) < 0.02:
+            return img
+        # A per-channel point map: one pass, no float image, no numpy.
+        red = [min(255, int(i * self.awb[0])) for i in range(256)]
+        blue = [min(255, int(i * self.awb[1])) for i in range(256)]
+        return img.point(red + list(range(256)) + blue)
+
     def _publish(self, fb) -> None:
         pl = fb.planes[0]
         mm = self.maps[id(fb)]
+        _dma_sync(pl.fd, end=False)
         data = mm[pl.offset:pl.offset + pl.length]
-        img = _rgb_from_plane(data, self.scfg.stride, self.scfg.size)
+        _dma_sync(pl.fd, end=True)
+        # A short buffer is a torn frame, not a picture. Better to drop it
+        # than to hand the gallery something decoded from the wrong length.
+        if len(data) < self.frame_bytes:
+            return
+        img = _rgb_from_plane(data[:self.frame_bytes], self.stride,
+                              self.width, self.height)
+        # Measured on a SHRUNK copy: the numbers are the same to within a
+        # rounding error and it costs a fraction of a full-frame pass, which
+        # matters when it runs on every preview frame.
+        small = img.resize((160, 120))
+        mean = sum(ImageStat.Stat(small).mean[:3]) / 3.0
+        self._auto_expose(mean)
+        img = self._auto_white_balance(img)
+        # SOFTWARE GAIN IS KEYED ON THE RESULT, not on whether the sensor
+        # accepted the control. Measured on this device: ExposureTime and
+        # AnalogueGain are ACCEPTED and then have no effect -- exposure sat
+        # pinned at 66000us with gain 16.0 while the frame stayed at a mean of
+        # 9/255. A control that returns success and changes nothing is
+        # indistinguishable from a working one unless you read the picture
+        # back, which is what this does.
+        if mean > 0.5 and mean < AE_TARGET - AE_DEADBAND:
+            want = min(SOFT_GAIN_MAX, AE_TARGET / mean)
+            self.soft_gain += (want - self.soft_gain) * AE_STEP
+        elif mean > AE_TARGET + AE_DEADBAND:
+            want = max(1.0, AE_TARGET / mean)
+            self.soft_gain += (want - self.soft_gain) * AE_STEP
+        if self.soft_gain > 1.02:
+            g = self.soft_gain
+            img = img.point([min(255, int(i * g)) for i in range(256)] * 3)
         out = io.BytesIO()
         img.save(out, "JPEG", quality=80)
         with self.lock:
@@ -272,8 +484,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.wfile.write(body)
             if u.path == "/health":
                 err = _SESSION.error if _SESSION else None
-                return self._json({"ok": err is None, "cameras": sorted(_cameras()),
-                                   "active": _WHICH, "error": err})
+                s = _SESSION
+                return self._json({
+                    "ok": err is None, "cameras": sorted(_cameras()),
+                    "active": _WHICH, "error": err,
+                    # The exposure loop, visible. A dark frame is either a dark
+                    # room or a stuck loop, and these tell them apart.
+                    "exposure_us": int(s.exposure) if s else None,
+                    "gain": round(s.gain, 2) if s else None,
+                    "mean": round(s.mean, 1) if s else None,
+                    "awb": [round(x, 3) for x in s.awb] if s else None,
+                    "sensor_controls": s.controls_ok if s else None,
+                    "size": ("%dx%d" % (s.width, s.height)) if s else None,
+                    "soft_gain": round(s.soft_gain, 2) if s else None,
+                })
             if u.path == "/frame.jpg":
                 s = _session(q.get("cam", [None])[0])
                 # WAIT for the first frame rather than 503-ing. Opening a
@@ -322,6 +546,20 @@ class Handler(BaseHTTPRequestHandler):
                 name = datetime.now().strftime("IMG_%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
                 (PHOTOS / name).write_bytes(jpg)
                 return self._json({"ok": True, "name": name, "bytes": len(jpg), "cam": _WHICH})
+            if u.path == "/back":
+                # THE WAY OUT. Until there is a nav bar, an app on its own
+                # workspace is a room with no door: the kiosk is on workspace
+                # 1 and nothing on screen goes back to it. camerad runs as the
+                # same user as the compositor, so it can ask sway directly.
+                sock = sorted(Path("/run/user/%d" % os.getuid()).glob("sway-ipc.*.sock"))
+                if not sock:
+                    return self._json({"error": "no sway socket"}, 500)
+                env = dict(os.environ, SWAYSOCK=str(sock[0]))
+                rc = subprocess.run(["swaymsg", "workspace", "1"], env=env,
+                                    capture_output=True, timeout=5)
+                if rc.returncode != 0:
+                    return self._json({"error": rc.stderr.decode()[:200]}, 500)
+                return self._json({"ok": True})
             if u.path == "/switch":
                 want = q.get("cam", [None])[0]
                 if want not in ("front", "rear"):

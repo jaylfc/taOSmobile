@@ -59,6 +59,16 @@
     padding: 8px 12px; font-size: 12px; color: var(--dim);
   }
 
+  /* The app owns the whole screen on its own workspace, so it has to carry its
+     own way out until there is a nav bar. */
+  #back {
+    position: absolute; left: 10px; top: 52px; width: 44px; height: 44px;
+    border-radius: 50%; border: 1px solid var(--line); color: var(--fg);
+    background: rgba(5,6,10,.62); backdrop-filter: blur(12px);
+    font-size: 26px; line-height: 1; cursor: pointer; padding: 0 4px 4px 0;
+  }
+  #back:active { background: rgba(244,245,248,.16); }
+
   #bar {
     flex: 0 0 auto; padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
     display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
@@ -124,7 +134,8 @@
   <div id="stage">
     <img id="view" alt="Viewfinder">
     <div id="hint">Opening the camera…</div>
-    <div id="note">No autofocus on this device yet, and colour is uncalibrated.</div>
+    <button id="back" title="Back to taOS" aria-label="Back to taOS">‹</button>
+    <div id="note">No autofocus on this device yet.</div>
   </div>
 
   <div id="bar">
@@ -286,6 +297,10 @@
     if (ev.key === "Escape" && gallery.hasAttribute("data-open")) {
       document.getElementById("gclose").click();
     }
+  });
+
+  document.getElementById("back").addEventListener("click", function () {
+    fetch("/back", { method: "POST" }).catch(function () { toast("Could not go back"); });
   });
 
   openStream();
