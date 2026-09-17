@@ -1,0 +1,37 @@
+[Unit]
+Description=taOS camera service (libcamera)
+Documentation=file:/usr/share/taos/camera/README
+After=multi-user.target
+
+[Service]
+Type=simple
+User=taos
+Group=taos
+SupplementaryGroups=video render
+ExecStart=/usr/bin/python3 /usr/lib/taos/taos-camerad.py
+Restart=on-failure
+RestartSec=2
+# The sensors are the only hardware this touches, and it answers on loopback
+# only. Everything else is closed off so a service reachable from a page that
+# renders BEFORE sign-in cannot become a way into the rest of the device.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=no
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+# char-video4linux covers /dev/video* and /dev/v4l-subdev* (static major 81).
+# It does NOT cover /dev/media*, which carry a DYNAMIC major -- and libcamera
+# enumerates the pipeline through the media device, so without these two lines
+# the service starts, answers, and reports ZERO cameras. It read as a broken
+# camera; it was a closed device policy. Naming any DeviceAllow at all switches
+# DevicePolicy from auto to closed, so everything needed must be listed.
+DeviceAllow=char-video4linux rw
+DeviceAllow=/dev/media0 rw
+DeviceAllow=/dev/media1 rw
+DeviceAllow=char-drm rw
+ReadWritePaths=/home/taos/Pictures
+
+[Install]
+WantedBy=multi-user.target
