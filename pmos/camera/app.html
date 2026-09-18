@@ -130,7 +130,7 @@
   #toast[data-on="1"] { opacity: 1; transform: translate(-50%, 0); }
 </style>
 </head>
-<body data-cam="front">
+<body data-cam="rear">
   <div id="stage">
     <img id="view" alt="Viewfinder">
     <div id="hint">Opening the camera…</div>
@@ -162,7 +162,9 @@
   var gallery = document.getElementById("gallery");
   var grid = document.getElementById("grid");
   var toastEl = document.getElementById("toast");
-  var cam = "front";
+  // Opens on the REAR camera, matching camerad's own default. The front one is
+  // mirrored by the CSS above; the rear must not be, which data-cam drives.
+  var cam = "rear";
   var toastTimer = null;
 
   function toast(text) {

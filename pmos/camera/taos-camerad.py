@@ -415,7 +415,10 @@ class CameraSession:
 _CM = lc.CameraManager.singleton()
 _STATE_LOCK = threading.Lock()
 _SESSION: CameraSession | None = None
-_WHICH = "front"
+#: THE REAR CAMERA IS THE DEFAULT, as on every phone: opening the camera means
+#: pointing it at the thing in front of you, not at your own face. The front
+#: one is a deliberate flip away. (Jay, from the glass.)
+_WHICH = "rear"
 
 
 def _cameras() -> dict:
