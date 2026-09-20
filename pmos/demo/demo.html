@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>taOS Demos</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#05060a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+  /* Built to be used from a laptop while looking at the phone, so the targets
+     are large, the state is obvious from across a desk, and nothing needs
+     reading twice. Same palette as the handset so a screen-share of the two
+     reads as one product. */
+  :root {
+    --bg: #05060a; --fg: #f4f5f8; --dim: rgba(244,245,248,.55);
+    --line: rgba(244,245,248,.14); --card: rgba(244,245,248,.06);
+    --ok: #46d17f; --bad: #ff5a52;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 16px/1.45 -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 48px 20px 64px;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.01em; }
+  .sub { color: var(--dim); font-size: 14px; margin: 0 0 32px; }
+  .demos { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 12px; }
+  button.demo {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    color: var(--fg); font: inherit; padding: 18px 20px;
+    transition: background .15s ease, transform .1s ease;
+  }
+  button.demo:hover { background: rgba(244,245,248,.1); }
+  button.demo:active { transform: scale(.995); }
+  button.demo[disabled] { opacity: .5; cursor: default; }
+  .label { font-weight: 600; font-size: 17px; }
+  .blurb { color: var(--dim); font-size: 13.5px; margin-top: 4px; }
+  /* The result sits ON the button that caused it. A single status line at the
+     bottom of a page makes you look away from the phone to find out what
+     happened, which is exactly the wrong direction to be looking. */
+  .said { font-size: 13px; margin-top: 8px; min-height: 0; }
+  .said[data-state="ok"] { color: var(--ok); }
+  .said[data-state="bad"] { color: var(--bad); }
+  .said[data-state="run"] { color: var(--dim); }
+  footer { color: var(--dim); font-size: 12.5px; margin-top: 36px; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>taOS demos</h1>
+  <p class="sub">Press a button here, watch the handset.</p>
+  <div class="demos" id="demos">Loading…</div>
+  <footer id="foot"></footer>
+
+<script>
+(function () {
+  "use strict";
+  var host = document.getElementById("demos");
+
+  // Installability, not offline-first: the buttons are useless without the
+  // phone anyway. Registration is guarded because a plain-http origin has no
+  // serviceWorker at all, and this page should still work when opened that way.
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(function () {});
+  }
+
+  function press(id, btn, said) {
+    btn.disabled = true;
+    said.setAttribute("data-state", "run");
+    said.textContent = "Sending…";
+    var started = Date.now();
+    fetch("/run/" + encodeURIComponent(id), { method: "POST" })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (d) {
+        var ms = Date.now() - started;
+        if (d && d.ok) {
+          said.setAttribute("data-state", "ok");
+          // The round trip, because on a demo the question is usually "did it
+          // reach the phone" and a number answers it better than a tick.
+          said.textContent = "Done in " + ms + "ms";
+        } else {
+          said.setAttribute("data-state", "bad");
+          said.textContent = (d && d.error) || "Failed";
+        }
+      })
+      .catch(function () {
+        said.setAttribute("data-state", "bad");
+        said.textContent = "No answer from the phone";
+      })
+      .then(function () { btn.disabled = false; });
+  }
+
+  fetch("/demos").then(function (r) { return r.json(); }).then(function (d) {
+    host.textContent = "";
+    (d.demos || []).forEach(function (demo) {
+      var btn = document.createElement("button");
+      btn.className = "demo";
+      btn.type = "button";
+      var label = document.createElement("div");
+      label.className = "label";
+      label.textContent = demo.label;
+      var blurb = document.createElement("div");
+      blurb.className = "blurb";
+      blurb.textContent = demo.blurb;
+      var said = document.createElement("div");
+      said.className = "said";
+      btn.appendChild(label); btn.appendChild(blurb); btn.appendChild(said);
+      btn.addEventListener("click", function () { press(demo.id, btn, said); });
+      host.appendChild(btn);
+    });
+    document.getElementById("foot").textContent =
+      (d.demos || []).length + " demos · served by the handset";
+  }).catch(function () {
+    host.textContent = "Could not reach taos-demod on the phone.";
+  });
+})();
+</script>
+</body>
+</html>

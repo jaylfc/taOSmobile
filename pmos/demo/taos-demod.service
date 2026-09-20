@@ -1,0 +1,25 @@
+[Unit]
+Description=taOS demo trigger server
+After=taos-kiosk.service
+Wants=taos-kiosk.service
+
+[Service]
+Type=simple
+User=taos
+Group=taos
+ExecStart=/usr/bin/python3 /usr/lib/taos/taos-demod.py
+Restart=on-failure
+RestartSec=3
+# ⛔ NO DeviceAllow. Naming one switches DevicePolicy to closed and the list has
+# to be exhaustive; that cost an evening on taos-camerad, twice. This process
+# only talks to the compositor over a unix socket and runs scripts that do the
+# same, so it needs no device rules at all.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
