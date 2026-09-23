@@ -241,7 +241,7 @@ def _call_reset() -> dict:
 #: Demos that are a process rather than a command.
 _ACTIONS = {
     "call-ring": (
-        "Incoming call from Naira",
+        "Incoming call from Mary",
         "Wakes the screen and rings. Send it to your PA to watch the live "
         "transcript; the callback lands as a new calendar notification.",
         _call_ring,
