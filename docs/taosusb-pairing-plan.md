@@ -45,7 +45,7 @@ BlueZ, which are already in Pi OS.
 | Characteristic | Ops | Carries |
 |---|---|---|
 | `info` | read | `{v, id, name:"taOSusb-7K3Q", caps, state: unpaired\|paired\|seeking, pubkey}` in clear |
-| `pair` | write + notify | X25519 handshake. Both ends show a 6-digit code derived from a **transcript hash** (both pubkeys + board id), so a man in the middle who runs two handshakes shows two different codes. The code shows on the phone now and on the board's screen later. **Only after Jay confirms the code** does the phone send, sealed: `{controller_id, controller_urls[], node_key, wifi[], mesh_preauth?}` |
+| `pair` | write + notify | X25519 handshake. Both ends show a 6-digit code derived from a **transcript hash** (both pubkeys + board id), so a man in the middle who runs two handshakes shows two different codes. The code shows on the phone now and on the board's screen later. **Only after Jay confirms the code** does the phone send, sealed: `{controller_id, controller_urls[], node_key, wifi[], llm?, mesh_preauth?}` |
 | `link` | write + notify | Sealed, chunked frames: link negotiation, heartbeat, and **chat text itself** |
 
 The crypto is at the app layer (X25519 + ChaCha20-Poly1305, the same primitives as `hub/relay.py`).
@@ -83,6 +83,13 @@ carried over unchanged.
 - **The board's model waits for the LiteLLM replacement** (Jay 09-23: LiteLLM is being dropped; asked
   @taOS-dev to prioritise it). The board needs an OpenAI-compatible `/v1` with tool calls, a
   **per-node credential** (revoking the node cuts its model access) and a default-model alias.
+  **@taOS-dev's answer (09-23), the gateway, in-process on the controller:** PicoClaw's
+  `api_base = http://<controller>:6969/api/llm/v1` (NOT bare `/v1`, which is Agent-as-a-Model), model
+  `taos-default` (resolved per request to the account's chat model). Credential: a bearer gateway key
+  **bound to the node id**, minted at BLE pair and sent in the sealed payload as
+  `llm: {base, key}`. Revoking the node deletes it, and an empty allowlist means deny. Their lanes
+  build G1 (core) and G2 (scoped auth) now, then G3 (streaming/usage). **G4, mint at pair and
+  revoke with the node, is in MY S1 controller PR**; they send me the keystore call once G2 lands.
 - When the handset is back online: deploy #3148 and switch the phone's login to Jay's account (below).
   Then run the demo. **This is the demo Jay can film first.**
 
