@@ -57,6 +57,10 @@ unscanned_paths = [
   # would demand those exist here, and copying pmaports into this repo to
   # satisfy a linter would be the tail wagging the dog.
   "pmos/kernel/README.md",
+  # The taOSusb pairing plan spans three repos: most of the paths it names live
+  # in tinyagentos (routes/auth.py, hub/relay.py) or in the taosusb board repo,
+  # not here.
+  "docs/taosusb-pairing-plan.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and

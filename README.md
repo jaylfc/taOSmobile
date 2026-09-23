@@ -116,3 +116,7 @@ headphone jack — Bluetooth audio already works.
 Reflashable checkpoint images of the phone (what `fastboot flash userdata`
 actually covers, how to take one, how to restore) are in
 `docs/pmos-checkpoint-images.md`.
+
+The plan for pairing the taOSusb board (a Pi Zero 2W agent) over Bluetooth into
+the Cluster app, with Bluetooth kept as its fallback link, is
+`docs/taosusb-pairing-plan.md`.
