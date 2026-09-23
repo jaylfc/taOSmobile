@@ -59,10 +59,13 @@ page() {
 case "${1:-}" in
 off)
     page off
-    # One frame at 60Hz is 16ms; 120 leaves room for chromium to lay out and
-    # composite on a phone that may be busy. It is spent on a screen the user
-    # has already stopped looking at.
-    sleep 0.12
+    # The page now closes the lock screen into the centre over 0.5 s (Jay:
+    # "close into the centre ... a quick 0.5 second animation", ls-tv-off),
+    # and nothing paints once the output is down, so wait it out: the last
+    # frame on the panel must be the black it ends on. This was 0.12 s, which
+    # only had to cover one black frame; 50 ms over the animation leaves room
+    # for chromium to composite that frame on a busy phone.
+    sleep 0.55
     touch_events disabled
     exec swaymsg "output * power off"
     ;;

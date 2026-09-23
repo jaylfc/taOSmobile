@@ -119,6 +119,18 @@ DEMOS = {
         "The other half, so a wake demo can be set up without waiting.",
         ["/usr/local/bin/taos-kiosk-screen", "off"],
     ),
+    # The SAME script a real plug-in runs (taos-kiosk-charger calls it), so it
+    # honours the rule the same way: from a dark screen it wakes and goes dark
+    # again after, from a lit one it plays and leaves the user where they were.
+    # Detached, because the show lasts ten seconds and the button should not.
+    "charge": (
+        "Charger connected",
+        "The charging animation, exactly as a plug-in plays it: from a dark "
+        "screen it wakes and goes dark again after, from a lit one it plays "
+        "over whatever is showing.",
+        ["/bin/sh", "-c",
+         "/usr/local/bin/taos-kiosk-charge-play >/dev/null 2>&1 &"],
+    ),
 }
 
 

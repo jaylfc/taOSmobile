@@ -1,0 +1,55 @@
+#!/bin/sh
+# Play the charging animation: the page's terminal, and the panel's part in it.
+#
+# Jay: "if the screen was off when charger connected then screen off after
+# animation, if screen on then show and return to where user was". Called by
+# taos-kiosk-charger on a real plug-in and by the demo board's button ("add a
+# trigger charge animation on the demo dash too please that respects screen on
+# or off"), so both take exactly the same path. Runs inside the sway session
+# (it needs SWAYSOCK) as taos.
+set -eu
+
+# Touches, counted by the kernel. fts_ts is the digitiser (IRQ 169 on the
+# handset, measured); it only counts while touch is enabled, i.e. while the
+# panel is lit. Read by NAME so a renumbered IRQ still matches.
+touches() {
+    # Per-CPU columns only: stop at the first non-number, or the GPIO line
+    # number later on the same row gets added in.
+    awk '/fts_ts/ { n = 0; for (i = 2; i <= NF && $i ~ /^[0-9]+$/; i++) n += $i; print n; exit }' \
+        /proc/interrupts 2>/dev/null
+}
+
+panel_off() {
+    swaymsg -t get_outputs --raw 2>/dev/null \
+        | grep -o '"power": *[a-z]*' | head -1 | grep -q false
+}
+
+SCREEN=on
+panel_off && SCREEN=off
+# --max-time so a wedged controller cannot stall the watcher.
+curl -sS --max-time 2 -X POST \
+    -H 'Content-Type: application/json' \
+    -d "{\"screen\":\"$SCREEN\"}" \
+    "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-charge" \
+    >/dev/null 2>&1 || true
+if [ "$SCREEN" = off ]; then
+    # A frame or two for the page to hide the lock screen behind the
+    # animation before the panel lights -- see taos-kiosk-volume.
+    sleep 0.15
+    /usr/local/bin/taos-kiosk-screen on >/dev/null 2>&1 || true
+    # Jay: "if the screen was off when charger connected then screen
+    # off after animation". Unless someone TOUCHED it meanwhile: a
+    # person who picks the phone up mid-animation wants to use it.
+    # The baseline is taken after touch is re-enabled, so enabling it
+    # can never read as a touch. The animation is CHARGE_MS (10 s)
+    # from the post; the panel goes dark just before its fade ends, so
+    # the lock screen never flashes up between the two.
+    sleep 0.3
+    base="$(touches)"
+    sleep "${TAOS_CHARGE_HOLD_S:-9.5}"
+    if [ "$(touches)" = "$base" ] && ! panel_off; then
+        /usr/local/bin/taos-kiosk-screen off >/dev/null 2>&1 || true
+    fi
+fi
+# A lit panel needs nothing more: the page fades the terminal away and the
+# user is left exactly where they were.
