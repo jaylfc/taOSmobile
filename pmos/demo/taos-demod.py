@@ -146,6 +146,12 @@ DEMOS = {
 _FAKE = {"proc": None}
 _FAKE_SCRIPT = Path(os.environ.get(
     "TAOS_FAKE_DEVICE", "/usr/lib/taos/taos-fake-device.py"))
+#: "The stand-in was switched on", kept across restarts. The stand-in is a
+#: child of this service, so systemd takes it down on every restart -- every
+#: redeploy -- and the island vanished from the lock screen with nobody having
+#: pressed Stop (Jay: "taOSusb Agent isnt showing on the lockscreen,
+#: intentional?"). StateDirectory= in the unit makes this writable.
+_FAKE_MARK = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/taos-demod")) / "stand-in-on"
 
 
 def _fake_running() -> bool:
@@ -163,10 +169,18 @@ def _fake_start() -> dict:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    try:
+        _FAKE_MARK.touch()
+    except OSError:
+        pass   # still running; it just will not come back after a restart
     return {"ok": True, "label": "Stand-in board", "pid": _FAKE["proc"].pid}
 
 
 def _fake_stop() -> dict:
+    try:
+        _FAKE_MARK.unlink()
+    except OSError:
+        pass
     proc = _FAKE["proc"]
     if proc is None or proc.poll() is not None:
         return {"ok": True, "already": True, "label": "Stand-in board"}
@@ -368,6 +382,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if _FAKE_MARK.exists():
+        _fake_start()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
     print("taos-demod on http://%s:%d with %d demos"

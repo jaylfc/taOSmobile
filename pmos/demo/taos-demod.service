@@ -10,6 +10,8 @@ Group=taos
 ExecStart=/usr/bin/python3 /usr/lib/taos/taos-demod.py
 Restart=on-failure
 RestartSec=3
+# Writable under ProtectSystem=strict: remembers whether the stand-in was on.
+StateDirectory=taos-demod
 # ⛔ NO DeviceAllow. Naming one switches DevicePolicy to closed and the list has
 # to be exhaustive; that cost an evening on taos-camerad, twice. This process
 # only talks to the compositor over a unix socket and runs scripts that do the
