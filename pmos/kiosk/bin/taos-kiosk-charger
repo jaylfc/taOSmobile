@@ -1,0 +1,84 @@
+#!/bin/sh
+# Charger plugged in -> the lock screen's charging animation, screen lit.
+#
+# Jay: "we need a charger connected notification, screen on and animation for
+# 3 seconds". The animation itself is the page's (POST /auth/lock-charge pushes
+# a `charger` event to it); this script only notices the plug and wakes the
+# panel, in the same order taos-kiosk-volume uses and for the same reason:
+# TELL THE PAGE FIRST, WAKE SECOND, so the first lit frame is the animation and
+# not a flash of the whole lock screen.
+#
+# WHY POLL SYSFS AND NOT A UDEV RULE. The wake has to run inside the sway
+# session (it needs SWAYSOCK), which a udev RUN+= does not have, and a
+# power_supply "change" uevent fires on every status update while charging, so
+# a rule would still need the edge detection below. One read per second of a
+# few sysfs files is nothing.
+#
+# WHY ONLY THE 0 -> 1 EDGE. `online` stays 1 for as long as the cable is in; a
+# level check would animate every second. The state at startup is taken as the
+# baseline, so booting on the charger or a `swaymsg reload` animates nothing.
+#
+# ⚠ UNMEASURED ON THE HANDSET (it was offline when this was written): which
+# supplies the Fairphone 5 exposes. This takes ANY non-Battery supply with an
+# `online` file. If one of them reads 1 with no cable in, the edge never comes
+# and the animation never plays -- check `grep . /sys/class/power_supply/*/online`
+# with the cable out before blaming the page.
+set -eu
+
+RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+PIDFILE="$RUN/taos-kiosk-charger.pid"
+
+# exec_always re-runs this on every `swaymsg reload`. Replace the previous
+# watcher by PID, checked against its cmdline, rather than `pkill -f`: a
+# pattern match also matches the shell doing the matching.
+if [ -r "$PIDFILE" ]; then
+    old="$(cat "$PIDFILE" 2>/dev/null || true)"
+    if [ -n "$old" ] && [ "$old" != "$$" ] \
+        && grep -qa 'taos-kiosk-charger' "/proc/$old/cmdline" 2>/dev/null; then
+        kill "$old" 2>/dev/null || true
+    fi
+fi
+echo "$$" > "$PIDFILE"
+
+# Overridable only so the edge logic can be tested against a fake tree.
+SUPPLIES="${TAOS_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
+
+plugged() {
+    for d in "$SUPPLIES"/*; do
+        [ -r "$d/online" ] || continue
+        [ "$(cat "$d/type" 2>/dev/null)" = Battery ] && continue
+        [ "$(cat "$d/online" 2>/dev/null)" = 1 ] && return 0
+    done
+    return 1
+}
+
+panel_off() {
+    swaymsg -t get_outputs --raw 2>/dev/null \
+        | grep -o '"power": *[a-z]*' | head -1 | grep -q false
+}
+
+was=0
+plugged && was=1
+
+while :; do
+    now=0
+    plugged && now=1
+    if [ "$was" = 0 ] && [ "$now" = 1 ]; then
+        SCREEN=on
+        panel_off && SCREEN=off
+        # --max-time so a wedged controller cannot stall the watcher.
+        curl -sS --max-time 2 -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"screen\":\"$SCREEN\"}" \
+            "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-charge" \
+            >/dev/null 2>&1 || true
+        if [ "$SCREEN" = off ]; then
+            # A frame or two for the page to hide the lock screen behind the
+            # animation before the panel lights -- see taos-kiosk-volume.
+            sleep 0.15
+            /usr/local/bin/taos-kiosk-screen on >/dev/null 2>&1 || true
+        fi
+    fi
+    was="$now"
+    sleep 1
+done
