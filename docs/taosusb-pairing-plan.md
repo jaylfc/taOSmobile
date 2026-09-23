@@ -80,6 +80,9 @@ carried over unchanged.
 - ✅ `provision.sh` accepts aarch64 with the arm64 checksum pinned; the arm64 PicoClaw runs on the Pi
   (taosusb `c4f749f`). The dwc2 check no longer mistakes Pi OS's `[cm5]` host-mode line for ours.
 - Provision the Pi. Run agentd on wifi against the phone's `:6969` using the #3148 token.
+- **The board's model waits for the LiteLLM replacement** (Jay 09-23: LiteLLM is being dropped; asked
+  @taOS-dev to prioritise it). The board needs an OpenAI-compatible `/v1` with tool calls, a
+  **per-node credential** (revoking the node cuts its model access) and a default-model alias.
 - When the handset is back online: deploy #3148 and switch the phone's login to Jay's account (below).
   Then run the demo. **This is the demo Jay can film first.**
 
@@ -105,6 +108,7 @@ board is stranded mid-update.
 controller half is `/api/account/cluster/join/device-preauth` in `account_proxy.py`, with the same
 key stripping (`_STRIP_KEYS`) and server-side consumption; @taOS-dev will card it once the S1
 `device` kind lands. The key reaches the board only inside the sealed BLE `pair` payload.
+**Jay 09-23: his personal taos.my account does not exist yet**, so S3 also waits on creating it.
 **Measured by @taOS-website-dev on 09-22:** `hs.taos.my/health` returns 200 pass. The join routes on
 taos.my are `/api/cluster/join/*` (request → approve **from another session** → poll). Every mint
 needs the account's taOSgo subscription to be `trialing` or `active`. A live mint has **not** been
