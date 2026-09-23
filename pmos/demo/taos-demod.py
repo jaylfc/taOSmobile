@@ -120,6 +120,71 @@ DEMOS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# THE STAND-IN BOARD. Some demos are not a command, they are a process that
+# has to outlive the request that started it -- so they are handled here
+# rather than in DEMOS, which runs an argv to completion.
+#
+# Owned by THIS process, not systemd-run: the fake board runs as `taos`, binds
+# loopback and reads a token file taos can already read, so it needs no
+# privilege at all. Taking root for it would be borrowing a bigger hammer than
+# the job, and demod outlives any single request anyway.
+_FAKE = {"proc": None}
+_FAKE_SCRIPT = Path(os.environ.get(
+    "TAOS_FAKE_DEVICE", "/usr/lib/taos/taos-fake-device.py"))
+
+
+def _fake_running() -> bool:
+    proc = _FAKE["proc"]
+    return proc is not None and proc.poll() is None
+
+
+def _fake_start() -> dict:
+    if _fake_running():
+        return {"ok": True, "already": True, "label": "Stand-in board"}
+    if not _FAKE_SCRIPT.is_file():
+        return {"ok": False, "error": "%s is missing" % _FAKE_SCRIPT}
+    _FAKE["proc"] = subprocess.Popen(
+        ["/usr/bin/python3", str(_FAKE_SCRIPT)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "label": "Stand-in board", "pid": _FAKE["proc"].pid}
+
+
+def _fake_stop() -> dict:
+    proc = _FAKE["proc"]
+    if proc is None or proc.poll() is not None:
+        return {"ok": True, "already": True, "label": "Stand-in board"}
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    _FAKE["proc"] = None
+    # The island does NOT vanish here -- it fades out when the phone stops
+    # hearing heartbeats, which takes the liveness window. That delay is the
+    # real behaviour and worth seeing in rehearsal.
+    return {"ok": True, "label": "Stand-in board"}
+
+
+#: Demos that are a process rather than a command.
+_ACTIONS = {
+    "fake-device-on": (
+        "Start the stand-in taOSusb",
+        "Fakes the whole board -- heartbeat AND replies -- so a flaky Wi-Fi "
+        "moment cannot kill a take. It announces itself as a stand-in.",
+        _fake_start,
+    ),
+    "fake-device-off": (
+        "Stop the stand-in taOSusb",
+        "The island fades once the phone stops hearing heartbeats, which is "
+        "the real unplug behaviour.",
+        _fake_stop,
+    ),
+}
+
+
 def _sway_env() -> dict:
     """The compositor's socket, found rather than assumed.
 
@@ -140,6 +205,9 @@ def _sway_env() -> dict:
 
 
 def run_demo(demo_id: str) -> dict:
+    action = _ACTIONS.get(demo_id)
+    if action is not None:
+        return action[2]()
     entry = DEMOS.get(demo_id)
     if entry is None:
         return {"ok": False, "error": "unknown demo"}

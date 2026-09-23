@@ -8,6 +8,7 @@ HERE="$(dirname "$0")"
 
 install -D -m 0755 "$HERE/taos-demod.py" /usr/lib/taos/taos-demod.py
 install -D -m 0644 "$HERE/demo.html"     /usr/lib/taos/demo.html
+install -D -m 0755 "$HERE/taos-fake-device.py" /usr/lib/taos/taos-fake-device.py
 install -D -m 0644 "$HERE/taos-demod.service" /etc/systemd/system/taos-demod.service
 
 # ICONS, generated from the handset's own wordmark so the PWA on Jay's other
