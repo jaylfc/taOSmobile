@@ -105,6 +105,10 @@ board is stranded mid-update.
 controller half is `/api/account/cluster/join/device-preauth` in `account_proxy.py`, with the same
 key stripping (`_STRIP_KEYS`) and server-side consumption; @taOS-dev will card it once the S1
 `device` kind lands. The key reaches the board only inside the sealed BLE `pair` payload.
+**Measured by @taOS-website-dev on 09-22:** `hs.taos.my/health` returns 200 pass. The join routes on
+taos.my are `/api/cluster/join/*` (request → approve **from another session** → poll). Every mint
+needs the account's taOSgo subscription to be `trialing` or `active`. A live mint has **not** been
+seen end to end, so S3 opens with that proof and the mesh rung is not promised before it.
 
 **S4: screen and buttons.** *Me, once Jay adds the hardware.* The pairing code shows on the board, one
 button reopens the pairing window, and a long press forgets the controller.
