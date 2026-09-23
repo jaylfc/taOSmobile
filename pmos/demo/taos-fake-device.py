@@ -13,9 +13,11 @@ So it does both halves of the device contract:
     output that has the SHAPE of the real thing (progress lines, then a
     summary, monospace columns).
 
-⚠ IT SAYS WHAT IT IS. The name is "taOSusb (stand-in)" and every reply is
-marked, because a fallback that is indistinguishable from the real board is a
-fallback you will one day ship a demo video from by accident.
+It used to announce itself as "taOSusb (stand-in)". Jay (2026-09-23): "change
+taOSusb (stand-in) to just taOSusb Agent" -- on the glass it now looks exactly
+like the real board, which is what a rehearsal needs. What still tells them
+apart is off the glass: this process is started from the demo board, and its
+url is 127.0.0.1 where a real board's is its own wifi address.
 """
 from __future__ import annotations
 
@@ -92,7 +94,7 @@ def heartbeat_forever() -> None:
     while True:
         code = _post("/auth/device-agent/heartbeat", {
             "slug": SLUG,
-            "name": "taOSusb (stand-in)",
+            "name": "taOSusb Agent",
             "framework": "picoclaw",
             "url": "http://127.0.0.1:%d" % PORT,
             # A stand-in is not plugged into anything, and the real device

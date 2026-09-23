@@ -9,6 +9,8 @@ HERE="$(dirname "$0")"
 install -D -m 0755 "$HERE/taos-demod.py" /usr/lib/taos/taos-demod.py
 install -D -m 0644 "$HERE/demo.html"     /usr/lib/taos/demo.html
 install -D -m 0755 "$HERE/taos-fake-device.py" /usr/lib/taos/taos-fake-device.py
+# The taOSusb Agent's lock-screen avatar, a USB stick, drawn rather than committed.
+python3 "$HERE/make-usb-avatar.py" /var/lib/taos/lock-avatars/taosusb-agent.jpg >/dev/null
 install -D -m 0644 "$HERE/taos-demod.service" /etc/systemd/system/taos-demod.service
 
 # ICONS, generated from the handset's own wordmark so the PWA on Jay's other
