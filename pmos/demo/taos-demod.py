@@ -27,6 +27,8 @@ import json
 import os
 import shlex
 import subprocess
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -168,8 +170,62 @@ def _fake_stop() -> dict:
     return {"ok": True, "label": "Stand-in board"}
 
 
+# ---------------------------------------------------------------------------
+# THE INCOMING CALL. Scripted and demo-only, like everything the lock screen
+# shows before sign-in: the controller holds the call's state behind its own
+# TAOS_LOCK_DEMO_CALL flag, and there is no phone line anywhere behind it.
+#
+# Over LOOPBACK, deliberately: /auth/lock-call/* is console-only, and a
+# request from 127.0.0.1 with no forwarding headers is what console means.
+# demod runs on the handset, so it needs no token and no exemption.
+CONTROLLER = os.environ.get("TAOS_DEMOD_CONTROLLER", "http://127.0.0.1:6969")
+
+
+def _controller_post(path: str) -> dict:
+    req = urllib.request.Request(CONTROLLER + path, data=b"{}", method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except urllib.error.HTTPError as exc:
+        # 404 is the flag being off, which is worth saying in so many words.
+        if exc.code == 404:
+            return {"ok": False, "error": "call demo is off (TAOS_LOCK_DEMO_CALL)"}
+        return {"ok": False, "error": "controller said %d" % exc.code}
+    except OSError as exc:
+        return {"ok": False, "error": "controller unreachable: %s" % exc}
+    return {"ok": True}
+
+
+def _call_ring() -> dict:
+    # A call wakes the phone. Same path as the wake button, for the reason at
+    # the top of this file; a failed wake does not stop the ring.
+    run_demo("wake-screen")
+    out = _controller_post("/auth/lock-call/ring")
+    out.setdefault("label", "Incoming call")
+    return out
+
+
+def _call_reset() -> dict:
+    out = _controller_post("/auth/lock-call/reset")
+    out.setdefault("label", "Call reset")
+    return out
+
+
 #: Demos that are a process rather than a command.
 _ACTIONS = {
+    "call-ring": (
+        "Incoming call from Naira",
+        "Wakes the screen and rings. Send it to your PA to watch the live "
+        "transcript; the callback lands as a new calendar notification.",
+        _call_ring,
+    ),
+    "call-reset": (
+        "Reset the call",
+        "Ends any call and clears the demo's calendar notification, ready "
+        "for another take.",
+        _call_reset,
+    ),
     "fake-device-on": (
         "Start the stand-in taOSusb",
         "Fakes the whole board -- heartbeat AND replies -- so a flaky Wi-Fi "
@@ -283,8 +339,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(icon.read_bytes(), "image/png",
                               cache="public, max-age=86400")
         if path == "/demos":
+            # BOTH maps. Listing DEMOS alone meant every _ACTIONS entry -- the
+            # stand-in board included -- could be run but never shown.
             return self._json({"demos": [
-                {"id": k, "label": v[0], "blurb": v[1]} for k, v in DEMOS.items()
+                {"id": k, "label": v[0], "blurb": v[1]}
+                for k, v in list(DEMOS.items()) + list(_ACTIONS.items())
             ]})
         return self._json({"error": "not found"}, 404)
 
