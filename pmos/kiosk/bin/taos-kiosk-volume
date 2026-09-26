@@ -70,7 +70,7 @@ fi
 #
 # --max-time so a wedged controller can never leave these stacking up behind a
 # user leaning on the volume rocker.
-curl -sS --max-time 2 -X POST \
+curl -sS --max-time 2 -X POST -H "X-taOS-Console: 1" \
     -H 'Content-Type: application/json' \
     -d "{\"key\":\"$KEY\",\"action\":\"$ACTION\",\"screen\":\"$SCREEN\"}" \
     "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-volume-key" \

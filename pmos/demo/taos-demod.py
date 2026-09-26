@@ -209,7 +209,8 @@ CONTROLLER = os.environ.get("TAOS_DEMOD_CONTROLLER", "http://127.0.0.1:6969")
 
 def _controller_post(path: str) -> dict:
     req = urllib.request.Request(CONTROLLER + path, data=b"{}", method="POST",
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "X-taOS-Console": "1"})
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()

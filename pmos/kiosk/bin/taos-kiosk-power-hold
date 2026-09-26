@@ -33,7 +33,7 @@ press)
         rm "$MARK" 2>/dev/null || exit 0
         # --max-time so a wedged controller cannot leave this subshell around
         # for the rest of the session.
-        curl -sS --max-time 3 -X POST "$URL" >/dev/null 2>&1 \
+        curl -sS --max-time 3 -X POST -H "X-taOS-Console: 1" "$URL" >/dev/null 2>&1 \
             || logger -t taos-power "menu request failed (controller down?)"
     ) &
     ;;

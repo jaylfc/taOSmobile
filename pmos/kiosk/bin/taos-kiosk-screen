@@ -51,7 +51,7 @@ touch_events() {
 # pause is for it to actually paint that frame. Told on the way back too, or it
 # would stay black on a lit panel.
 page() {
-    curl -sS --max-time 2 -X POST \
+    curl -sS --max-time 2 -X POST -H "X-taOS-Console: 1" \
         "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-screen-$1" \
         >/dev/null 2>&1 || true
 }

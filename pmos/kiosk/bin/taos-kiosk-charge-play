@@ -27,7 +27,7 @@ panel_off() {
 SCREEN=on
 panel_off && SCREEN=off
 # --max-time so a wedged controller cannot stall the watcher.
-curl -sS --max-time 2 -X POST \
+curl -sS --max-time 2 -X POST -H "X-taOS-Console: 1" \
     -H 'Content-Type: application/json' \
     -d "{\"screen\":\"$SCREEN\"}" \
     "http://127.0.0.1:${TAOS_PORT:-6969}/auth/lock-charge" \
