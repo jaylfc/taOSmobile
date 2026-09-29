@@ -1,0 +1,16 @@
+/* The lock screen's vocabulary: near-black, white at .92/.68, system font. */
+* { font-family: -apple-system, "Inter", "Noto Sans", sans-serif; border: none; min-height: 0; }
+window#waybar { background: rgba(8, 8, 10, 0.92); }
+/* EQUAL widths, glyph centred in each. The glyphs are different widths
+   ("‹" is narrow, "▢" wide), so padding alone put the group's middle -- and
+   the home button -- off the screen's centre (Jay, from the glass). Three
+   equal boxes centred as a group put the middle one exactly on the centre. */
+#custom-back, #custom-home, #custom-recents {
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 24px;
+    min-width: 120px;
+    padding: 0;
+    margin: 0;
+}
+#custom-back:hover, #custom-home:hover, #custom-recents:hover { color: #fff; }
+#custom-home { font-size: 18px; }

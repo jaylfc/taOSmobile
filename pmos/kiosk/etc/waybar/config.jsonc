@@ -1,0 +1,22 @@
+// taOSmobile nav bar: back / home / recents, at the bottom, over every app.
+//
+// A compositor-level layer-shell surface on purpose: only the compositor sees
+// every window, so a bar drawn inside a web page could never sit over a native
+// Linux (or later Android) app. `exclusive` reserves its strip, so windows
+// that are NOT fullscreen are sized above it instead of under it. The lock
+// screen stays fullscreen and so covers the bar (Jay: bar hidden on the lock
+// screen, shown once signed in -- see taos-kiosk-shellmode).
+{
+    "layer": "top",
+    "position": "bottom",
+    "height": 44,
+    "exclusive": true,
+    "passthrough": false,
+    "spacing": 0,
+    "modules-left": [],
+    "modules-center": ["custom/back", "custom/home", "custom/recents"],
+    "modules-right": [],
+    "custom/back":    { "format": "‹", "tooltip": false, "align": 0.5, "on-click": "/usr/local/bin/taos-shell back" },
+    "custom/home":    { "format": "●", "tooltip": false, "align": 0.5, "on-click": "/usr/local/bin/taos-shell home" },
+    "custom/recents": { "format": "▢", "tooltip": false, "align": 0.5, "on-click": "/usr/local/bin/taos-shell recents" }
+}
