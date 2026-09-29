@@ -1,0 +1,33 @@
+#!/bin/sh
+# Screenshot the handset: exactly what is on the glass, nav bar included.
+#
+#   taos-shot [OUT.png]      (default /tmp/taos-shot.png; prints the path)
+#
+# ⚠ WAKE THE PANEL FIRST. grim was long believed not to work on this
+# compositor ("no supported format found"). That was a misdiagnosis: every
+# attempt ran against a panel the 30 s idle timer had blanked, and a
+# powered-off output offers no capture formats at all (buffer_size 0x0).
+# With the panel on, grim captures 1080x2400 fine. So this wakes the panel
+# through the normal wake path when it is off, and puts it back after.
+#
+# Run as root (it switches to the session user) or as taos in the session.
+set -eu
+OUT="${1:-/tmp/taos-shot.png}"
+RUNDIR=/run/user/$(id -u taos)
+WD="$(cd "$RUNDIR" && ls | grep -m1 '^wayland-[0-9]*$')"
+SOCK="$(ls "$RUNDIR"/sway-ipc.*.sock | head -1)"
+ENV="XDG_RUNTIME_DIR=$RUNDIR WAYLAND_DISPLAY=$WD SWAYSOCK=$SOCK"
+as_taos() {
+    if [ "$(id -un)" = taos ]; then env $ENV sh -c "$1"; else su taos -s /bin/sh -c "$ENV $1"; fi
+}
+was_off=0
+as_taos 'swaymsg -t get_outputs -r' | grep -q '"power": *false' && was_off=1
+if [ "$was_off" = 1 ]; then
+    as_taos '/usr/local/bin/taos-kiosk-screen on' >/dev/null 2>&1 || true
+    sleep 1.5
+fi
+as_taos "grim '$OUT'"
+if [ "$was_off" = 1 ]; then
+    as_taos '/usr/local/bin/taos-kiosk-screen off' >/dev/null 2>&1 || true
+fi
+echo "$OUT"
