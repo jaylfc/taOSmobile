@@ -58,28 +58,34 @@ def test_advert_each_defect_fails(name, mfr):
 
 
 def _info(**over):
-    d = {"v": 1, "id": "a1b2", "name": "Orb", "caps": ["orb"], "state": "idle",
+    d = {"v": 1, "id": "KLGK", "name": "taOS Orb 4F9A", "caps": ["agent", "orb"], "state": "unpaired",
          "pairable": True, "bpub": "x"}
     d.update(over)
     return json.dumps(d).encode()
 
 
-def test_info_pass_id_case_insensitive():
-    assert chk.check_info(_info(), "A1B2")[0]
+def test_info_pass_returns_the_info_id_not_the_name():
+    ok, why, bid = chk.check_info(_info(), proto.ID_ALPHABET)
+    assert ok, why
+    assert bid == "KLGK"   # the real Orb 09-30: name hex 4F9A, board id KLGK
 
 
 @pytest.mark.parametrize("raw", [
     b"\xff\xfe", b"not json", b"[1,2]",
-    _info(id="ffff"), _info(caps=["agent"]), _info(caps=None),
+    _info(id=""), _info(id=None), _info(id="K0GK"),       # empty / missing / 0 not in alphabet
+    _info(state="idle"), _info(state="paired"),
+    _info(pairable=False), _info(pairable="true"),
+    _info(caps=["agent"]), _info(caps=None),
 ])
 def test_info_each_defect_fails(raw):
-    assert not chk.check_info(raw, "A1B2")[0]
+    ok, why, bid = chk.check_info(raw, proto.ID_ALPHABET)
+    assert not ok and bid is None
 
 
 def test_info_frame_as_on_dev_today_fails_the_orb_check():
     # dev's info_frame hard-codes caps ["agent"]; an Orb built on it must NOT pass as an Orb.
-    raw = proto.info_frame("a1b2", "Orb", "idle", True, proto.pub_bytes(proto.x25519_keypair()[1]))
-    ok, why = chk.check_info(raw, "A1B2")
+    raw = proto.info_frame("KLGK", "Orb", "unpaired", True, proto.pub_bytes(proto.x25519_keypair()[1]))
+    ok, why, _ = chk.check_info(raw, proto.ID_ALPHABET)
     assert not ok and "orb" in why
 
 

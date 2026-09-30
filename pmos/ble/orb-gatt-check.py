@@ -48,18 +48,25 @@ def check_advert(proto, name, mfr):
     return True, "v%d unpaired, board %s" % (parsed["v"], m.group(1))
 
 
-def check_info(raw, board_id):
+def check_info(raw, alphabet):
+    """-> (ok, detail, board_id). The board id is random from proto.ID_ALPHABET and independent of
+    the advert name (the real Orb: name 4F9A, id KLGK); the server binds THIS id into the handshake.
+    state/pairable mirror the server's pair/start gate (409 "board is not pairable" otherwise)."""
     try:
         info = json.loads(bytes(raw).decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as e:
-        return False, "info is not UTF-8 JSON: %s" % e
+        return False, "info is not UTF-8 JSON: %s" % e, None
     if not isinstance(info, dict):
-        return False, "info is JSON but not an object"
-    if str(info.get("id", "")).lower() != board_id.lower():
-        return False, "info id %r != name's %r" % (info.get("id"), board_id)
+        return False, "info is JSON but not an object", None
+    bid = info.get("id")
+    if not isinstance(bid, str) or not bid or any(ch not in alphabet for ch in bid):
+        return False, "info id %r is not a board id over the proto alphabet" % (bid,), None
+    if info.get("state") != "unpaired" or info.get("pairable") is not True:
+        return False, "state %r pairable %r: server would refuse (409)" % (
+            info.get("state"), info.get("pairable")), None
     if "orb" not in (info.get("caps") or []):
-        return False, "caps %r has no \"orb\"" % (info.get("caps"),)
-    return True, "id %s caps %s" % (info["id"], info["caps"])
+        return False, "caps %r has no \"orb\"" % (info.get("caps"),), None
+    return True, "id %s caps %s" % (bid, info["caps"]), bid
 
 
 def check_hello(initiator, board_id, reply):
@@ -94,7 +101,7 @@ async def run(no_pair):
         print("advert  FAIL  taOS advert but name %r is not taOS Orb XXXX (rssi %d)" % (adv.local_name, adv.rssi))
         print("RESULT  FAIL")
         return 1
-    board_id = m.group(1)
+    name_hex = m.group(1)
     if not SPEC_NAME_RE.match(adv.local_name):
         print("advert  WARN  name %r differs from the spec form taOS-Orb-XXXX" % adv.local_name)
 
@@ -103,9 +110,12 @@ async def run(no_pair):
     print("advert  %s  %s (rssi %d)" % ("PASS" if ok else "FAIL", why, adv.rssi))
 
     async with BleakClient(dev) as client:
-        ok, why = check_info(await client.read_gatt_char(proto.CHAR_INFO_UUID), board_id)
+        ok, why, board_id = check_info(await client.read_gatt_char(proto.CHAR_INFO_UUID), proto.ID_ALPHABET)
         results.append(ok)
-        print("info    %s  %s" % ("PASS" if ok else "FAIL", why))
+        print("info    %s  %s (advert name hex %s)" % ("PASS" if ok else "FAIL", why, name_hex))
+        if not ok:
+            print("RESULT  FAIL")
+            return 1
 
         if no_pair:
             print("hello   SKIP  --no-pair (NOT a pass)")
