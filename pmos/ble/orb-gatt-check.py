@@ -25,7 +25,10 @@ import json
 import re
 import sys
 
-NAME_RE = re.compile(r"^taOS-Orb-([0-9A-Fa-f]{4})$")
+# Spec form is taOS-Orb-XXXX; firmware v0.5.0 advertises "taOS Orb XXXX" (spaces). Both parse; the
+# spaced form is reported as a WARN line (a spec drift for taOSc to settle), never silently.
+NAME_RE = re.compile(r"^taOS[- ]Orb[- ]([0-9A-Fa-f]{4})$")
+SPEC_NAME_RE = re.compile(r"^taOS-Orb-[0-9A-Fa-f]{4}$")
 
 
 def check_advert(proto, name, mfr):
@@ -76,14 +79,24 @@ async def run(no_pair):
     from tinyagentos.cluster.ble import proto
 
     found = await BleakScanner.discover(timeout=10.0, return_adv=True)
-    orbs = [(d, a) for d, a in found.values() if NAME_RE.match(a.local_name or "")]
-    print("scan    %d devices, %d named taOS-Orb-*" % (len(found), len(orbs)))
+    # Select by the taOS manufacturer data, not the name: the name rides in the scan response.
+    orbs = [(d, a) for d, a in found.values()
+            if proto.MFR_ID in (a.manufacturer_data or {})
+            and proto.parse_advert_mfr(a.manufacturer_data[proto.MFR_ID]) is not None]
+    print("scan    %d devices, %d with taOS manufacturer data" % (len(found), len(orbs)))
     if not orbs:
         print("RESULT  NO ORB FOUND: nothing measured")
         return 3
     dev, adv = max(orbs, key=lambda da: da[1].rssi)
-    board_id = NAME_RE.match(adv.local_name).group(1)
     results = []
+    m = NAME_RE.match(adv.local_name or "")
+    if not m:
+        print("advert  FAIL  taOS advert but name %r is not taOS Orb XXXX (rssi %d)" % (adv.local_name, adv.rssi))
+        print("RESULT  FAIL")
+        return 1
+    board_id = m.group(1)
+    if not SPEC_NAME_RE.match(adv.local_name):
+        print("advert  WARN  name %r differs from the spec form taOS-Orb-XXXX" % adv.local_name)
 
     ok, why = check_advert(proto, adv.local_name, adv.manufacturer_data)
     results.append(ok)

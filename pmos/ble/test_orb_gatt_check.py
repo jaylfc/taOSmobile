@@ -45,6 +45,8 @@ def test_advert_pass():
 @pytest.mark.parametrize("name,mfr", [
     ("taOS-usb-A1B2", GOOD_MFR),                                         # not an Orb name
     ("taOS-Orb-A1B", GOOD_MFR),                                          # 3 hex
+    ("taOS Orb", GOOD_MFR),                                              # spaced, no hex
+    ("taOS_Orb_A1B2", GOOD_MFR),                                         # underscores
     ("taOS-Orb-A1B2", {}),                                               # no mfr data
     ("taOS-Orb-A1B2", {0x004C: proto.advert_mfr_data(False)}),           # wrong company
     ("taOS-Orb-A1B2", {proto.MFR_ID: b"TAOS\x02\x00"}),                  # wrong magic
@@ -113,3 +115,12 @@ def test_hello_no_reply_and_error_frame_fail():
     assert not chk.check_hello(init, "a1b2", None)[0]
     init, _ = _real_round()
     assert not chk.check_hello(init, "a1b2", b'{"t":"error","why":"locked"}')[0]
+
+
+def test_spaced_name_parses_but_is_not_the_spec_form():
+    # firmware v0.5.0 advertises "taOS Orb XXXX"; it must parse (so the real Orb is checked) and must
+    # NOT match the spec form (so the drift is reported as WARN, never passed silently).
+    assert chk.check_advert(proto, "taOS Orb A1B2", GOOD_MFR)[0]
+    assert chk.NAME_RE.match("taOS Orb A1B2").group(1) == "A1B2"
+    assert not chk.SPEC_NAME_RE.match("taOS Orb A1B2")
+    assert chk.SPEC_NAME_RE.match("taOS-Orb-A1B2")
