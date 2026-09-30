@@ -1,0 +1,21 @@
+# taOS ports opened on the handset (postmarketOS nftables.d; the input chain's
+# policy is DROP). Installed by pmos/nftables/install-firewall.sh.
+#
+# 6969: the taOS web UI. Hand-placed on the device 2026-09-16 and only now given
+# a repo home, byte-for-byte the same two rules.
+#
+# 6974: the device TLS port (taOS Orb / taOSusb, spec r3 approved 2026-09-30:
+# self-signed + pinned). Same two interfaces as 6969: the tailnet for a remote
+# host, and Wi-Fi because an Orb on Wi-Fi talking to a phone-hosted taOS cannot
+# be on the tailnet. An Orb relayed over BLE by this phone reaches its own taOS
+# on 127.0.0.1 and needs neither rule.
+#
+# NOT 6972: taos-demod owns it and is served over `tailscale serve` instead.
+table inet filter {
+	chain input {
+		iifname "tailscale0" tcp dport 6969 accept comment "accept taOS web UI over tailnet"
+		iifname "wlan*" tcp dport 6969 accept comment "accept taOS web UI on LAN"
+		iifname "tailscale0" tcp dport 6974 accept comment "accept taOS device TLS over tailnet"
+		iifname "wlan*" tcp dport 6974 accept comment "accept taOS device TLS on LAN"
+	}
+}
