@@ -81,6 +81,20 @@ case "$verb" in
         logger -t taos-power "quick settings: bluetooth off"
         exec rfkill block bluetooth
         ;;
+    usb-ncm|usb-charging|usb-mtp)
+        # WHAT THE USB-C PORT IS. The switching, the saved mode and the
+        # read-back all live in taos-usb-mode; this only maps a verb onto it,
+        # so there is one implementation for the console tile and the shell.
+        #
+        # THE TRUST BOUNDARY: usb-charging turns off the USB network link, the
+        # same stranding risk as wifi-off but on the OTHER path in, and the two
+        # together leave a headless phone unreachable. It is a switch for a
+        # person; nothing automated may write it. usb-ncm is the way back and
+        # also the default, so a reflash or a deleted toml restores it.
+        mode=${verb#usb-}
+        logger -t taos-power "quick settings: usb $mode"
+        exec /usr/local/bin/taos-usb-mode set "$mode"
+        ;;
     app-camera)
         # OPEN THE CAMERA APP. It lands here rather than in a second drop box
         # for the reason this file already gives: one box with one closed list
