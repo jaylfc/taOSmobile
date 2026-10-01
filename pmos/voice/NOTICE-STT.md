@@ -24,3 +24,8 @@ NVIDIA does not endorse taOS or this use of the model.
 
 https://github.com/k2-fsa/sherpa-onnx, built from source at the commit recorded
 in `manifest.json`, linked against the system ONNX Runtime (MIT).
+
+The library is built with TTS enabled, because the text-to-speech daemon loads
+the same file (see `NOTICE-TTS.md`). That build links espeak-ng (GPL-3.0-or-later)
+statically into it, so espeak-ng code is present in the speech-to-text process
+too, although speech-to-text never calls it.
