@@ -15,7 +15,8 @@ The speech recognition model installed by `install-stt.sh` is
   adapted form of NVIDIA's model (ONNX export and int8 quantisation done by
   that project, not by NVIDIA and not by taOS). taOS applies no further
   changes to the weights.
-- Pinned file hashes are in `/opt/taos-voice/stt/manifest.json`.
+- Pinned file hashes are in `voice/stt/manifest.json` under the controller's
+  data dir (on the handset `/root/tinyagentos/data`).
 
 NVIDIA does not endorse taOS or this use of the model.
 
