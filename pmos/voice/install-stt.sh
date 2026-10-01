@@ -3,7 +3,8 @@
 #
 #     sudo sh pmos/voice/install-stt.sh
 #
-# Builds sherpa-onnx FROM SCRATCH at a pinned commit, downloads the Parakeet-TDT
+# Builds sherpa-onnx FROM SCRATCH at a pinned commit (with TTS: install-tts.sh
+# reuses this library rather than building a second copy), downloads the Parakeet-TDT
 # 0.6b v3 int8 model and VERIFIES it against pinned sha256s, installs the
 # daemon and its systemd unit, starts it, and proves it with a real decode.
 # A FILE in this repo, not a hand-edit: a reflash wipes anything typed in.
@@ -137,8 +138,15 @@ chmod 0755 "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
 
 # ---- 3. sherpa-onnx, from source at the pinned commit -----------------------
 LIB="$PREFIX/lib/libsherpa-onnx-c-api.so"
-if [ -f "$LIB" ] && [ "$(cat "$PREFIX/lib/.commit" 2>/dev/null || true)" = "$SHERPA_COMMIT" ]; then
-  say "sherpa-onnx $SHERPA_COMMIT already built, skipping the build"
+# The library is SHARED with taos-ttsd (install-tts.sh loads this same file and
+# never builds its own), so it is built with TTS ON. `.features` records that:
+# a library built before TTS was switched on carries the right `.commit` but no
+# `.features`, and must be rebuilt rather than skipped, because its TTS entry
+# points are stubs that log "TTS is not enabled" and return NULL.
+SHERPA_FEATURES=tts
+if [ -f "$LIB" ] && [ "$(cat "$PREFIX/lib/.commit" 2>/dev/null || true)" = "$SHERPA_COMMIT" ] &&
+   [ "$(cat "$PREFIX/lib/.features" 2>/dev/null || true)" = "$SHERPA_FEATURES" ]; then
+  say "sherpa-onnx $SHERPA_COMMIT ($SHERPA_FEATURES) already built, skipping the build"
 else
   say "building sherpa-onnx $SHERPA_TAG ($SHERPA_COMMIT) from scratch in $CACHE/build"
   B0=$(date +%s)
@@ -146,12 +154,13 @@ else
   git clone -q --depth 1 --branch "$SHERPA_TAG" "$SHERPA_URL" "$CACHE/build/sherpa-onnx"
   got=$(git -C "$CACHE/build/sherpa-onnx" rev-parse HEAD)
   [ "$got" = "$SHERPA_COMMIT" ] || die "tag $SHERPA_TAG is $got, pinned $SHERPA_COMMIT"
-  # Only what STT needs: the C API as a shared library on the system onnxruntime.
-  # No TTS, no CLI binaries, no python/websocket/portaudio.
+  # The C API as a shared library on the system onnxruntime, with TTS (for
+  # taos-ttsd; this pulls espeak-ng and piper-phonemize in STATICALLY, at the
+  # hashes sherpa's own cmake pins). No CLI binaries, no python/websocket/portaudio.
   SHERPA_ONNXRUNTIME_INCLUDE_DIR=/usr/include/onnxruntime SHERPA_ONNXRUNTIME_LIB_DIR=/usr/lib \
   cmake -S "$CACHE/build/sherpa-onnx" -B "$CACHE/build/sherpa-onnx/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-include cstdint" -DBUILD_SHARED_LIBS=ON \
-    -DSHERPA_ONNX_ENABLE_C_API=ON -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_TTS=OFF \
+    -DSHERPA_ONNX_ENABLE_C_API=ON -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_TTS=ON \
     -DSHERPA_ONNX_ENABLE_PYTHON=OFF -DSHERPA_ONNX_ENABLE_TESTS=OFF \
     -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \
     -DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=ON
@@ -159,11 +168,12 @@ else
   nice -n 15 ninja -C "$CACHE/build/sherpa-onnx/build" -j6 sherpa-onnx-c-api
   built="$CACHE/build/sherpa-onnx/build/lib/libsherpa-onnx-c-api.so"
   [ -f "$built" ] || die "build finished but $built is missing"
-  rm -f "$PREFIX/lib/.commit"
+  rm -f "$PREFIX/lib/.commit" "$PREFIX/lib/.features"
   install -m 0755 "$built" "$LIB.new"
   mv -f "$LIB.new" "$LIB"
   printf '%s\n' "$SHERPA_COMMIT" > "$PREFIX/lib/.commit"
-  chmod 0644 "$PREFIX/lib/.commit"
+  printf '%s\n' "$SHERPA_FEATURES" > "$PREFIX/lib/.features"
+  chmod 0644 "$PREFIX/lib/.commit" "$PREFIX/lib/.features"
   CHANGED=1
   say "build took $(( $(date +%s) - B0 )) s"
 fi
@@ -174,6 +184,8 @@ if ldd "$LIB" 2>&1 | grep -q 'not found'; then
 fi
 ORT=$(ldd "$LIB" | awk '/libonnxruntime/ {print $3}')
 [ -n "$ORT" ] || die "$LIB does not link libonnxruntime"
+# the TTS-OFF build compiles its TTS stubs with this message; the real code never has it
+! grep -q "TTS is not enabled" "$LIB" || die "$LIB was built without TTS (taos-ttsd needs it)"
 
 # ---- 4. the model: verify, fetch only if needed, verify again -----------------
 # name:hash pairs, with the directory each lives in

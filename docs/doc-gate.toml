@@ -66,6 +66,10 @@ unscanned_paths = [
   # (manifest.json under the install prefix) and upstream URLs, none of which
   # are in this repo.
   "pmos/voice/NOTICE-STT.md",
+  # The Apache-2.0 / GPL attribution for the text-to-speech model and espeak-ng
+  # names on-device paths, upstream URLs and upstream repos' files (sherpa-onnx's
+  # scripts/kitten-tts/ and cmake/), none of which are in this repo.
+  "pmos/voice/NOTICE-TTS.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and

@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""taos-ttsd: the handset's local text-to-speech daemon.
+
+One resident synthesizer (sherpa-onnx offline TTS, Kitten nano v0.8 fp32,
+voice expr-voice-2-m) behind a loopback-only HTTP API. No third-party Python:
+http.server for the wire, ctypes over libsherpa-onnx-c-api.so for the engine,
+mirroring the calls the bench measured (voice-bench-20260930/bench-tts2.c, kind
+"kitten": model*.onnx, voices.bin, tokens.txt, espeak-ng-data, length_scale 1.0;
+max_num_sentences 1; generation speed 1.0, silence_scale 0.2, sid 0).
+
+  GET  /health   200 {"ok":true,"engine":...,"model":...,"voice":...,
+                 "sample_rate":24000,"load_ms":...} once the model is loaded;
+                 503 {"ok":false,...} before that
+  POST /tts      body = JSON {"text": "..."}  ->  200, Transfer-Encoding: chunked,
+                 Content-Type audio/pcm, X-Sample-Rate 24000, X-Channels 1,
+                 X-Sample-Format s16le: PCM16 little-endian mono, written one
+                 chunk per sentence AS SHERPA PRODUCES IT (the generate callback),
+                 so the first sentence plays while the rest is synthesised.
+
+POST /tts refusals. All but the last three are decided from the headers alone,
+BEFORE a byte of body is read; none of them ever reaches the engine:
+  request is HTTP/1.0 (cannot take chunked)   505
+  no Content-Length                           411
+  Content-Length empty/non-digit/signed       400
+  Content-Length > 16384 bytes                413   (never read, never buffered)
+  Content-Length 0                            400
+  Content-Type present and not JSON           415
+  already 4 requests in flight                503
+  client closes or stalls mid-upload          connection dropped, NO synthesis
+  body not UTF-8 / not JSON / not an object /
+    "text" missing or not a string /
+    duplicate or unknown keys (a client must
+    not believe it set a voice or a speed
+    that is ignored) / text empty or only
+    whitespace / text holds a NUL or a lone
+    surrogate                                 400
+  text longer than 2000 characters            413
+Text is never written to disk and never logged. Syntheses are serialised by one
+lock: one synthesizer, one synthesis at a time.
+
+STREAMING AND FAILURE. Status and headers go out with the first sentence's
+audio, not before. If the engine fails before any audio, the reply is a plain
+500. If it fails after audio has gone out, the connection is closed WITHOUT the
+terminating zero-length chunk, so the client sees a truncated body, never a
+clean short one. If writing to the client fails (it disconnected, or did not
+read for SOCKET_TIMEOUT_S), the callback returns 0 and sherpa stops generating:
+nothing is synthesised for a gone client, and the lock is released.
+
+LIFECYCLE: RESIDENT (always running), not started on demand. Bench figures
+(RESULTS-v2.md, kitten-nano-fp32-expr-voice-2-m, measured on the handset by the
+bench harness, NOT yet by this daemon): cold load 1.29 s (0.81 s warm page
+cache), peak RSS 328 MB; time to first audio 332 ms for the one-word sentence
+"Sure.", 638 ms for an 8-word sentence, 2.46 s for a 25-word one; RTF 0.19-0.22
+on the four big cores, no drift under sustained load.
+
+CPU PLACEMENT: the unit pins it to CPUAffinity=4-7 (the big cores), like
+taos-sttd, because Kitten nano on the little cores runs at RTF 0.78 (bench;
+1.23 on two little cores), too close to real time to stream safely. In a
+normal voice turn STT and TTS do not overlap: the transcript is final before
+the reply is synthesised. The overlap case (barge-in: transcribing while
+speaking) puts both engines on cores 4-7; its cost is to be MEASURED on the
+device after install, not assumed (the bench's unpinned 4+4 run took Kitten's
+time to first audio from 0.3 s to 1.0 s, which is why it must be measured).
+
+Environment (set by the unit, from what install-tts.sh resolved):
+  TAOS_TTS_MODEL_DIR  REQUIRED. The directory holding model*.onnx, voices.bin,
+                      tokens.txt and espeak-ng-data/: the controller's unified
+                      model store, <models_root>/sherpa-onnx/kitten/
+                      kitten-nano-en-v0_8-fp32. Never hardcoded here.
+  TAOS_TTS_LIB        path to libsherpa-onnx-c-api.so. There is ONE copy, built
+                      (with TTS) by install-stt.sh; default
+                      /opt/taos-voice/stt/lib/libsherpa-onnx-c-api.so
+  TAOS_TTS_PORT       6976
+  TAOS_TTS_THREADS    4
+  TAOS_TTS_SID        0 (expr-voice-2-m); checked against the model at load
+The daemon does NOT read the controller's manifest.json (it lives in the
+controller's 0700 data dir, which this unprivileged user cannot enter).
+"""
+import ctypes
+import glob
+import http.server
+import json
+import math
+import os
+import socket
+import socketserver
+import sys
+import threading
+import time
+import traceback
+from array import array
+
+ENGINE = "sherpa-onnx"
+MODEL = "kitten-nano-en-v0_8-fp32"
+HOST = "127.0.0.1"          # never configurable: loopback only
+DEFAULT_PORT = 6976
+DEFAULT_LIB = "/opt/taos-voice/stt/lib/libsherpa-onnx-c-api.so"
+SAMPLE_RATE = 24000
+MAX_BODY = 16384            # bytes of JSON
+MAX_TEXT = 2000             # characters of text (len(str), not bytes)
+MAX_INFLIGHT = 4            # uploads+syntheses admitted at once; the rest get 503
+RECV_CHUNK = 65536
+BODY_DEADLINE_S = 10.0      # whole-upload wall clock: a trickling client cannot pin a slot
+SOCKET_TIMEOUT_S = 15.0     # any single stall, reading the body OR writing audio
+# sid -> name, from the model's own metadata (speaker_names) in the pinned archive
+VOICES = ("expr-voice-2-m", "expr-voice-2-f", "expr-voice-3-m", "expr-voice-3-f",
+          "expr-voice-4-m", "expr-voice-4-f", "expr-voice-5-m", "expr-voice-5-f")
+
+
+def voice_name(sid):
+    return VOICES[sid] if 0 <= sid < len(VOICES) else "sid-%d" % sid
+
+
+def pcm16(floats):
+    """Float samples -> PCM16 little-endian bytes: clamp to [-1, 1], scale by
+    32767, truncate toward zero. NaN maps to 0 rather than raising."""
+    a = array("h", [int(max(-1.0, min(1.0, x)) * 32767.0) if not math.isnan(x) else 0
+                    for x in floats])
+    if sys.byteorder == "big":
+        a.byteswap()
+    return a.tobytes()
+
+
+# ---------------------------------------------------------------- engine ---
+
+class SherpaSynthesizer:
+    """The one synthesizer. load() once; synthesize() is NOT thread safe, the
+    server serialises it. Tests substitute a fake with the same members:
+    `loaded`, `load_ms`, `engine`, `model`, `voice`, `sample_rate` and
+    synthesize(text, emit) where emit(pcm16_bytes) -> bool; False means the
+    client is gone and synthesis must stop."""
+
+    engine = ENGINE
+    model = MODEL
+    sample_rate = SAMPLE_RATE
+
+    def __init__(self, lib_path, model_dir, threads=4, sid=0):
+        self.lib_path = lib_path
+        self.model_dir = model_dir
+        self.threads = threads
+        self.sid = sid
+        self.voice = voice_name(sid)
+        self.loaded = False
+        self.load_ms = None
+        self._lib = None
+        self._tts = None
+
+    def load(self):
+        t0 = time.monotonic()
+        lib = ctypes.CDLL(self.lib_path)
+        _declare(lib)
+        md = self.model_dir
+        models = sorted(glob.glob(os.path.join(md, "model*.onnx")))
+        if len(models) != 1:
+            raise RuntimeError("want exactly one model*.onnx in %s, found %d" % (md, len(models)))
+        cfg = OfflineTtsConfig()                 # zero-initialised, as bench-tts2.c memsets
+        k = cfg.model.kitten
+        # keep the byte strings alive: the config holds bare pointers
+        self._keep = [models[0].encode()] + [os.path.join(md, n).encode() for n in
+                                             ("voices.bin", "tokens.txt", "espeak-ng-data")]
+        self._keep.append(b"cpu")
+        k.model, k.voices, k.tokens, k.data_dir = self._keep[:4]
+        k.length_scale = 1.0
+        cfg.model.num_threads = self.threads
+        cfg.model.provider = self._keep[4]
+        cfg.max_num_sentences = 1                # one callback per sentence: streaming
+        tts = lib.SherpaOnnxCreateOfflineTts(ctypes.byref(cfg))
+        if not tts:
+            raise RuntimeError("SherpaOnnxCreateOfflineTts returned NULL (see stderr)")
+        sr = lib.SherpaOnnxOfflineTtsSampleRate(tts)
+        ns = lib.SherpaOnnxOfflineTtsNumSpeakers(tts)
+        if sr != SAMPLE_RATE:
+            raise RuntimeError("model sample rate %d, expected %d" % (sr, SAMPLE_RATE))
+        if not 0 <= self.sid < ns:
+            raise RuntimeError("TAOS_TTS_SID %d out of range: model has %d speakers" % (self.sid, ns))
+        self._lib, self._tts = lib, tts
+        self.loaded = True
+        self.load_ms = int((time.monotonic() - t0) * 1000)
+
+    def synthesize(self, text, emit):
+        lib = self._lib
+        g = GenerationConfig()                   # zero-initialised
+        g.speed = 1.0
+        g.silence_scale = 0.2
+        g.sid = self.sid
+        failure = []
+
+        def on_audio(samples, n, progress, arg):
+            # an exception escaping a ctypes callback returns garbage to C: never let one
+            try:
+                return 1 if emit(pcm16(samples[:n])) else 0
+            except BaseException as e:           # noqa: BLE001 (re-raised below)
+                failure.append(e)
+                return 0
+
+        cb = AudioCallback(on_audio)             # held in a local for the whole call
+        audio = lib.SherpaOnnxOfflineTtsGenerateWithConfig(
+            self._tts, text.encode("utf-8"), ctypes.byref(g), cb, None)
+        if audio:
+            lib.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
+        if failure:
+            raise failure[0]
+        if not audio:
+            raise RuntimeError("SherpaOnnxOfflineTtsGenerateWithConfig returned NULL")
+
+
+# ctypes mirror of sherpa-onnx v1.13.8 c-api.h (commit pinned in install-stt.sh,
+# which builds the one library). Field ORDER IS THE ABI: every sub-struct of the
+# model config is declared in full because kitten sits in the middle of it and
+# max_num_sentences / silence_scale come after it. Checked against the pinned
+# header by compiling offsetof()/sizeof() for every struct below and comparing
+# with ctypes (x86_64 and aarch64 are both LP64 with the same alignment rules).
+# install-tts.sh's end-to-end smoke synthesis fails loudly if the layout drifts.
+P = ctypes.c_char_p
+I = ctypes.c_int32
+F = ctypes.c_float
+
+
+def _st(name, fields):
+    return type(name, (ctypes.Structure,), {"_fields_": fields})
+
+
+VitsCfg = _st("VitsCfg", [("model", P), ("lexicon", P), ("tokens", P), ("data_dir", P),
+                          ("noise_scale", F), ("noise_scale_w", F), ("length_scale", F),
+                          ("dict_dir", P)])
+MatchaCfg = _st("MatchaCfg", [("acoustic_model", P), ("vocoder", P), ("lexicon", P), ("tokens", P),
+                              ("data_dir", P), ("noise_scale", F), ("length_scale", F),
+                              ("dict_dir", P)])
+KokoroCfg = _st("KokoroCfg", [("model", P), ("voices", P), ("tokens", P), ("data_dir", P),
+                              ("length_scale", F), ("dict_dir", P), ("lexicon", P), ("lang", P)])
+KittenCfg = _st("KittenCfg", [("model", P), ("voices", P), ("tokens", P), ("data_dir", P),
+                              ("length_scale", F)])
+ZipvoiceCfg = _st("ZipvoiceCfg", [("tokens", P), ("encoder", P), ("decoder", P), ("vocoder", P),
+                                  ("data_dir", P), ("lexicon", P), ("feat_scale", F),
+                                  ("t_shift", F), ("target_rms", F), ("guidance_scale", F)])
+PocketCfg = _st("PocketCfg", [("lm_flow", P), ("lm_main", P), ("encoder", P), ("decoder", P),
+                              ("text_conditioner", P), ("vocab_json", P),
+                              ("token_scores_json", P), ("voice_embedding_cache_capacity", I)])
+SupertonicCfg = _st("SupertonicCfg", [("duration_predictor", P), ("text_encoder", P),
+                                      ("vector_estimator", P), ("vocoder", P), ("tts_json", P),
+                                      ("unicode_indexer", P), ("voice_style", P)])
+OfflineTtsModelConfig = _st("OfflineTtsModelConfig", [
+    ("vits", VitsCfg), ("num_threads", I), ("debug", I), ("provider", P),
+    ("matcha", MatchaCfg), ("kokoro", KokoroCfg), ("kitten", KittenCfg),
+    ("zipvoice", ZipvoiceCfg), ("pocket", PocketCfg), ("supertonic", SupertonicCfg)])
+# NB the outer silence_scale stays 0, as in bench-tts2.c; the 0.2 is set on
+# GenerationConfig, which is what GenerateWithConfig reads.
+OfflineTtsConfig = _st("OfflineTtsConfig", [
+    ("model", OfflineTtsModelConfig), ("rule_fsts", P), ("max_num_sentences", I),
+    ("rule_fars", P), ("silence_scale", F)])
+GenerationConfig = _st("GenerationConfig", [
+    ("silence_scale", F), ("speed", F), ("sid", I), ("reference_audio", ctypes.POINTER(F)),
+    ("reference_audio_len", I), ("reference_sample_rate", I), ("reference_text", P),
+    ("num_steps", I), ("extra", P)])
+GeneratedAudio = _st("GeneratedAudio", [("samples", ctypes.POINTER(F)), ("n", I),
+                                        ("sample_rate", I)])
+# SherpaOnnxGeneratedAudioProgressCallbackWithArg: return 0 to stop generating
+AudioCallback = ctypes.CFUNCTYPE(I, ctypes.POINTER(F), I, F, ctypes.c_void_p)
+
+
+def _declare(lib):
+    vp = ctypes.c_void_p
+    lib.SherpaOnnxCreateOfflineTts.restype = vp
+    lib.SherpaOnnxCreateOfflineTts.argtypes = [ctypes.POINTER(OfflineTtsConfig)]
+    lib.SherpaOnnxOfflineTtsSampleRate.restype = I
+    lib.SherpaOnnxOfflineTtsSampleRate.argtypes = [vp]
+    lib.SherpaOnnxOfflineTtsNumSpeakers.restype = I
+    lib.SherpaOnnxOfflineTtsNumSpeakers.argtypes = [vp]
+    lib.SherpaOnnxOfflineTtsGenerateWithConfig.restype = ctypes.POINTER(GeneratedAudio)
+    lib.SherpaOnnxOfflineTtsGenerateWithConfig.argtypes = [
+        vp, P, ctypes.POINTER(GenerationConfig), AudioCallback, vp]
+    lib.SherpaOnnxDestroyOfflineTtsGeneratedAudio.restype = None
+    lib.SherpaOnnxDestroyOfflineTtsGeneratedAudio.argtypes = [ctypes.POINTER(GeneratedAudio)]
+
+
+# ------------------------------------------------------------------ http ---
+
+class BadRequest(Exception):
+    def __init__(self, code, msg):
+        Exception.__init__(self, msg)
+        self.code, self.msg = code, msg
+
+
+def parse_length(headers):
+    """Content-Length -> int, or BadRequest(411|400|413). Decided from the
+    header alone, before any body byte is read."""
+    vals = headers.get_all("Content-Length") or []
+    if not vals:
+        raise BadRequest(411, "Content-Length required")
+    if len({v.strip() for v in vals}) != 1:
+        raise BadRequest(400, "conflicting Content-Length")
+    v = vals[0].strip()
+    # str.isdigit() accepts superscripts and other unicode digits: require ASCII
+    if not (v.isascii() and v.isdigit()):
+        raise BadRequest(400, "invalid Content-Length")
+    n = int(v)
+    if n > MAX_BODY:
+        raise BadRequest(413, "body over %d bytes" % MAX_BODY)
+    return n
+
+
+def check_request(headers):
+    """All header-only validation for POST /tts. Returns the body length."""
+    n = parse_length(headers)
+    if n == 0:
+        raise BadRequest(400, "empty body")
+    ct = headers.get("Content-Type")
+    if ct is not None and ct.split(";", 1)[0].strip().lower() != "application/json":
+        raise BadRequest(415, "Content-Type must be application/json")
+    return n
+
+
+def _no_duplicates(pairs):
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise BadRequest(400, "duplicate key %r" % k)
+        d[k] = v
+    return d
+
+
+def parse_text(body):
+    """The JSON body -> the text to speak, or BadRequest(400|413)."""
+    try:
+        obj = json.loads(body.decode("utf-8"), object_pairs_hook=_no_duplicates)
+    except (UnicodeDecodeError, ValueError):
+        raise BadRequest(400, "body is not UTF-8 JSON")
+    if not isinstance(obj, dict):
+        raise BadRequest(400, "body must be a JSON object")
+    if "text" not in obj:
+        raise BadRequest(400, '"text" is required')
+    extra = sorted(set(obj) - {"text"})
+    if extra:
+        raise BadRequest(400, "unknown keys: %s (only \"text\" is accepted)" % ", ".join(extra))
+    text = obj["text"]
+    if not isinstance(text, str):
+        raise BadRequest(400, '"text" must be a string')
+    if not text.strip():
+        raise BadRequest(400, '"text" is empty')
+    if "\x00" in text:
+        raise BadRequest(400, '"text" contains NUL')
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise BadRequest(400, '"text" contains a lone surrogate')
+    if len(text) > MAX_TEXT:
+        raise BadRequest(413, '"text" over %d characters' % MAX_TEXT)
+    return text
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "taos-ttsd"
+    sys_version = ""
+    # HTTP/1.1 for chunked replies; every reply says Connection: close, so it is
+    # still one request per connection (no unread-body desync)
+    protocol_version = "HTTP/1.1"
+    timeout = SOCKET_TIMEOUT_S
+
+    def log_message(self, fmt, *args):  # request line + status only; never text or audio
+        sys.stderr.write("taos-ttsd: %s\n" % (fmt % args))
+
+    def _json(self, code, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path != "/health":
+            return self._json(404, {"error": "not found"})
+        eng = self.server.engine
+        if not eng.loaded:
+            return self._json(503, {"ok": False, "engine": eng.engine, "model": eng.model,
+                                    "error": "model loading"})
+        self._json(200, {"ok": True, "engine": eng.engine, "model": eng.model,
+                         "voice": eng.voice, "sample_rate": eng.sample_rate,
+                         "load_ms": eng.load_ms})
+
+    def do_POST(self):
+        if self.path != "/tts":
+            return self._json(404, {"error": "not found"})
+        if self.request_version != "HTTP/1.1":
+            return self._json(505, {"error": "HTTP/1.1 required (the reply is chunked)"})
+        srv = self.server
+        try:
+            n = check_request(self.headers)
+        except BadRequest as e:
+            return self._json(e.code, {"error": e.msg})
+        if not srv.engine.loaded:
+            return self._json(503, {"error": "model loading"})
+        if not srv.slots.acquire(blocking=False):
+            return self._json(503, {"error": "busy"})
+        try:
+            body = self._read_body(n)
+            if body is None:           # client went away or stalled: no synthesis, no reply
+                self.close_connection = True
+                return
+            try:
+                text = parse_text(body)
+            except BadRequest as e:
+                return self._json(e.code, {"error": e.msg})
+            with srv.synth_lock:
+                self._stream(text)
+        finally:
+            srv.slots.release()
+
+    def _start_stream(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/pcm")
+        self.send_header("X-Sample-Rate", str(self.server.engine.sample_rate))
+        self.send_header("X-Channels", "1")
+        self.send_header("X-Sample-Format", "s16le")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _stream(self, text):
+        state = {"started": False, "gone": False}
+
+        def emit(pcm):
+            if state["gone"]:
+                return False
+            try:
+                if not state["started"]:
+                    state["started"] = True
+                    self._start_stream()
+                if pcm:
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(pcm), pcm))
+                return True
+            except (socket.timeout, OSError):
+                state["gone"] = True
+                return False
+
+        try:
+            self.server.engine.synthesize(text, emit)
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            if not state["started"]:
+                return self._json(500, {"error": "synthesis failed"})
+            self.close_connection = True       # NO terminal chunk: the client sees truncation
+            return
+        if state["gone"]:
+            self.close_connection = True
+            return
+        try:
+            if not state["started"]:           # no audio at all: still a valid, empty stream
+                self._start_stream()
+            self.wfile.write(b"0\r\n\r\n")
+        except (socket.timeout, OSError):
+            self.close_connection = True
+
+    def _read_body(self, n):
+        """Exactly n bytes, or None if the peer closes/stalls first."""
+        chunks, got = [], 0
+        deadline = time.monotonic() + BODY_DEADLINE_S
+        while got < n:
+            if time.monotonic() > deadline:
+                return None
+            try:
+                c = self.rfile.read(min(RECV_CHUNK, n - got))
+            except (socket.timeout, OSError):
+                return None
+            if not c:
+                return None
+            chunks.append(c)
+            got += len(c)
+        return b"".join(chunks)
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 16
+
+    def __init__(self, addr, engine):
+        self.engine = engine
+        self.synth_lock = threading.Lock()
+        self.slots = threading.BoundedSemaphore(MAX_INFLIGHT)
+        http.server.HTTPServer.__init__(self, addr, Handler)
+
+
+def make_server(engine, port=DEFAULT_PORT, host=HOST):
+    return Server((host, port), engine)
+
+
+def _notify(msg):
+    path = os.environ.get("NOTIFY_SOCKET")
+    if not path:
+        return
+    if path[0] == "@":
+        path = "\0" + path[1:]
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        s.sendto(msg.encode(), path)
+    finally:
+        s.close()
+
+
+def main():
+    model_dir = os.environ.get("TAOS_TTS_MODEL_DIR")
+    if not model_dir:
+        sys.exit("taos-ttsd: TAOS_TTS_MODEL_DIR is not set (install-tts.sh writes it into the unit)")
+    lib_path = os.environ.get("TAOS_TTS_LIB") or DEFAULT_LIB
+    port = int(os.environ.get("TAOS_TTS_PORT", str(DEFAULT_PORT)))
+    threads = int(os.environ.get("TAOS_TTS_THREADS", "4"))
+    sid = int(os.environ.get("TAOS_TTS_SID", "0"))
+    eng = SherpaSynthesizer(lib_path, model_dir, threads, sid)
+    srv = make_server(eng, port)             # bound first: /health answers 503 while loading
+
+    def load():
+        try:
+            eng.load()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            os._exit(3)                       # fail loudly; systemd restarts on-failure
+        sys.stderr.write("taos-ttsd: model loaded in %d ms (voice %s), listening on %s:%d\n"
+                         % (eng.load_ms, eng.voice, HOST, port))
+        _notify("READY=1")
+
+    threading.Thread(target=load, daemon=True).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,370 @@
+#!/bin/sh
+# Install the handset's local text-to-speech engine. Run as root ON THE DEVICE,
+# AFTER install-stt.sh:
+#
+#     sudo sh pmos/voice/install-stt.sh     # once: builds the shared sherpa-onnx library
+#     sudo sh pmos/voice/install-tts.sh
+#
+# Downloads the Kitten nano v0.8 fp32 model and VERIFIES it against pinned
+# sha256s, installs the daemon and its systemd unit, starts it, and proves it
+# with a real synthesis. A FILE in this repo, not a hand-edit: a reflash wipes
+# anything typed in.
+#
+# ONE sherpa-onnx library, not two. install-stt.sh already builds
+# libsherpa-onnx-c-api.so from source at a pinned commit (about the longest step
+# of either install), with TTS enabled for this daemon. This script does NOT
+# build a second copy, and does not factor the build into a shared helper
+# either: that would move the STT library's path and its skip-the-rebuild stamp
+# for no gain while there is one library and one builder. Instead it REQUIRES
+# the STT install's library, and refuses it with a clear message unless its
+# recorded commit equals SHERPA_COMMIT below (the same pin as install-stt.sh;
+# test_taos_ttsd.py asserts the two match) and it was built with TTS. The
+# consequence is an ordering rule: run install-stt.sh first, and re-run this
+# after any install-stt.sh that moves the pin.
+#
+# Idempotent: a re-run with everything present skips the download, but
+# re-verifies every hash and only restarts the daemon if something it runs from
+# changed.
+#
+# Fails loudly: set -eu, and no `|| true` on anything that matters.
+#
+# Layout (every root is overridable by an environment variable):
+#   $TAOS_TTS_PREFIX  (default /opt/taos-voice/tts)
+#       bin/ NOTICE                       the daemon and its notice
+#   $TAOS_STT_PREFIX  (default /opt/taos-voice/stt; must equal the
+#                     TAOS_VOICE_PREFIX install-stt.sh used)
+#       lib/libsherpa-onnx-c-api.so       the ONE engine library, READ here
+#   $TAOS_MODELS_ROOT/sherpa-onnx/kitten/kitten-nano-en-v0_8-fp32/
+#       model.fp32.onnx voices.bin tokens.txt espeak-ng-data/
+#                                         the controller's UNIFIED MODEL STORE
+#                                         (tinyagentos installers/model_paths.py:
+#                                         <root>/<backend>/<family>/<id>/<file>)
+#   $TAOS_DATA_DIR/voice/tts/manifest.json   for the controller to read
+#   /var/cache/taos-voice/dl-tts/        download scratch. NOT /tmp: /tmp is a
+#                                        RAM tmpfs on this phone
+#
+# TAOS_DATA_DIR and TAOS_MODELS_ROOT are resolved from the RUNNING controller
+# (its environment, else its working directory + /data and /models, which is
+# what tinyagentos itself does) unless you set them; the install fails if it
+# cannot resolve them.
+set -eu
+
+# ---- pins ----------------------------------------------------------------
+# must equal install-stt.sh's pin: this is the commit the shared library is
+# required to have been built at
+SHERPA_COMMIT=11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf
+SHERPA_FEATURES=tts
+MODEL_NAME=kitten-nano-en-v0_8-fp32
+MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-nano-en-v0_8-fp32.tar.bz2
+# Computed 2026-10-01 by downloading MODEL_URL (63815222 bytes) and hashing it;
+# equal to the sha256 digest GitHub publishes for that release asset (updated
+# 2026-05-12). The per-file hashes below are of the files in that archive.
+MODEL_ARCHIVE_SHA256=16092117bfe591ddcd58d078e1454603b8e1caea46f85653b2c2efae76bd883e
+SHA_model_fp32_onnx=2174dbf67b58b7b50d7b65294f89c2c53c172834533519b853c579879a04cc22
+SHA_voices_bin=d520519c4a3519d44fcfcd943ed0b1e3c5da5cee0eea501d922fac1a93cd24dc
+SHA_tokens_txt=934a4188addc7665dd3410256bb622169242357fbb99d840d9351209b486dabb
+# espeak-ng-data/ is 355 files (one has a space in its name): pinned as ONE
+# digest over the whole tree, computed by tree_sha256 below
+TREE_espeak_ng_data=1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332
+PORT=6976
+
+PREFIX="${TAOS_TTS_PREFIX:-/opt/taos-voice/tts}"
+STT_PREFIX="${TAOS_STT_PREFIX:-/opt/taos-voice/stt}"
+CACHE=/var/cache/taos-voice
+DL="$CACHE/dl-tts"
+SVC=taos-ttsd
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+die() { echo "install-tts: FAIL: $*" >&2; exit 1; }
+say() { echo "install-tts: $*"; }
+
+# verify_sha256 FILE WANT_HEX64 -> 0 if FILE hashes to WANT, else 1 (loudly).
+verify_sha256() {
+  _f=$1; _want=$2
+  case $_want in
+    *[!0-9a-f]*|"") echo "verify_sha256: bad pinned hash '$_want'" >&2; return 1 ;;
+  esac
+  [ "${#_want}" -eq 64 ] || { echo "verify_sha256: pinned hash is not 64 hex chars" >&2; return 1; }
+  [ -f "$_f" ] || { echo "verify_sha256: $_f is missing" >&2; return 1; }
+  _got=$(sha256sum "$_f") || return 1
+  _got=${_got%% *}
+  if [ "$_got" != "$_want" ]; then
+    echo "verify_sha256: MISMATCH $_f: want $_want got $_got" >&2
+    return 1
+  fi
+  return 0
+}
+
+# tree_sha256 DIR -> prints one sha256 over every regular file under DIR:
+# sha256 of the byte-sorted lines "<relative path>\0<file sha256 hex>\n". Any
+# added, removed, renamed or changed file changes it. Refuses symlinks and
+# anything that is not a regular file or a directory. Python, not find|sort|
+# sha256sum, so a filename with a space (espeak-ng-data has one) or the locale
+# cannot change the answer.
+tree_sha256() {
+  python3 - "$1" <<'PYEOF'
+import hashlib, os, stat, sys
+root = sys.argv[1]
+if not os.path.isdir(root) or os.path.islink(root):
+    sys.exit("tree_sha256: %s is not a directory" % root)
+files = []
+for d, dirs, names in os.walk(root):
+    for n in dirs + names:
+        p = os.path.join(d, n)
+        m = os.lstat(p).st_mode
+        if stat.S_ISLNK(m):
+            sys.exit("tree_sha256: refusing symlink %s" % p)
+        if stat.S_ISREG(m):
+            files.append(os.path.relpath(p, root).encode("utf-8", "surrogateescape"))
+        elif not stat.S_ISDIR(m):
+            sys.exit("tree_sha256: refusing non-regular file %s" % p)
+h = hashlib.sha256()
+for rel in sorted(files):
+    fh = hashlib.sha256()
+    with open(os.path.join(root.encode("utf-8", "surrogateescape"), rel), "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            fh.update(b)
+    h.update(rel + b"\0" + fh.hexdigest().encode() + b"\n")
+print(h.hexdigest())
+PYEOF
+}
+
+# verify_tree DIR WANT_HEX64 -> 0 if the tree digest matches, else 1 (loudly).
+verify_tree() {
+  _got=$(tree_sha256 "$1") || return 1
+  if [ "$_got" != "$2" ]; then
+    echo "verify_tree: MISMATCH $1: want $2 got $_got" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Sourced by the tests to reach verify_sha256 and tree_sha256 alone.
+if [ "${INSTALL_TTS_SOURCE_ONLY:-0}" = 1 ]; then return 0; fi
+
+[ "$(id -u)" -eq 0 ] || die "run as root"
+START=$(date +%s)
+CHANGED=0
+
+# ---- 0. where the controller keeps its data and its models --------------------
+# tinyagentos: data_dir = $TAOS_DATA_DIR, else <project>/data; models_root =
+# $TAOS_MODELS_ROOT, else <project>/models (app.py resolve_data_dir,
+# installers/model_paths.py models_root). <project> is the controller's working
+# directory.
+CTL_PID=$(systemctl show -p MainPID --value tinyagentos.service 2>/dev/null || true)
+ctl_env() { # ctl_env NAME: the controller's environment value, or nothing
+  [ -n "$CTL_PID" ] && [ "$CTL_PID" != 0 ] && [ -r "/proc/$CTL_PID/environ" ] || return 0
+  tr '\0' '\n' < "/proc/$CTL_PID/environ" | sed -n "s/^$1=//p" | head -n 1
+}
+ctl_cwd() { [ -n "$CTL_PID" ] && [ "$CTL_PID" != 0 ] && readlink "/proc/$CTL_PID/cwd" || true; }
+if [ -z "${TAOS_DATA_DIR:-}" ]; then
+  TAOS_DATA_DIR=$(ctl_env TAOS_DATA_DIR)
+  [ -n "$TAOS_DATA_DIR" ] || { c=$(ctl_cwd); [ -z "$c" ] || TAOS_DATA_DIR=$c/data; }
+fi
+if [ -z "${TAOS_MODELS_ROOT:-}" ]; then
+  TAOS_MODELS_ROOT=$(ctl_env TAOS_MODELS_ROOT)
+  [ -n "$TAOS_MODELS_ROOT" ] || { c=$(ctl_cwd); [ -z "$c" ] || TAOS_MODELS_ROOT=$c/models; }
+fi
+[ -n "$TAOS_DATA_DIR" ] && [ -d "$TAOS_DATA_DIR" ] ||
+  die "cannot resolve the controller's data dir (got '${TAOS_DATA_DIR:-}'); set TAOS_DATA_DIR"
+[ -n "$TAOS_MODELS_ROOT" ] && [ -d "$TAOS_MODELS_ROOT" ] ||
+  die "cannot resolve the controller's model store (got '${TAOS_MODELS_ROOT:-}'); set TAOS_MODELS_ROOT"
+DATA_OWNER=$(stat -c %U:%G "$TAOS_DATA_DIR")
+MODELS_OWNER=$(stat -c %U:%G "$TAOS_MODELS_ROOT")
+MODEL_DIR="$TAOS_MODELS_ROOT/sherpa-onnx/kitten/$MODEL_NAME"
+MANIFEST_DIR="$TAOS_DATA_DIR/voice/tts"
+say "controller data dir:  $TAOS_DATA_DIR ($DATA_OWNER)"
+say "controller model store: $TAOS_MODELS_ROOT ($MODELS_OWNER) -> $MODEL_DIR"
+
+# ---- 1. the shared sherpa-onnx library: required, never built here -----------
+LIB="$STT_PREFIX/lib/libsherpa-onnx-c-api.so"
+RUN_STT="run 'sudo sh pmos/voice/install-stt.sh' first: it builds the one sherpa-onnx library (with TTS, at $SHERPA_COMMIT) that this daemon loads"
+[ -f "$LIB" ] || die "$LIB is missing; $RUN_STT"
+got=$(cat "$STT_PREFIX/lib/.commit" 2>/dev/null || true)
+[ "$got" = "$SHERPA_COMMIT" ] ||
+  die "$LIB was built at '${got:-unknown}', this script needs $SHERPA_COMMIT; $RUN_STT"
+got=$(cat "$STT_PREFIX/lib/.features" 2>/dev/null || true)
+[ "$got" = "$SHERPA_FEATURES" ] ||
+  die "$LIB was built without TTS (features '${got:-none}'); $RUN_STT"
+# belt and braces: the TTS-OFF build's stubs carry this message, the real code never does
+! grep -q "TTS is not enabled" "$LIB" || die "$LIB holds the TTS-disabled stubs; $RUN_STT"
+if ldd "$LIB" 2>&1 | grep -q 'not found'; then
+  ldd "$LIB" >&2
+  die "$LIB has unresolved dependencies"
+fi
+ORT=$(ldd "$LIB" | awk '/libonnxruntime/ {print $3}')
+[ -n "$ORT" ] || die "$LIB does not link libonnxruntime"
+say "using $LIB (sherpa-onnx $SHERPA_COMMIT, $SHERPA_FEATURES)"
+
+# ---- 2. runtime tools (nothing to build) ------------------------------------
+need=""
+for p in python3 curl bzip2 tar; do
+  apk info -e "$p" >/dev/null 2>&1 || need="$need $p"
+done
+if [ -n "$need" ]; then
+  say "apk add$need"
+  # shellcheck disable=SC2086
+  apk add --no-progress $need
+fi
+
+# ---- 3. the service user ---------------------------------------------------
+if ! getent passwd taos-tts >/dev/null; then
+  say "creating system user taos-tts"
+  adduser -S -D -H -h /var/empty -s /sbin/nologin taos-tts
+fi
+id taos-tts >/dev/null || die "user taos-tts does not exist"
+[ "$(id -u taos-tts)" -ne 0 ] || die "taos-tts resolved to uid 0"
+
+mkdir -p "$PREFIX/bin" "$MODEL_DIR" "$MANIFEST_DIR" "$DL"
+chmod 0755 "$PREFIX" "$PREFIX/bin"
+# the model store is the controller's: its files are owned by the controller user
+chown "$MODELS_OWNER" "$TAOS_MODELS_ROOT/sherpa-onnx" "$TAOS_MODELS_ROOT/sherpa-onnx/kitten" "$MODEL_DIR"
+chmod 0755 "$MODEL_DIR"
+chown "$DATA_OWNER" "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
+chmod 0755 "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
+
+# ---- 4. the model: verify, fetch only if needed, verify again -----------------
+verify_all() { # verify_all [quiet]
+  for f in model.fp32.onnx:$SHA_model_fp32_onnx voices.bin:$SHA_voices_bin tokens.txt:$SHA_tokens_txt; do
+    if [ "${1:-}" = quiet ]; then verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" 2>/dev/null || return 1
+    else verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" || return 1; fi
+  done
+  if [ "${1:-}" = quiet ]; then verify_tree "$MODEL_DIR/espeak-ng-data" "$TREE_espeak_ng_data" 2>/dev/null
+  else verify_tree "$MODEL_DIR/espeak-ng-data" "$TREE_espeak_ng_data"; fi
+}
+if verify_all quiet; then
+  say "model files present with the pinned hashes, skipping the download"
+else
+  say "downloading $MODEL_URL"
+  rm -rf "$DL/x"; mkdir -p "$DL/x"
+  curl -fsSL --retry 3 --retry-delay 5 -o "$DL/model.tar.bz2" "$MODEL_URL"
+  verify_sha256 "$DL/model.tar.bz2" "$MODEL_ARCHIVE_SHA256" || die "model archive hash mismatch"
+  tar -xjf "$DL/model.tar.bz2" -C "$DL/x"
+  src="$DL/x/$MODEL_NAME"
+  [ -d "$src" ] || die "archive did not contain the expected directory"
+  for f in model.fp32.onnx voices.bin tokens.txt; do
+    install -m 0644 -o "${MODELS_OWNER%:*}" -g "${MODELS_OWNER#*:}" "$src/$f" "$MODEL_DIR/$f.new"
+    mv -f "$MODEL_DIR/$f.new" "$MODEL_DIR/$f"
+  done
+  # the tree is swapped in whole: never a half-copied espeak-ng-data in place
+  rm -rf "$MODEL_DIR/espeak-ng-data.new" "$MODEL_DIR/espeak-ng-data.old"
+  cp -R "$src/espeak-ng-data" "$MODEL_DIR/espeak-ng-data.new"
+  chown -R "$MODELS_OWNER" "$MODEL_DIR/espeak-ng-data.new"
+  find "$MODEL_DIR/espeak-ng-data.new" -type d -exec chmod 0755 {} \;
+  find "$MODEL_DIR/espeak-ng-data.new" -type f -exec chmod 0644 {} \;
+  verify_tree "$MODEL_DIR/espeak-ng-data.new" "$TREE_espeak_ng_data" || die "espeak-ng-data failed verification"
+  if [ -e "$MODEL_DIR/espeak-ng-data" ]; then mv "$MODEL_DIR/espeak-ng-data" "$MODEL_DIR/espeak-ng-data.old"; fi
+  mv "$MODEL_DIR/espeak-ng-data.new" "$MODEL_DIR/espeak-ng-data"
+  rm -rf "$MODEL_DIR/espeak-ng-data.old" "$DL/x" "$DL/model.tar.bz2"
+  CHANGED=1
+fi
+# the loud pass, always: a re-run re-verifies even when it skipped the download
+verify_all || die "a model file failed verification"
+say "model hashes verified"
+
+# ---- 5. daemon, unit, notice -------------------------------------------------
+put() { # put SRC DST MODE : install if different, flag a change
+  if ! cmp -s "$1" "$2" 2>/dev/null; then install -D -m "$3" "$1" "$2"; CHANGED=1; fi
+}
+put "$HERE/taos-ttsd" "$PREFIX/bin/taos-ttsd" 0755
+put "$HERE/NOTICE-TTS.md" "$PREFIX/NOTICE" 0644
+# the library is rebuilt in place by install-stt.sh; restart if it changed under us
+LIB_ID=$(sha256sum "$LIB"); LIB_ID=${LIB_ID%% *}
+[ "$(cat "$PREFIX/.lib-sha256" 2>/dev/null || true)" = "$LIB_ID" ] || {
+  printf '%s\n' "$LIB_ID" > "$PREFIX/.lib-sha256"; chmod 0644 "$PREFIX/.lib-sha256"; CHANGED=1; }
+# the unit is a template: prefix, library, model dir and port are filled in here
+sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@LIB@|$LIB|g" -e "s|@MODEL_DIR@|$MODEL_DIR|g" -e "s|@PORT@|$PORT|g" \
+  "$HERE/../systemd/taos-ttsd.service" > "$CACHE/taos-ttsd.service.rendered"
+! grep -q '@[A-Z_]*@' "$CACHE/taos-ttsd.service.rendered" || die "unit has an unfilled placeholder"
+put "$CACHE/taos-ttsd.service.rendered" /etc/systemd/system/taos-ttsd.service 0644
+
+# ---- 6. manifest, for the controller (in its data dir, readable by it) ---------
+SHA_model=$SHA_model_fp32_onnx SHA_voices=$SHA_voices_bin SHA_tokens=$SHA_tokens_txt \
+TREE_espeak=$TREE_espeak_ng_data SHERPA_COMMIT=$SHERPA_COMMIT PORT=$PORT MODEL_NAME=$MODEL_NAME \
+MODEL_URL=$MODEL_URL MODEL_ARCHIVE_SHA256=$MODEL_ARCHIVE_SHA256 ORT=$ORT PREFIX=$PREFIX LIB=$LIB \
+MODEL_DIR=$MODEL_DIR MANIFEST_DIR=$MANIFEST_DIR DATA_OWNER=$DATA_OWNER \
+python3 - <<'PYEOF'
+import json, os, shutil
+e = os.environ
+m = {
+    "engine": "sherpa-onnx",
+    "model": e["MODEL_NAME"],
+    "voice": "expr-voice-2-m",
+    "sid": 0,
+    "sample_rate": 24000,
+    "files": {
+        "model.fp32.onnx": e["SHA_model"],
+        "voices.bin": e["SHA_voices"],
+        "tokens.txt": e["SHA_tokens"],
+    },
+    # sha256 over sorted "<relpath>\0<sha256 hex>\n" lines (install-tts.sh tree_sha256)
+    "espeak_ng_data_tree_sha256": e["TREE_espeak"],
+    "port": int(e["PORT"]),
+    "sherpa_commit": e["SHERPA_COMMIT"],
+    "library": e["LIB"],
+    "model_dir": e["MODEL_DIR"],
+    "install_prefix": e["PREFIX"],
+    "model_url": e["MODEL_URL"],
+    "model_archive_sha256": e["MODEL_ARCHIVE_SHA256"],
+    "onnxruntime": os.path.realpath(e["ORT"]),
+    "license": "Apache-2.0 (model); GPL-3.0-or-later (espeak-ng, espeak-ng-data); see NOTICE",
+}
+tmp = e["MANIFEST_DIR"] + "/manifest.json.new"
+with open(tmp, "w") as f:
+    json.dump(m, f, indent=2, sort_keys=True)
+    f.write("\n")
+os.chmod(tmp, 0o644)
+user, group = e["DATA_OWNER"].split(":")
+shutil.chown(tmp, user, group)
+os.replace(tmp, e["MANIFEST_DIR"] + "/manifest.json")
+PYEOF
+
+# ---- 7. start ------------------------------------------------------------------
+systemctl daemon-reload
+systemctl enable "$SVC.service"
+if [ "$CHANGED" -eq 1 ] || ! systemctl is-active --quiet "$SVC.service"; then
+  say "(re)starting $SVC"
+  # restart, not `enable --now`: --now leaves a running OLD daemon serving
+  systemctl restart "$SVC.service" || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "$SVC failed to start"; }
+else
+  say "nothing changed and $SVC is active, not restarting"
+fi
+
+# Type=notify returns once the model is loaded; still prove it on the wire.
+i=0
+until curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -le 60 ] || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "/health did not answer 200 in 60 s"; }
+  sleep 1
+done
+curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health"; echo
+
+# ---- 8. smoke synthesis: real audio through the real engine ---------------------
+# (a ctypes layout that drifted from the pinned c-api.h would fail HERE)
+PORT=$PORT python3 - <<'PYEOF' || die "smoke synthesis failed"
+import array, http.client, json, os, time
+c = http.client.HTTPConnection("127.0.0.1", int(os.environ["PORT"]), timeout=60)
+t0 = time.monotonic()
+c.request("POST", "/tts", json.dumps({"text": "Sure. The handset can speak now."}),
+          {"Content-Type": "application/json"})
+r = c.getresponse()
+assert r.status == 200, "POST /tts -> %d %r" % (r.status, r.read())
+assert r.chunked and r.getheader("X-Sample-Rate") == "24000", r.getheaders()
+first, parts = None, []
+while True:
+    d = r.read1(65536)
+    if not d:
+        break
+    first = first if first is not None else time.monotonic() - t0
+    parts.append(d)
+pcm = b"".join(parts)
+assert pcm and len(pcm) % 2 == 0, "odd or empty PCM (%d bytes)" % len(pcm)
+a = array.array("h", pcm)
+secs, peak = len(a) / 24000.0, max(abs(x) for x in a)
+assert secs > 1.0, "only %.2f s of audio" % secs
+assert peak > 1000, "audio is near-silent (peak %d)" % peak
+print("install-tts: smoke synthesis: %.2f s of audio, first audio after %.0f ms, total %.0f ms, peak %d"
+      % (secs, first * 1000, (time.monotonic() - t0) * 1000, peak))
+PYEOF
+
+say "done in $(( $(date +%s) - START )) s: $SVC on 127.0.0.1:$PORT"
