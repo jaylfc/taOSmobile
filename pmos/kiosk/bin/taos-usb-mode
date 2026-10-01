@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Switch what the handset's USB-C port is: a network link, charge-only, or MTP.
+
+    taos-usb-mode                  show the mode the port is in now
+    taos-usb-mode list             the modes this phone can switch to
+    taos-usb-mode set MODE         switch now AND keep it across reboots
+    taos-usb-mode set MODE --now   switch now only; the next boot goes back
+
+Modes: ncm (the default: 172.16.42.1 over USB, with DHCP), charging (no USB
+data at all), mtp (file transfer, when umtprd is installed).
+
+Runs as ROOT: the lock screen reaches it through taos-power-apply.
+
+WHO OWNS THE PORT. postmarketOS ships usb-signaller, which owns the configfs
+gadget and the UDC and switches between its own gadgets over the usb_moded
+D-Bus API. This script drives usb-signaller and never builds a gadget itself:
+two writers to one UDC end with neither knowing what is bound.
+
+WHY NO rndis OR adb. usb-signaller offers developer (NCM), tethering (NCM),
+charging_only, mtp_ffs and host modes, and nothing else. An RNDIS or adb gadget
+would have to be built by hand behind its back -- the two-writers problem
+above. Asking for either says so and changes nothing. NCM is what Linux and
+macOS hosts expect; Windows 11 ships an NCM driver too.
+
+PERSISTENCE. usb-signaller reads /etc/usb-signaller/usb-signaller.toml BEFORE
+the packaged /usr/lib copy (measured on this handset 2026-10-01: its journal
+said "Parsing configuration file: /etc/usb-signaller/usb-signaller.toml"), and
+applies [main] default_mode every time it starts. So the saved mode IS that
+file; there is no second boot unit to keep in step with it.
+
+⚠ THE READ-BACK DOES NOT ASK usb-signaller. Its mode_request answered
+"tethering_mode" while the developer gadget was bound and serving 172.16.42.1
+(measured). The truth is which gadget configfs has bound to the UDC, so that is
+what is read, and a switch that did not land exits non-zero.
+
+⚠ ncm NEEDS A RESTART THAT usb-signaller DOES NOT DO. Its developer-mode helper
+is a oneshot with RemainAfterExit. Leaving developer mode never stops it, so
+coming back "starts" a unit systemd already thinks is active: a no-op. The NM
+connection that went away with usb0 is never re-added and usb0 stays down with
+no address (measured: charging -> mtp -> developer left usb0 DOWN, no
+172.16.42.1). Restarting the helper is what puts the address back.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+CONFIGFS = "/sys/kernel/config/usb_gadget"
+UDC_CLASS = "/sys/class/udc"
+TOML = "/etc/usb-signaller/usb-signaller.toml"
+DEV_HELPER = "usb-signaller-developer-mode.service"
+
+# Our name -> (usb-signaller mode, the gadget configfs binds for it).
+# charging binds NO gadget: that absence is how it reads back.
+MODES = {
+    "ncm": ("developer_mode", "usb-signaller-developer"),
+    "charging": ("charging_only", None),
+    "mtp": ("mtp_ffs_mode", "usb-signaller-mtp"),
+}
+UNSUPPORTED = ("rndis", "adb")
+# Gadgets that can be bound that we do not offer, so the read-back can still
+# name them rather than say "unknown".
+OTHER_GADGETS = {"usb-signaller-tethering": "tethering"}
+
+BUS = ["busctl", "--system", "call", "com.meego.usb_moded",
+       "/com/meego/usb_moded", "com.meego.usb_moded"]
+SETTLE_S = 10.0
+NCM_ADDR = "172.16.42.1"
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path) as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def mtp_available() -> bool:
+    return shutil.which("umtprd") is not None
+
+
+def available() -> list[str]:
+    return [m for m in MODES if m != "mtp" or mtp_available()]
+
+
+def bound_gadget() -> str | None:
+    """The gadget configfs has bound to a UDC, or None when nothing is."""
+    try:
+        names = sorted(os.listdir(CONFIGFS))
+    except OSError:
+        return None
+    for name in names:
+        if _read(os.path.join(CONFIGFS, name, "UDC")):
+            return name
+    return None
+
+
+def current() -> str:
+    gadget = bound_gadget()
+    if gadget is None:
+        return "charging"
+    for mode, (_, g) in MODES.items():
+        if g == gadget:
+            return mode
+    return OTHER_GADGETS.get(gadget, "unknown:" + gadget)
+
+
+def udc_state() -> str:
+    try:
+        udcs = sorted(os.listdir(UDC_CLASS))
+    except OSError:
+        return "no-udc"
+    return _read(os.path.join(UDC_CLASS, udcs[0], "state")) if udcs else "no-udc"
+
+
+def saved() -> str:
+    """The mode the next boot will come up in, from the file usb-signaller reads."""
+    for line in _read(TOML).splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "default_mode":
+            want = value.strip().strip('"').strip("'")
+            for mode, (sig, _) in MODES.items():
+                if sig == want:
+                    return mode
+            return "unknown:" + want
+    return "ncm"  # no override: the packaged default is developer_mode
+
+
+def save(mode: str) -> None:
+    """Write the override atomically. The whole file is ours: [main] only."""
+    sig = MODES[mode][0]
+    parent = os.path.dirname(TOML)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".usb-signaller.")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write("# Written by taos-usb-mode. usb-signaller reads this before\n"
+                         "# /usr/lib/usb-signaller/usb-signaller.toml.\n"
+                         '[main]\ndefault_mode="%s"\n' % sig)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, TOML)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def switch(mode: str) -> None:
+    sig = MODES[mode][0]
+    subprocess.run(BUS + ["set_mode", "s", sig], check=True,
+                   capture_output=True, text=True, timeout=30)
+    if mode == "ncm":
+        subprocess.run(["systemctl", "restart", DEV_HELPER], check=True,
+                       capture_output=True, text=True, timeout=60)
+
+
+def ncm_address() -> bool:
+    """usb0 holds 172.16.42.1 -- the thing ncm is FOR.
+
+    A second observation, not a refinement of the first: the measured failure
+    had the developer gadget bound (so current() said ncm) and no address, so
+    the gadget alone reads the same whether the link works or not.
+    """
+    try:
+        got = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", "usb0"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return " %s/" % NCM_ADDR in got.stdout
+
+
+def landed(mode: str) -> str:
+    """The read-back: `mode` if the port is really in it, else what it is."""
+    got = current()
+    if got == "ncm" and mode == "ncm" and not ncm_address():
+        return "ncm-without-address"
+    return got
+
+
+def settle(mode: str) -> str:
+    """Poll the read-back until it shows `mode` or SETTLE_S runs out."""
+    deadline = time.monotonic() + SETTLE_S
+    got = landed(mode)
+    while got != mode and time.monotonic() < deadline:
+        time.sleep(0.5)
+        got = landed(mode)
+    return got
+
+
+def status() -> str:
+    lines = ["mode: %s" % current(), "udc: %s" % udc_state(),
+             "saved: %s" % saved()]
+    if current() == "ncm":
+        lines.append("address: %s" % ("%s (host gets 172.16.42.2 by DHCP)" % NCM_ADDR
+                                       if ncm_address() else "NONE on usb0"))
+    return "\n".join(lines)
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("status", "get"):
+        print(status())
+        return 0
+    if argv[0] == "list":
+        print(" ".join(available()))
+        return 0
+    if argv[0] in ("-h", "--help", "help"):
+        print(__doc__.split("\n\nWHO OWNS")[0])
+        return 0
+    if argv[0] != "set" or len(argv) < 2 or len(argv) > 3 or (
+            len(argv) == 3 and argv[2] != "--now"):
+        print("usage: taos-usb-mode [status|list|set MODE [--now]]", file=sys.stderr)
+        return 2
+    mode = argv[1]
+    if mode in UNSUPPORTED:
+        print("taos-usb-mode: %s is not offered: usb-signaller owns the port and has "
+              "no %s gadget. Use ncm (works with Linux, macOS and Windows 11)."
+              % (mode, mode), file=sys.stderr)
+        return 2
+    if mode not in MODES:
+        print("taos-usb-mode: unknown mode %r (have: %s)" % (mode, " ".join(available())),
+              file=sys.stderr)
+        return 2
+    if mode not in available():
+        print("taos-usb-mode: mtp needs umtprd, which is not installed", file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print("taos-usb-mode: set needs root", file=sys.stderr)
+        return 1
+    # Save FIRST: if the switch then fails half way, the next boot still comes
+    # up in what was asked for rather than in a mode nobody chose.
+    if len(argv) == 2:
+        save(mode)
+    try:
+        switch(mode)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        print("taos-usb-mode: switch to %s failed: %s" % (mode, detail.strip()), file=sys.stderr)
+        return 1
+    got = settle(mode)
+    if got != mode:
+        print("taos-usb-mode: asked for %s but the port reads %s" % (mode, got), file=sys.stderr)
+        return 1
+    print(status())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
