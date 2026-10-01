@@ -35,6 +35,7 @@ referenced_paths_scan = [
   "docs/pmos-checkpoint-images.md",
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
+  "pmos/gunyah/README.md",
   "droidian/kernel-debian/README.md",
   "droidian/artifacts/README.md",
   "docs/superpowers/specs/2026-07-20-taosmobile-demo-design.md",

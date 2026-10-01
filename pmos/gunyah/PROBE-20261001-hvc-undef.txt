@@ -1,0 +1,40 @@
+ 13:53:48 up 21:32,  0 users,  load average: 1.79, 0.98, 0.76
+1212:[77498.413399] module gh_probe: .gnu.linkonce.this_module section size must match the kernel's built struct module size at run time
+1213:[77563.542246] gh_probe: loading out-of-tree module taints kernel.
+1214:[77563.542255] gh_probe: module verification failed: signature and/or required key missing - tainting kernel
+1215:[77563.547336] gh_probe: start identify=0 conduit=0 (0 none, 1 smc, 2 hvc)
+1216:[77563.547341] gh_probe: calling uid fn=0x8600ff01
+1217-[77563.547432] Internal error: Oops - Undefined instruction: 0000000002000000 [#1]  SMP
+h11k videobuf2_v4l2 mac80211 snd_soc_tfa9872 videobuf2_common qcom_q6v5_pas cfg80211 qcom_pil_info qcom_q6v5 ipa qcom_common rfkill libarc4 nft_reject_inet nf_reject_ipv6 nf_reject_ipv4 nft_reject nft_ct nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 nf_tables uhid tun fuse usb_f_ncm u_ether fts_tp panel_visionox_rm692e5 spi_geni_qcom fsa4480 evdev libcomposite
+1219-[77563.547509] CPU: 6 UID: 0 PID: 688110 Comm: insmod Tainted: G           OE       7.2.2 #9-postmarketos-qcom-sc7280 PREEMPT 
+1220-[77563.547514] Tainted: [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+1221-[77563.547515] Hardware name: Nothing Phone (1) (DT)
+1222-[77563.547517] pstate: 60400005 (nZCv daif +PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+1223-[77563.547519] pc : __arm_smccc_hvc+0x8/0x30
+1224:[77563.547527] lr : gh_call+0x7c/0x1000 [gh_probe]
+1225-[77563.547533] sp : ffff8000a766b820
+1226-[77563.547534] x29: ffff8000a766b860 x28: ffff8000a77389d0 x27: ffff8000a7739490
+1227-[77563.547537] x26: 000000000000002c x25: ffffc06b89e75848 x24: ffffc06be7664a48
+1228-[77563.547539] x23: ffffc06b89e6f058 x22: 0000000000000000 x21: ffff0000809f30c0
+1229-[77563.547541] x20: ffffc06b89e71076 x19: 000000008600ff01 x18: ffff80008cf41058
+1230-[77563.547543] x17: 00000000c006287d x16: ffffc06be62b11a8 x15: 0000000000000003
+1231-[77563.547545] x14: ffffc06be8266e48 x13: 0000000000000fff x12: 0000000000000003
+1232-[77563.547547] x11: 3fffffffffffefff x10: 0000000000000001 x9 : a3c1f6ca565ee500
+1233-[77563.547549] x8 : ffff8000a766b838 x7 : 0000000000000000 x6 : 0000000000000000
+1234-[77563.547551] x5 : 0000000000000000 x4 : 0000000000000000 x3 : 0000000000000000
+1235-[77563.547553] x2 : 0000000000000000 x1 : 0000000000000000 x0 : 000000008600ff01
+1236-[77563.547555] Call trace:
+1237-[77563.547556]  __arm_smccc_hvc+0x8/0x30 (P)
+1238:[77563.547560]  init_module+0x54/0xfc0 [gh_probe]
+1239-[77563.547563]  do_one_initcall+0x9c/0x458
+1240-[77563.547565]  do_init_module+0x64/0x25c
+1241-[77563.547570]  load_module+0x1200/0x135c
+1242-[77563.547573]  __arm64_sys_finit_module+0x248/0x3b0
+1243-[77563.547575]  invoke_syscall+0x6c/0x130
+1244-[77563.547581]  el0_svc_common+0x9c/0xf4
+1245-[77563.547584]  do_el0_svc+0x2c/0x3c
+1246-[77563.547587]  el0_svc+0x4c/0x1ac
+1247-[77563.547593]  el0t_64_sync_handler+0x88/0x134
+1248-[77563.547595]  el0t_64_sync+0x1a0/0x1a4
+1249-[77563.547598] Code: f9000486 d65f03c0 d503245f d4000002 (f94003e4) 
+1250-[77563.547601] ---[ end trace 0000000000000000 ]---

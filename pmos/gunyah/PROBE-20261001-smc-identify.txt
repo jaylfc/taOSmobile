@@ -1,0 +1,9 @@
+insmod_rc=1
+insmod: ERROR: could not insert module /home/jay/gunyah/mod/gh_probe.ko: Resource temporarily unavailable
+[  223.649599] gh_probe: start identify=1 smc=1 conduit=0 (0 none, 1 smc, 2 hvc)
+[  223.649606] gh_probe: calling uid fn=0x8600ff01 via smc
+[  223.649610] gh_probe: uid x0=0x0000000019bd54bd x1=0x000000000b37571b x2=0x00000000946f609b x3=0x0000000054539de6
+[  223.649611] gh_probe: calling identify fn=0xc6008000 via smc
+[  223.649612] gh_probe: identify x0=0xffffffffffffffff x1=0x0000000000000000 x2=0x0000000000000000 x3=0x0000000000000000
+[  223.649613] gh_probe: done
+12288
