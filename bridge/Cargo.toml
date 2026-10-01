@@ -2,6 +2,7 @@
 name = "taosd-bridge"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
 description = "taOS hardware bridge for Ubuntu Touch: exposes SMS, dialing and battery as cluster capabilities"
 
 [dependencies]

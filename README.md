@@ -120,3 +120,9 @@ actually covers, how to take one, how to restore) are in
 The plan for pairing the taOSusb board (a Pi Zero 2W agent) over Bluetooth into
 the Cluster app, with Bluetooth kept as its fallback link, is
 `docs/taosusb-pairing-plan.md`.
+
+## Licence
+
+taOSmobile is licensed under the GNU Affero General Public License v3.0 or later
+(`AGPL-3.0-or-later`); see `LICENSE`. The Linux kernel patches and config diffs under
+`pmos/kernel/` are derivative of the kernel and stay under its `GPL-2.0-only` licence.
