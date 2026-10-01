@@ -61,6 +61,10 @@ unscanned_paths = [
   # in tinyagentos (routes/auth.py, hub/relay.py) or in the taosusb board repo,
   # not here.
   "docs/taosusb-pairing-plan.md",
+  # The CC-BY-4.0 attribution for the speech model names on-device paths
+  # (manifest.json under the install prefix) and upstream URLs, none of which
+  # are in this repo.
+  "pmos/voice/NOTICE-STT.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and

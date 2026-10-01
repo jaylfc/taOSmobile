@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""taos-sttd: the handset's local speech-to-text daemon.
+
+One resident recognizer (sherpa-onnx offline transducer, Parakeet-TDT 0.6b v3
+int8) behind a loopback-only HTTP API. No third-party Python: http.server for
+the wire, ctypes over libsherpa-onnx-c-api.so for the engine, mirroring the
+calls the bench measured (voice-bench-20260930/bench-stt2.c, kind
+"transducer": greedy_search, model_type nemo_transducer, 16 kHz, 80 bins).
+
+  GET  /health   200 {"ok":true,"engine":...,"model":...,"load_ms":...} once the
+                 model is loaded; 503 {"ok":false,...} before that
+  POST /stt      raw body = PCM16 little-endian mono 16 kHz  ->  200 {"text":"..."}
+
+POST /stt refusals, all decided BEFORE a byte of body is read except the last:
+  no Content-Length                      411
+  Content-Length empty/non-digit/signed  400
+  Content-Length > 960000 (30 s)         413   (never read, never buffered)
+  X-Sample-Rate present and != 16000     400
+  Content-Length 0                       400
+  Content-Length odd (not whole samples) 400
+  already 4 uploads/decodes in flight    503
+  client closes or stalls mid-upload     connection dropped, NO decode
+Audio is never written to disk, and never logged. Decodes are serialised by one
+lock: one recognizer, one decode at a time.
+
+LIFECYCLE: RESIDENT (always running), not started on demand. A cold load is
+about 3.8 s (3.1 s with a warm page cache; bench RESULTS-v2.md), which would be
+the delay before the first word of the first push-to-talk. Resident costs about
+1.1 GB RSS (bench peak 1107 MB). Measured on the handset: RSS 1098 MB, VmHWM
+1106 MB after real decodes; MemAvailable went from 9.4 GB (taOS running, STT not
+loaded) to 8.3 GB with it resident, so the cost is affordable and the latency is not.
+
+Environment (set by the unit, from what install-stt.sh resolved):
+  TAOS_STT_MODEL_DIR  REQUIRED. The directory holding tokens.txt and the three
+                      *.int8.onnx files: the controller's unified model store,
+                      <models_root>/sherpa-onnx/parakeet/parakeet-tdt-0.6b-v3-int8.
+                      Never hardcoded here.
+  TAOS_STT_LIB        path to libsherpa-onnx-c-api.so (default: ../lib/ beside
+                      this script, i.e. under the install prefix)
+  TAOS_STT_PORT       6975
+  TAOS_STT_THREADS    4
+The daemon does NOT read the controller's manifest.json: that file lives in the
+controller's 0700 data dir for the controller to read, which this unprivileged
+user cannot enter.
+"""
+import ctypes
+import http.server
+import json
+import os
+import socket
+import socketserver
+import sys
+import threading
+import time
+import traceback
+from array import array
+
+ENGINE = "sherpa-onnx"
+MODEL = "parakeet-tdt-0.6b-v3-int8"
+HOST = "127.0.0.1"          # never configurable: loopback only
+DEFAULT_PORT = 6975
+SAMPLE_RATE = 16000
+MAX_BODY = 960000           # 30 s of PCM16 mono at 16 kHz
+MAX_INFLIGHT = 4            # uploads+decodes admitted at once; the rest get 503
+RECV_CHUNK = 65536
+BODY_DEADLINE_S = 30.0      # whole-upload wall clock: a trickling client cannot pin a slot
+SOCKET_TIMEOUT_S = 15.0     # any single stall
+
+
+# ---------------------------------------------------------------- engine ---
+
+class SherpaRecognizer:
+    """The one recognizer. load() once; transcribe() is NOT thread safe, the
+    server serialises it. Tests substitute a fake with the same three members:
+    `loaded`, `load_ms` and transcribe(pcm16_bytes) -> str."""
+
+    engine = ENGINE
+    model = MODEL
+
+    def __init__(self, lib_path, model_dir, threads=4):
+        self.lib_path = lib_path
+        self.model_dir = model_dir
+        self.threads = threads
+        self.loaded = False
+        self.load_ms = None
+        self._lib = None
+        self._rec = None
+
+    def load(self):
+        t0 = time.monotonic()
+        lib = ctypes.CDLL(self.lib_path)
+        _declare(lib)
+        md = self.model_dir
+        cfg = OfflineRecognizerConfig()          # zero-initialised
+        cfg.feat_config.sample_rate = SAMPLE_RATE
+        cfg.feat_config.feature_dim = 80
+        m = cfg.model_config
+        # keep the byte strings alive: the config holds bare pointers
+        self._keep = [os.path.join(md, n).encode() for n in
+                      ("tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx")]
+        self._keep += [b"cpu", b"greedy_search", b"nemo_transducer"]
+        m.tokens = self._keep[0]
+        m.transducer.encoder = self._keep[1]
+        m.transducer.decoder = self._keep[2]
+        m.transducer.joiner = self._keep[3]
+        m.num_threads = self.threads
+        m.provider = self._keep[4]
+        cfg.decoding_method = self._keep[5]
+        m.model_type = self._keep[6]
+        rec = lib.SherpaOnnxCreateOfflineRecognizer(ctypes.byref(cfg))
+        if not rec:
+            raise RuntimeError("SherpaOnnxCreateOfflineRecognizer returned NULL (see stderr)")
+        self._lib, self._rec = lib, rec
+        self.loaded = True
+        self.load_ms = int((time.monotonic() - t0) * 1000)
+
+    def transcribe(self, pcm):
+        a = array("h")
+        a.frombytes(pcm)
+        if sys.byteorder == "big":
+            a.byteswap()
+        n = len(a)
+        f = (ctypes.c_float * n)()
+        inv = 1.0 / 32768.0
+        for i in range(n):
+            f[i] = a[i] * inv
+        lib = self._lib
+        s = lib.SherpaOnnxCreateOfflineStream(self._rec)
+        if not s:
+            raise RuntimeError("SherpaOnnxCreateOfflineStream returned NULL")
+        try:
+            lib.SherpaOnnxAcceptWaveformOffline(s, SAMPLE_RATE, f, n)
+            lib.SherpaOnnxDecodeOfflineStream(self._rec, s)
+            r = lib.SherpaOnnxGetOfflineStreamResult(s)
+            try:
+                text = r.contents.text.decode("utf-8", "replace") if r and r.contents.text else ""
+            finally:
+                if r:
+                    lib.SherpaOnnxDestroyOfflineRecognizerResult(r)
+        finally:
+            lib.SherpaOnnxDestroyOfflineStream(s)
+        return text.strip()
+
+
+# ctypes mirror of sherpa-onnx v1.13.8 c-api.h (commit pinned in install-stt.sh).
+# Field ORDER IS THE ABI: every struct up to the end of model_config is
+# declared in full because lm_config and decoding_method sit after it. Re-check
+# against c-api.h when the pinned commit moves; install-stt.sh's end-to-end
+# smoke decode fails loudly if the layout has drifted.
+P = ctypes.c_char_p
+I = ctypes.c_int32
+F = ctypes.c_float
+
+
+def _st(name, fields):
+    return type(name, (ctypes.Structure,), {"_fields_": fields})
+
+
+FeatureConfig = _st("FeatureConfig", [("sample_rate", I), ("feature_dim", I)])
+TransducerCfg = _st("TransducerCfg", [("encoder", P), ("decoder", P), ("joiner", P)])
+ModelOnly = _st("ModelOnly", [("model", P)])   # paraformer, nemo_ctc, tdnn, dolphin, ...
+WhisperCfg = _st("WhisperCfg", [("encoder", P), ("decoder", P), ("language", P), ("task", P),
+                                ("tail_paddings", I), ("enable_token_timestamps", I),
+                                ("enable_segment_timestamps", I)])
+SenseVoiceCfg = _st("SenseVoiceCfg", [("model", P), ("language", P), ("use_itn", I)])
+MoonshineCfg = _st("MoonshineCfg", [("preprocessor", P), ("encoder", P), ("uncached_decoder", P),
+                                    ("cached_decoder", P), ("merged_decoder", P)])
+FireRedCfg = _st("FireRedCfg", [("encoder", P), ("decoder", P)])
+CanaryCfg = _st("CanaryCfg", [("encoder", P), ("decoder", P), ("src_lang", P), ("tgt_lang", P),
+                              ("use_pnc", I)])
+FunAsrNanoCfg = _st("FunAsrNanoCfg", [("encoder_adaptor", P), ("llm", P), ("embedding", P),
+                                      ("tokenizer", P), ("system_prompt", P), ("user_prompt", P),
+                                      ("max_new_tokens", I), ("temperature", F), ("top_p", F),
+                                      ("seed", I), ("language", P), ("itn", I), ("hotwords", P)])
+Qwen3Cfg = _st("Qwen3Cfg", [("conv_frontend", P), ("encoder", P), ("decoder", P), ("tokenizer", P),
+                            ("max_total_len", I), ("max_new_tokens", I), ("temperature", F),
+                            ("top_p", F), ("seed", I), ("hotwords", P)])
+CohereCfg = _st("CohereCfg", [("encoder", P), ("decoder", P), ("language", P),
+                              ("use_punct", I), ("use_itn", I)])
+OfflineModelConfig = _st("OfflineModelConfig", [
+    ("transducer", TransducerCfg), ("paraformer", ModelOnly), ("nemo_ctc", ModelOnly),
+    ("whisper", WhisperCfg), ("tdnn", ModelOnly),
+    ("tokens", P), ("num_threads", I), ("debug", I), ("provider", P), ("model_type", P),
+    ("modeling_unit", P), ("bpe_vocab", P), ("telespeech_ctc", P),
+    ("sense_voice", SenseVoiceCfg), ("moonshine", MoonshineCfg), ("fire_red_asr", FireRedCfg),
+    ("dolphin", ModelOnly), ("zipformer_ctc", ModelOnly), ("canary", CanaryCfg),
+    ("wenet_ctc", ModelOnly), ("omnilingual", ModelOnly), ("medasr", ModelOnly),
+    ("funasr_nano", FunAsrNanoCfg), ("fire_red_asr_ctc", ModelOnly), ("qwen3_asr", Qwen3Cfg),
+    ("cohere_transcribe", CohereCfg)])
+LMConfig = _st("LMConfig", [("model", P), ("scale", F)])
+HomophoneCfg = _st("HomophoneCfg", [("dict_dir", P), ("lexicon", P), ("rule_fsts", P)])
+OfflineRecognizerConfig = _st("OfflineRecognizerConfig", [
+    ("feat_config", FeatureConfig), ("model_config", OfflineModelConfig), ("lm_config", LMConfig),
+    ("decoding_method", P), ("max_active_paths", I), ("hotwords_file", P), ("hotwords_score", F),
+    ("rule_fsts", P), ("rule_fars", P), ("blank_penalty", F), ("hr", HomophoneCfg)])
+# Only `text` (first member) is read from the result.
+OfflineResult = _st("OfflineResult", [("text", P)])
+
+
+def _declare(lib):
+    vp = ctypes.c_void_p
+    lib.SherpaOnnxCreateOfflineRecognizer.restype = vp
+    lib.SherpaOnnxCreateOfflineRecognizer.argtypes = [ctypes.POINTER(OfflineRecognizerConfig)]
+    lib.SherpaOnnxCreateOfflineStream.restype = vp
+    lib.SherpaOnnxCreateOfflineStream.argtypes = [vp]
+    lib.SherpaOnnxAcceptWaveformOffline.restype = None
+    lib.SherpaOnnxAcceptWaveformOffline.argtypes = [vp, I, ctypes.POINTER(F), I]
+    lib.SherpaOnnxDecodeOfflineStream.restype = None
+    lib.SherpaOnnxDecodeOfflineStream.argtypes = [vp, vp]
+    lib.SherpaOnnxGetOfflineStreamResult.restype = ctypes.POINTER(OfflineResult)
+    lib.SherpaOnnxGetOfflineStreamResult.argtypes = [vp]
+    lib.SherpaOnnxDestroyOfflineRecognizerResult.restype = None
+    lib.SherpaOnnxDestroyOfflineRecognizerResult.argtypes = [ctypes.POINTER(OfflineResult)]
+    lib.SherpaOnnxDestroyOfflineStream.restype = None
+    lib.SherpaOnnxDestroyOfflineStream.argtypes = [vp]
+
+
+# ------------------------------------------------------------------ http ---
+
+class BadRequest(Exception):
+    def __init__(self, code, msg):
+        Exception.__init__(self, msg)
+        self.code, self.msg = code, msg
+
+
+def parse_length(headers):
+    """Content-Length -> int, or BadRequest(411|400). Decided from the header
+    alone, before any body byte is read."""
+    vals = headers.get_all("Content-Length") or []
+    if not vals:
+        raise BadRequest(411, "Content-Length required")
+    if len({v.strip() for v in vals}) != 1:
+        raise BadRequest(400, "conflicting Content-Length")
+    v = vals[0].strip()
+    # str.isdigit() accepts superscripts and other unicode digits: require ASCII
+    if not (v.isascii() and v.isdigit()):
+        raise BadRequest(400, "invalid Content-Length")
+    n = int(v)
+    if n > MAX_BODY:
+        raise BadRequest(413, "body over %d bytes" % MAX_BODY)
+    return n
+
+
+def check_request(headers):
+    """All header-only validation for POST /stt. Returns the body length."""
+    n = parse_length(headers)
+    sr = headers.get("X-Sample-Rate")
+    if sr is not None and sr.strip() != str(SAMPLE_RATE):
+        raise BadRequest(400, "X-Sample-Rate must be 16000")
+    if n == 0:
+        raise BadRequest(400, "empty body")
+    if n % 2:
+        raise BadRequest(400, "odd byte count: PCM16 is whole 2-byte samples")
+    return n
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "taos-sttd"
+    sys_version = ""
+    protocol_version = "HTTP/1.0"      # one request per connection: no unread-body desync
+    timeout = SOCKET_TIMEOUT_S
+
+    def log_message(self, fmt, *args):  # request line + status only; never audio or text
+        sys.stderr.write("taos-sttd: %s\n" % (fmt % args))
+
+    def _json(self, code, obj, close=False):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path != "/health":
+            return self._json(404, {"error": "not found"})
+        rec = self.server.recognizer
+        if not rec.loaded:
+            return self._json(503, {"ok": False, "engine": rec.engine, "model": rec.model,
+                                    "error": "model loading"})
+        self._json(200, {"ok": True, "engine": rec.engine, "model": rec.model,
+                         "load_ms": rec.load_ms})
+
+    def do_POST(self):
+        if self.path != "/stt":
+            return self._json(404, {"error": "not found"})
+        srv = self.server
+        try:
+            n = check_request(self.headers)
+        except BadRequest as e:
+            return self._json(e.code, {"error": e.msg})
+        if not srv.recognizer.loaded:
+            return self._json(503, {"error": "model loading"})
+        if not srv.slots.acquire(blocking=False):
+            return self._json(503, {"error": "busy"})
+        try:
+            pcm = self._read_body(n)
+            if pcm is None:            # client went away or stalled: no decode, no reply
+                self.close_connection = True
+                return
+            try:
+                with srv.decode_lock:
+                    text = srv.recognizer.transcribe(pcm)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                return self._json(500, {"error": "decode failed"})
+            self._json(200, {"text": text})
+        finally:
+            srv.slots.release()
+
+    def _read_body(self, n):
+        """Exactly n bytes, or None if the peer closes/stalls first."""
+        chunks, got = [], 0
+        deadline = time.monotonic() + BODY_DEADLINE_S
+        while got < n:
+            if time.monotonic() > deadline:
+                return None
+            try:
+                c = self.rfile.read(min(RECV_CHUNK, n - got))
+            except (socket.timeout, OSError):
+                return None
+            if not c:
+                return None
+            chunks.append(c)
+            got += len(c)
+        return b"".join(chunks)
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 16
+
+    def __init__(self, addr, recognizer):
+        self.recognizer = recognizer
+        self.decode_lock = threading.Lock()
+        self.slots = threading.BoundedSemaphore(MAX_INFLIGHT)
+        http.server.HTTPServer.__init__(self, addr, Handler)
+
+
+def make_server(recognizer, port=DEFAULT_PORT, host=HOST):
+    return Server((host, port), recognizer)
+
+
+def _notify(msg):
+    path = os.environ.get("NOTIFY_SOCKET")
+    if not path:
+        return
+    if path[0] == "@":
+        path = "\0" + path[1:]
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        s.sendto(msg.encode(), path)
+    finally:
+        s.close()
+
+
+def main():
+    model_dir = os.environ.get("TAOS_STT_MODEL_DIR")
+    if not model_dir:
+        sys.exit("taos-sttd: TAOS_STT_MODEL_DIR is not set (install-stt.sh writes it into the unit)")
+    lib_path = os.environ.get("TAOS_STT_LIB") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "libsherpa-onnx-c-api.so")
+    port = int(os.environ.get("TAOS_STT_PORT", str(DEFAULT_PORT)))
+    threads = int(os.environ.get("TAOS_STT_THREADS", "4"))
+    rec = SherpaRecognizer(lib_path, model_dir, threads)
+    srv = make_server(rec, port)             # bound first: /health answers 503 while loading
+
+    def load():
+        try:
+            rec.load()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            os._exit(3)                       # fail loudly; systemd restarts on-failure
+        sys.stderr.write("taos-sttd: model loaded in %d ms, listening on %s:%d\n"
+                         % (rec.load_ms, HOST, port))
+        _notify("READY=1")
+
+    threading.Thread(target=load, daemon=True).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
