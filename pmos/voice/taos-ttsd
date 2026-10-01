@@ -47,17 +47,18 @@ clean short one. If writing to the client fails (it disconnected, or did not
 read for SOCKET_TIMEOUT_S), the callback returns 0 and sherpa stops generating:
 nothing is synthesised for a gone client, and the lock is released.
 
-LIFECYCLE: RESIDENT (always running), not started on demand. Cold-load time,
-peak RSS, time to first audio and real-time factor are UNMEASURED for
-cori-high on the handset: to be measured there after install (the health
-endpoint reports load_ms). Nothing here is claimed from another model's bench.
+LIFECYCLE: RESIDENT (always running), not started on demand.
 
 CPU PLACEMENT: the unit pins it to CPUAffinity=4-7 (the big cores), like
-taos-sttd. That is PROVISIONAL: it is not measured for cori-high whether the
-little cores can stream it, nor what the barge-in overlap (transcribing while
-speaking, both engines on cores 4-7) costs; both are to be measured on the
-device after install, not assumed. In a normal voice turn STT and TTS do not
-overlap: the transcript is final before the reply is synthesised.
+taos-sttd. MEASURED on the handset 10-01 (taOSmobile voice/tts-piper, 11.6 s reply, 5 runs
+each, medians): cores 4-7 alone RTF 0.64, first audio 2.7 s; cores 0-3 alone RTF
+2.73, first audio 12.0 s (far slower than real time, so the little cores are
+ruled out); 4-7 while taos-sttd decodes on 4-7 at the same time (barge-in) RTF
+1.47, first audio 6.6 s, and STT slows 0.105 -> 0.41; TTS on 0-3 with STT on 4-7
+RTF 3.22. Cold load 2.4 s, peak RSS 345 MB. First audio is one sentence's
+synthesis, so it scales with the length of the reply's first sentence.
+In a normal voice turn STT and TTS do not overlap: the transcript is final
+before the reply is synthesised.
 
 Environment (set by the unit, from what install-tts.sh resolved):
   TAOS_TTS_MODEL_DIR  REQUIRED. The directory holding en_GB-cori-high.onnx,

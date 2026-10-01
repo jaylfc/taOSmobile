@@ -1,9 +1,8 @@
 [Unit]
 Description=taOS local text-to-speech (sherpa-onnx VITS, Piper en_GB-cori-high)
 Documentation=file://@PREFIX@/NOTICE
-# LIFECYCLE: RESIDENT (always running). Cold-load time and resident memory are
-# UNMEASURED for cori-high; to be measured on the handset (health reports
-# load_ms). Loading on demand would put the load delay in front of the first
+# LIFECYCLE: RESIDENT (always running): cold load 2.4 s, peak RSS 345 MB
+# (measured on the handset 10-01). Loading on demand would put the load delay in front of the first
 # spoken reply; resident it costs the model's memory.
 
 [Service]
@@ -22,11 +21,16 @@ TimeoutStartSec=60
 Restart=on-failure
 RestartSec=3
 
-# The four big cores (4-7), like taos-sttd. PROVISIONAL: RTF and the effect of
-# CPU pinning are unmeasured for cori-high; to be measured on the handset.
+# The four big cores (4-7), like taos-sttd.
+# MEASURED on the handset 10-01 (taOSmobile voice/tts-piper, 11.6 s reply, 5 runs
+# each, medians): cores 4-7 alone RTF 0.64, first audio 2.7 s; cores 0-3 alone RTF
+# 2.73, first audio 12.0 s (far slower than real time, so the little cores are
+# ruled out); 4-7 while taos-sttd decodes on 4-7 at the same time (barge-in) RTF
+# 1.47, first audio 6.6 s, and STT slows 0.105 -> 0.41; TTS on 0-3 with STT on 4-7
+# RTF 3.22. Cold load 2.4 s, peak RSS 345 MB. First audio is one sentence's
+# synthesis, so it scales with the length of the reply's first sentence.
 # STT finishes before a reply is synthesised, so in a normal turn the two do
-# not overlap; barge-in (both at once on 4-7) is to be measured on the device,
-# not assumed.
+# not overlap.
 CPUAffinity=4-7
 Nice=5
 # If the phone runs short of memory, lose the synthesizer before the UI.

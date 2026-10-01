@@ -24,8 +24,8 @@ RestartSec=3
 
 # The four big cores (4-7), alone: the bench's best setting (RTF ~0.09), and it
 # keeps the little cores free for the shell. taos-ttsd is pinned to 4-7 too
-# (provisional, unmeasured for its voice); the two overlap only on barge-in,
-# to be measured.
+# (its RTF on 0-3 is 2.73, too slow); the two overlap only on barge-in, where
+# STT slows 0.105 -> 0.41 (measured 10-01, see taos-ttsd.service).
 CPUAffinity=4-7
 Nice=5
 # If the phone runs short of memory, lose the recognizer before the UI.
