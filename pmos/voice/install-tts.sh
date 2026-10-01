@@ -5,8 +5,9 @@
 #     sudo sh pmos/voice/install-stt.sh     # once: builds the shared sherpa-onnx library
 #     sudo sh pmos/voice/install-tts.sh
 #
-# Downloads the Kitten nano v0.8 fp32 model and VERIFIES it against pinned
-# sha256s, installs the daemon and its systemd unit, starts it, and proves it
+# Downloads the Piper voice en_GB-cori-high (public domain, LibriVox) as
+# packaged by sherpa-onnx, REFUSES it unless its MODEL_CARD names an allowed
+# licence (public domain, CC0 or CC BY), and VERIFIES it against pinned sha256s, installs the daemon and its systemd unit, starts it, and proves it
 # with a real synthesis. A FILE in this repo, not a hand-edit: a reflash wipes
 # anything typed in.
 #
@@ -34,8 +35,9 @@
 #   $TAOS_STT_PREFIX  (default /opt/taos-voice/stt; must equal the
 #                     TAOS_VOICE_PREFIX install-stt.sh used)
 #       lib/libsherpa-onnx-c-api.so       the ONE engine library, READ here
-#   $TAOS_MODELS_ROOT/sherpa-onnx/kitten/kitten-nano-en-v0_8-fp32/
-#       model.fp32.onnx voices.bin tokens.txt espeak-ng-data/
+#   $TAOS_MODELS_ROOT/sherpa-onnx/piper/vits-piper-en_GB-cori-high/
+#       en_GB-cori-high.onnx en_GB-cori-high.onnx.json tokens.txt MODEL_CARD
+#       espeak-ng-data/
 #                                         the controller's UNIFIED MODEL STORE
 #                                         (tinyagentos installers/model_paths.py:
 #                                         <root>/<backend>/<family>/<id>/<file>)
@@ -54,15 +56,16 @@ set -eu
 # required to have been built at
 SHERPA_COMMIT=11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf
 SHERPA_FEATURES=tts
-MODEL_NAME=kitten-nano-en-v0_8-fp32
-MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kitten-nano-en-v0_8-fp32.tar.bz2
-# Computed 2026-10-01 by downloading MODEL_URL (63815222 bytes) and hashing it;
-# equal to the sha256 digest GitHub publishes for that release asset (updated
-# 2026-05-12). The per-file hashes below are of the files in that archive.
-MODEL_ARCHIVE_SHA256=16092117bfe591ddcd58d078e1454603b8e1caea46f85653b2c2efae76bd883e
-SHA_model_fp32_onnx=2174dbf67b58b7b50d7b65294f89c2c53c172834533519b853c579879a04cc22
-SHA_voices_bin=d520519c4a3519d44fcfcd943ed0b1e3c5da5cee0eea501d922fac1a93cd24dc
-SHA_tokens_txt=934a4188addc7665dd3410256bb622169242357fbb99d840d9351209b486dabb
+MODEL_NAME=vits-piper-en_GB-cori-high
+MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-high.tar.bz2
+# Computed 2026-10-01 by downloading MODEL_URL (115574061 bytes) and hashing it;
+# equal to the sha256 digest GitHub publishes for that release asset. The
+# per-file hashes below are of the files in that archive.
+MODEL_ARCHIVE_SHA256=42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292
+SHA_voice_onnx=006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842
+SHA_voice_onnx_json=9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec
+SHA_tokens_txt=ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d
+SHA_model_card=136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f
 # espeak-ng-data/ is 355 files (one has a space in its name): pinned as ONE
 # digest over the whole tree, computed by tree_sha256 below
 TREE_espeak_ng_data=1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332
@@ -139,6 +142,37 @@ verify_tree() {
   return 0
 }
 
+# check_voice_licence MODEL_CARD -> 0 only if the card's "License:" field(s) are
+# ALL public domain, CC0 or CC BY (any version, no NC / ND / SA suffix), and
+# the card states no other restriction (non-commercial, research). Anything
+# else, an absent or empty card, or no License field at all, is REFUSED: the
+# allowlist is the rule, not a blocklist of known-bad voices. Refuses, among
+# others, hfc_female/hfc_male (CC BY-NC-SA 4.0) and en_US-lessac (Blizzard 2013,
+# research only).
+check_voice_licence() {
+  _card=$1
+  [ -s "$_card" ] || { echo "voice licence REFUSED: $_card is missing or empty" >&2; return 1; }
+  python3 - "$_card" <<'PYEOF' || return 1
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8").read()
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit("voice licence REFUSED: cannot read the model card: %s" % e)
+ALLOWED = re.compile(r"(public[ -]domain|cc0(?:[ -]1\.0)?|cc[ -]by(?:[ -][0-9]+(?:\.[0-9]+)?)?)", re.I)
+RESTRICT = re.compile(r"non[ -]?commercial|no[ -]?derivative|research|\bNC\b|\bND\b", re.I)
+vals = [m.group(1).strip() for m in re.finditer(r"^[ \t]*[*-]?[ \t]*License[ \t]*:(.*)$", text, re.I | re.M)]
+if not vals:
+    sys.exit("voice licence REFUSED: the model card has no 'License:' field")
+for v in vals:
+    if not ALLOWED.fullmatch(v):
+        sys.exit("voice licence REFUSED: '%s' is not public domain, CC0 or CC BY" % v)
+m = RESTRICT.search(text)
+if m:
+    sys.exit("voice licence REFUSED: the model card states a restriction ('%s')" % m.group(0))
+print("voice licence ok: %s" % "; ".join(vals))
+PYEOF
+}
+
 # Sourced by the tests to reach verify_sha256 and tree_sha256 alone.
 if [ "${INSTALL_TTS_SOURCE_ONLY:-0}" = 1 ]; then return 0; fi
 
@@ -171,7 +205,7 @@ fi
   die "cannot resolve the controller's model store (got '${TAOS_MODELS_ROOT:-}'); set TAOS_MODELS_ROOT"
 DATA_OWNER=$(stat -c %U:%G "$TAOS_DATA_DIR")
 MODELS_OWNER=$(stat -c %U:%G "$TAOS_MODELS_ROOT")
-MODEL_DIR="$TAOS_MODELS_ROOT/sherpa-onnx/kitten/$MODEL_NAME"
+MODEL_DIR="$TAOS_MODELS_ROOT/sherpa-onnx/piper/$MODEL_NAME"
 MANIFEST_DIR="$TAOS_DATA_DIR/voice/tts"
 say "controller data dir:  $TAOS_DATA_DIR ($DATA_OWNER)"
 say "controller model store: $TAOS_MODELS_ROOT ($MODELS_OWNER) -> $MODEL_DIR"
@@ -218,14 +252,14 @@ id taos-tts >/dev/null || die "user taos-tts does not exist"
 mkdir -p "$PREFIX/bin" "$MODEL_DIR" "$MANIFEST_DIR" "$DL"
 chmod 0755 "$PREFIX" "$PREFIX/bin"
 # the model store is the controller's: its files are owned by the controller user
-chown "$MODELS_OWNER" "$TAOS_MODELS_ROOT/sherpa-onnx" "$TAOS_MODELS_ROOT/sherpa-onnx/kitten" "$MODEL_DIR"
+chown "$MODELS_OWNER" "$TAOS_MODELS_ROOT/sherpa-onnx" "$TAOS_MODELS_ROOT/sherpa-onnx/piper" "$MODEL_DIR"
 chmod 0755 "$MODEL_DIR"
 chown "$DATA_OWNER" "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
 chmod 0755 "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
 
 # ---- 4. the model: verify, fetch only if needed, verify again -----------------
 verify_all() { # verify_all [quiet]
-  for f in model.fp32.onnx:$SHA_model_fp32_onnx voices.bin:$SHA_voices_bin tokens.txt:$SHA_tokens_txt; do
+  for f in en_GB-cori-high.onnx:$SHA_voice_onnx en_GB-cori-high.onnx.json:$SHA_voice_onnx_json tokens.txt:$SHA_tokens_txt MODEL_CARD:$SHA_model_card; do
     if [ "${1:-}" = quiet ]; then verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" 2>/dev/null || return 1
     else verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" || return 1; fi
   done
@@ -242,7 +276,9 @@ else
   tar -xjf "$DL/model.tar.bz2" -C "$DL/x"
   src="$DL/x/$MODEL_NAME"
   [ -d "$src" ] || die "archive did not contain the expected directory"
-  for f in model.fp32.onnx voices.bin tokens.txt; do
+  # the licence gate: BEFORE anything is installed from the archive
+  check_voice_licence "$src/MODEL_CARD" >&2 || die "refusing this voice: its licence is not public domain, CC0 or CC BY"
+  for f in en_GB-cori-high.onnx en_GB-cori-high.onnx.json tokens.txt MODEL_CARD; do
     install -m 0644 -o "${MODELS_OWNER%:*}" -g "${MODELS_OWNER#*:}" "$src/$f" "$MODEL_DIR/$f.new"
     mv -f "$MODEL_DIR/$f.new" "$MODEL_DIR/$f"
   done
@@ -261,6 +297,8 @@ fi
 # the loud pass, always: a re-run re-verifies even when it skipped the download
 verify_all || die "a model file failed verification"
 say "model hashes verified"
+# and the allowlist on the card actually installed (it is pinned, so this is the same card)
+check_voice_licence "$MODEL_DIR/MODEL_CARD" || die "refusing this voice: its licence is not public domain, CC0 or CC BY"
 
 # ---- 5. daemon, unit, notice -------------------------------------------------
 put() { # put SRC DST MODE : install if different, flag a change
@@ -279,7 +317,7 @@ sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@LIB@|$LIB|g" -e "s|@MODEL_DIR@|$MODEL_DIR|g
 put "$CACHE/taos-ttsd.service.rendered" /etc/systemd/system/taos-ttsd.service 0644
 
 # ---- 6. manifest, for the controller (in its data dir, readable by it) ---------
-SHA_model=$SHA_model_fp32_onnx SHA_voices=$SHA_voices_bin SHA_tokens=$SHA_tokens_txt \
+SHA_onnx=$SHA_voice_onnx SHA_onnx_json=$SHA_voice_onnx_json SHA_card=$SHA_model_card SHA_tokens=$SHA_tokens_txt \
 TREE_espeak=$TREE_espeak_ng_data SHERPA_COMMIT=$SHERPA_COMMIT PORT=$PORT MODEL_NAME=$MODEL_NAME \
 MODEL_URL=$MODEL_URL MODEL_ARCHIVE_SHA256=$MODEL_ARCHIVE_SHA256 ORT=$ORT PREFIX=$PREFIX LIB=$LIB \
 MODEL_DIR=$MODEL_DIR MANIFEST_DIR=$MANIFEST_DIR DATA_OWNER=$DATA_OWNER \
@@ -289,12 +327,13 @@ e = os.environ
 m = {
     "engine": "sherpa-onnx",
     "model": e["MODEL_NAME"],
-    "voice": "expr-voice-2-m",
+    "voice": "cori",
     "sid": 0,
-    "sample_rate": 24000,
+    "sample_rate": 22050,
     "files": {
-        "model.fp32.onnx": e["SHA_model"],
-        "voices.bin": e["SHA_voices"],
+        "en_GB-cori-high.onnx": e["SHA_onnx"],
+        "en_GB-cori-high.onnx.json": e["SHA_onnx_json"],
+        "MODEL_CARD": e["SHA_card"],
         "tokens.txt": e["SHA_tokens"],
     },
     # sha256 over sorted "<relpath>\0<sha256 hex>\n" lines (install-tts.sh tree_sha256)
@@ -307,7 +346,7 @@ m = {
     "model_url": e["MODEL_URL"],
     "model_archive_sha256": e["MODEL_ARCHIVE_SHA256"],
     "onnxruntime": os.path.realpath(e["ORT"]),
-    "license": "Apache-2.0 (model); GPL-3.0-or-later (espeak-ng, espeak-ng-data); see NOTICE",
+    "license": "public domain (voice dataset, LibriVox); Apache-2.0 (sherpa-onnx); GPL-3.0-or-later (espeak-ng, espeak-ng-data); see NOTICE",
 }
 tmp = e["MANIFEST_DIR"] + "/manifest.json.new"
 with open(tmp, "w") as f:
@@ -349,7 +388,7 @@ c.request("POST", "/tts", json.dumps({"text": "Sure. The handset can speak now."
           {"Content-Type": "application/json"})
 r = c.getresponse()
 assert r.status == 200, "POST /tts -> %d %r" % (r.status, r.read())
-assert r.chunked and r.getheader("X-Sample-Rate") == "24000", r.getheaders()
+assert r.chunked and r.getheader("X-Sample-Rate") == "22050", r.getheaders()
 first, parts = None, []
 while True:
     d = r.read1(65536)
@@ -360,7 +399,7 @@ while True:
 pcm = b"".join(parts)
 assert pcm and len(pcm) % 2 == 0, "odd or empty PCM (%d bytes)" % len(pcm)
 a = array.array("h", pcm)
-secs, peak = len(a) / 24000.0, max(abs(x) for x in a)
+secs, peak = len(a) / 22050.0, max(abs(x) for x in a)
 assert secs > 1.0, "only %.2f s of audio" % secs
 assert peak > 1000, "audio is near-silent (peak %d)" % peak
 print("install-tts: smoke synthesis: %.2f s of audio, first audio after %.0f ms, total %.0f ms, peak %d"

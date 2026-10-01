@@ -1,10 +1,10 @@
 [Unit]
-Description=taOS local text-to-speech (sherpa-onnx, Kitten nano v0.8 fp32, expr-voice-2-m)
+Description=taOS local text-to-speech (sherpa-onnx VITS, Piper en_GB-cori-high)
 Documentation=file://@PREFIX@/NOTICE
-# LIFECYCLE: RESIDENT (always running). Bench figures (RESULTS-v2.md, measured
-# on the handset by the bench harness, not yet by this daemon): cold load
-# 1.29 s (0.81 s warm), peak RSS 328 MB. Loading on demand would put that delay
-# in front of the first spoken reply; resident it costs about a third of a GB.
+# LIFECYCLE: RESIDENT (always running). Cold-load time and resident memory are
+# UNMEASURED for cori-high; to be measured on the handset (health reports
+# load_ms). Loading on demand would put the load delay in front of the first
+# spoken reply; resident it costs the model's memory.
 
 [Service]
 # Type=notify: `systemctl start` returns only once the model is loaded and
@@ -22,11 +22,11 @@ TimeoutStartSec=60
 Restart=on-failure
 RestartSec=3
 
-# The four big cores (4-7), like taos-sttd: Kitten nano runs at RTF 0.19-0.22
-# there but 0.78 on the four little cores (bench), too close to real time to
-# stream. STT finishes before a reply is synthesised, so in a normal turn the
-# two do not overlap; barge-in (both at once on 4-7) is to be measured on the
-# device, not assumed.
+# The four big cores (4-7), like taos-sttd. PROVISIONAL: RTF and the effect of
+# CPU pinning are unmeasured for cori-high; to be measured on the handset.
+# STT finishes before a reply is synthesised, so in a normal turn the two do
+# not overlap; barge-in (both at once on 4-7) is to be measured on the device,
+# not assumed.
 CPUAffinity=4-7
 Nice=5
 # If the phone runs short of memory, lose the synthesizer before the UI.

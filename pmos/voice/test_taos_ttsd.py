@@ -47,7 +47,7 @@ class FakeSynthesizer:
     engine = "fake-engine"
     model = "fake-model"
     voice = "fake-voice"
-    sample_rate = 24000
+    sample_rate = 22050
 
     def __init__(self, loaded=True):
         self.loaded = loaded
@@ -276,7 +276,7 @@ def test_empty_or_whitespace_text_is_400(daemon, val):
     assert st == 400 and daemon.eng.texts == []
 
 
-@pytest.mark.parametrize("extra", [{"voice": "expr-voice-2-f"}, {"speed": 1.5}, {"sid": 1},
+@pytest.mark.parametrize("extra", [{"voice": "cori"}, {"speed": 1.5}, {"sid": 1},
                                    {"format": "wav"}, {"": 0}])
 def test_unknown_keys_are_400_not_silently_ignored(daemon, extra):
     obj = {"text": "hello there"}
@@ -360,7 +360,7 @@ def test_stream_headers_and_valid_s16le_body(daemon):
     assert r.status == 200
     assert r.chunked                                       # Transfer-Encoding: chunked
     assert r.getheader("Content-Type") == "audio/pcm"
-    assert r.getheader("X-Sample-Rate") == "24000"
+    assert r.getheader("X-Sample-Rate") == "22050"
     assert r.getheader("X-Channels") == "1"
     assert r.getheader("X-Sample-Format") == "s16le"
     assert r.getheader("Content-Length") is None
@@ -425,7 +425,7 @@ def test_body_at_exactly_the_byte_cap_is_accepted(daemon):
 
 def test_disconnect_mid_stream_stops_generation_and_frees_the_lock(daemon):
     eng = daemon.eng
-    eng.sentences = [[5] * 24000 for _ in range(60)]       # 60 one-second sentences
+    eng.sentences = [[5] * 22050 for _ in range(60)]       # 60 one-second sentences
     eng.gate = threading.Event()
     s = socket.create_connection(("127.0.0.1", daemon.port), timeout=5)
     b = j({"text": "a long reply"})
@@ -515,7 +515,7 @@ def test_pcm16_clamps_scales_and_is_little_endian():
 
 
 def test_voice_names_follow_the_sid():
-    assert ttsd.voice_name(0) == "expr-voice-2-m" and ttsd.voice_name(1) == "expr-voice-2-f"
+    assert ttsd.voice_name(0) == "cori" and ttsd.voice_name(1) == "sid-1"
     assert ttsd.voice_name(99) == "sid-99"
 
 
@@ -531,13 +531,13 @@ def test_health_is_503_before_load_and_200_after(daemon):
     st, _, body = raw(daemon, ["GET /health HTTP/1.1", "Host: x"])
     h = json.loads(body)
     assert st == 200 and h == {"ok": True, "engine": "fake-engine", "model": "fake-model",
-                               "voice": "fake-voice", "sample_rate": 24000, "load_ms": 7}
+                               "voice": "fake-voice", "sample_rate": 22050, "load_ms": 7}
 
 
 def test_real_engine_identity():
     e = ttsd.SherpaSynthesizer("/nonexistent.so", "/nonexistent")
     assert (e.engine, e.model, e.voice, e.sample_rate) == (
-        "sherpa-onnx", "kitten-nano-en-v0_8-fp32", "expr-voice-2-m", 24000)
+        "sherpa-onnx", "vits-piper-en_GB-cori-high", "cori", 22050)
     assert e.loaded is False
 
 
@@ -547,6 +547,19 @@ def test_server_binds_loopback_only():
         assert srv.server_address[0] == "127.0.0.1"
     finally:
         srv.server_close()
+
+
+def test_load_fills_the_vits_config_not_kitten():
+    # the ctypes struct layout is the ABI; the engine must fill VitsCfg with the
+    # bench's parameters (bench-tts2.c): noise_scale 0.667, noise_scale_w 0.8,
+    # length_scale 1.0, lexicon and dict_dir left empty
+    src = open(DAEMON).read()
+    load = src[src.index("    def load(self):"):src.index("    def synthesize(")]
+    assert "cfg.model.vits" in load and "kitten" not in load.lower()
+    assert "voices.bin" not in load
+    for want in ("noise_scale = 0.667", "noise_scale_w = 0.8", "length_scale = 1.0"):
+        assert want in load, want
+    assert "num_speakers" in src.lower() or "NumSpeakers" in load
 
 
 def test_constants():
@@ -583,6 +596,102 @@ def test_install_stt_builds_with_tts_and_stamps_it():
     assert "-DSHERPA_ONNX_ENABLE_TTS=ON" in s and "TTS=OFF" not in s
     assert _pin(INSTALL_STT, "SHERPA_FEATURES") == "tts"
     assert _pin(INSTALL, "SHERPA_FEATURES") == "tts"
+
+
+def _pins(name):
+    return _pin(INSTALL, name)
+
+
+def test_installer_pins_the_cori_high_piper_voice():
+    assert _pins("MODEL_NAME") == "vits-piper-en_GB-cori-high"
+    assert _pins("MODEL_URL") == ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+                                  "tts-models/vits-piper-en_GB-cori-high.tar.bz2")
+    assert _pins("MODEL_ARCHIVE_SHA256") == \
+        "42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292"
+    assert _pins("SHA_voice_onnx") == \
+        "006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842"
+    assert _pins("SHA_voice_onnx_json") == \
+        "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec"
+    assert _pins("SHA_tokens_txt") == \
+        "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d"
+    assert _pins("SHA_model_card") == \
+        "136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f"
+    assert _pins("TREE_espeak_ng_data") == \
+        "1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332"
+    assert "voices.bin" not in open(INSTALL).read() and "SHA_voices_bin" not in open(INSTALL).read()
+
+
+def test_installer_model_dir_and_verify_lists():
+    s = open(INSTALL).read()
+    assert 'MODEL_DIR="$TAOS_MODELS_ROOT/sherpa-onnx/piper/$MODEL_NAME"' in s
+    assert "sherpa-onnx/kitten" not in s
+    for f in ("en_GB-cori-high.onnx", "en_GB-cori-high.onnx.json", "tokens.txt", "MODEL_CARD"):
+        assert f in s, f
+    assert "24000" not in s and "kitten" not in s.lower()
+
+
+CORI_CARD = """# Model card for cori (high)
+
+* Language: en_GB (English, Great Britain)
+* Speakers: 1
+
+## Dataset
+
+* URL: https://librivox.org
+* License: public domain
+
+## Training
+
+UK English female voice. All recordings came from LibriVox.org.
+"""
+
+
+def _licence(tmp_path, card):
+    f = tmp_path / "MODEL_CARD"
+    f.write_text(card)
+    return _sh("check_voice_licence '%s'" % f)
+
+
+def test_licence_allowlist_accepts_the_cori_card(tmp_path):
+    assert _licence(tmp_path, CORI_CARD).returncode == 0
+    for ok in ("CC0-1.0", "CC0", "CC BY 4.0", "CC-BY-4.0", "cc by 3.0", "Public Domain"):
+        r = _licence(tmp_path, CORI_CARD.replace("public domain", ok))
+        assert r.returncode == 0, (ok, r.stderr)
+
+
+@pytest.mark.parametrize("lic", [
+    "CC BY-NC-SA 4.0",                       # hfc_female / hfc_male
+    "CC BY-NC 4.0", "CC BY-ND 4.0", "CC BY-SA 4.0", "CC-BY-NC-4.0",
+    "See URL",                               # lessac: Blizzard 2013, research only
+    "https://www.cstr.ed.ac.uk/projects/blizzard/2013/lessac_blizzard2013/license.html",
+    "research only", "non-commercial", "unknown", "", "public domain, research only",
+    "CC0 NC",
+])
+def test_licence_allowlist_refuses_everything_else(tmp_path, lic):
+    r = _licence(tmp_path, CORI_CARD.replace("public domain", lic))
+    assert r.returncode != 0 and "voice licence REFUSED" in r.stderr, (lic, r.stderr)
+
+
+def test_licence_allowlist_refuses_malformed_cards(tmp_path):
+    assert _licence(tmp_path, "").returncode != 0                      # empty card
+    assert _licence(tmp_path, "# Model card\n\nno licence line\n").returncode != 0
+    assert _sh("check_voice_licence '%s/absent'" % tmp_path).returncode != 0
+    # a good licence line does not launder a restriction stated elsewhere
+    r = _licence(tmp_path, CORI_CARD + "\nFor research use only.\n")
+    assert r.returncode != 0 and "voice licence REFUSED" in r.stderr
+    # a second, disallowed licence line is not hidden by the first
+    r = _licence(tmp_path, CORI_CARD + "\n* License: CC BY-NC-SA 4.0\n")
+    assert r.returncode != 0
+    # lowercase key, no bullet
+    assert _licence(tmp_path, "license: CC BY-NC-SA 4.0\n").returncode != 0
+    # the allowed value only in prose, no License: field
+    assert _licence(tmp_path, "this voice is public domain\n").returncode != 0
+
+
+def test_installer_runs_the_licence_check_on_the_archive_card():
+    s = open(INSTALL).read()
+    assert 'check_voice_licence "$src/MODEL_CARD"' in s
+    assert "check_voice_licence" in s[s.index("tar -xjf"):s.index("verify_all ||")]
 
 
 def test_verify_sha256_accepts_a_good_file_and_rejects_corruption(tmp_path):

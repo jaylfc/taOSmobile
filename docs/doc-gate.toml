@@ -66,9 +66,9 @@ unscanned_paths = [
   # (manifest.json under the install prefix) and upstream URLs, none of which
   # are in this repo.
   "pmos/voice/NOTICE-STT.md",
-  # The Apache-2.0 / GPL attribution for the text-to-speech model and espeak-ng
-  # names on-device paths, upstream URLs and upstream repos' files (sherpa-onnx's
-  # scripts/kitten-tts/ and cmake/), none of which are in this repo.
+  # The attribution for the text-to-speech voice (Piper en_GB-cori-high, public
+  # domain), sherpa-onnx and espeak-ng names on-device paths, upstream URLs and
+  # upstream repos' files (sherpa-onnx's cmake/), none of which are in this repo.
   "pmos/voice/NOTICE-TTS.md",
 ]
 
