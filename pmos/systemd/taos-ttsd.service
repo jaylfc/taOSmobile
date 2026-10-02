@@ -1,9 +1,10 @@
 [Unit]
-Description=taOS local text-to-speech (sherpa-onnx VITS, Piper en_GB-cori-high)
+Description=taOS local text-to-speech (sherpa-onnx VITS, Piper en_GB-cori, voice chosen by install-tts.sh)
 Documentation=file://@PREFIX@/NOTICE
 # LIFECYCLE: RESIDENT (always running): cold load 2.4 s, peak RSS 345 MB
-# (measured on the handset 10-01). Loading on demand would put the load delay in front of the first
-# spoken reply; resident it costs the model's memory.
+# (measured for cori-high on the handset 10-01; cori-medium 2.2 s, 364 MB, 10-03).
+# Loading on demand would put the load delay in front of the first spoken reply;
+# resident it costs the model's memory.
 
 [Service]
 # Type=notify: `systemctl start` returns only once the model is loaded and
@@ -11,18 +12,19 @@ Documentation=file://@PREFIX@/NOTICE
 Type=notify
 NotifyAccess=main
 User=taos-tts
-# @PREFIX@, @LIB@, @MODEL_DIR@ and @PORT@ are filled in by install-tts.sh (the
-# install prefix, the ONE sherpa-onnx library that install-stt.sh builds, the
-# model dir inside the controller's unified model store, the port).
+# @PREFIX@, @LIB@, @MODEL_DIR@, @MODEL_NAME@ and @PORT@ are filled in by
+# install-tts.sh (the install prefix, the ONE sherpa-onnx library that
+# install-stt.sh builds, the model dir inside the controller's unified model
+# store, the model's name, the port).
 ExecStart=/usr/bin/python3 @PREFIX@/bin/taos-ttsd
-Environment=TAOS_TTS_MODEL_DIR=@MODEL_DIR@ TAOS_TTS_LIB=@LIB@
+Environment=TAOS_TTS_MODEL_DIR=@MODEL_DIR@ TAOS_TTS_MODEL=@MODEL_NAME@ TAOS_TTS_LIB=@LIB@
 Environment=TAOS_TTS_PORT=@PORT@ TAOS_TTS_THREADS=4 TAOS_TTS_SID=0
 TimeoutStartSec=60
 Restart=on-failure
 RestartSec=3
 
 # The four big cores (4-7), like taos-sttd.
-# MEASURED on the handset 10-01 (taOSmobile voice/tts-piper, 11.6 s reply, 5 runs
+# MEASURED FOR cori-high on the handset 10-01 (taOSmobile voice/tts-piper, 11.6 s reply, 5 runs
 # each, medians): cores 4-7 alone RTF 0.64, first audio 2.7 s; cores 0-3 alone RTF
 # 2.73, first audio 12.0 s (far slower than real time, so the little cores are
 # ruled out); 4-7 while taos-sttd decodes on 4-7 at the same time (barge-in) RTF
@@ -31,6 +33,13 @@ RestartSec=3
 # synthesis, so it scales with the length of the reply's first sentence.
 # STT finishes before a reply is synthesised, so in a normal turn the two do
 # not overlap.
+# cori-medium (default since 10-02), MEASURED on the handset 10-03 with the same
+# method (11.0 s reply, 1 warm-up + 5 runs, medians; cori-high re-run beside it as a
+# control reproduced the figures above within 0.04-0.08 RTF): cores 4-7 alone RTF 0.09,
+# first audio 0.36 s; cores 0-3 alone RTF 0.44, first audio 1.8 s; 4-7 while taos-sttd
+# decodes on 4-7 (barge-in) RTF 0.25, first audio 1.0 s, and STT slows 0.096 -> 0.22;
+# TTS on 0-3 with STT on 4-7 RTF 0.55, STT 0.11. Load 2.2 s on 4-7 (12.2 s on 0-3),
+# peak RSS 364 MB. 4-7 stays: first audio is 5x sooner there.
 CPUAffinity=4-7
 Nice=5
 # If the phone runs short of memory, lose the synthesizer before the UI.

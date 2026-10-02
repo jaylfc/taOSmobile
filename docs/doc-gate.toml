@@ -66,7 +66,7 @@ unscanned_paths = [
   # (manifest.json under the install prefix) and upstream URLs, none of which
   # are in this repo.
   "pmos/voice/NOTICE-STT.md",
-  # The attribution for the text-to-speech voice (Piper en_GB-cori-high, public
+  # The attribution for the text-to-speech voice (Piper en_GB-cori-medium / -high, public
   # domain), sherpa-onnx and espeak-ng names on-device paths, upstream URLs and
   # upstream repos' files (sherpa-onnx's cmake/), none of which are in this repo.
   "pmos/voice/NOTICE-TTS.md",
