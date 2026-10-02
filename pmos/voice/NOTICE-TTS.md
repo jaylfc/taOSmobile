@@ -2,10 +2,11 @@
 
 taOS is licensed AGPL-3.0-or-later.
 
-## Voice model: Piper en_GB-cori-high (public domain)
+## Voice model: Piper en_GB-cori-medium and -high (public domain)
 
-The voice installed by `install-tts.sh` is **en_GB-cori-high** ("cori", UK
-English, female, single speaker, 22,050 Hz), a Piper voice. Its MODEL_CARD
+The voice installed by `install-tts.sh` is **en_GB-cori-medium** (the default)
+or **en_GB-cori-high** (`TAOS_TTS_VOICE=high`) ("cori", UK English, female,
+single speaker, 22,050 Hz), a Piper voice in two quality sizes. Each MODEL_CARD
 declares the dataset **LibriVox** (https://librivox.org) with `License: public
 domain`. The voice was trained from scratch by **Bryce Beattie**
 (https://brycebeattie.com/files/tts/), who assembled the dataset (about 24
@@ -17,8 +18,10 @@ not require it. Beattie and LibriVox do not endorse taOS or this use.
   binary that runs the voice**: the model is only a data file (`.onnx` weights,
   `.onnx.json`, `tokens.txt`).
 - Copy used: the sherpa-onnx project's packaging,
+  `vits-piper-en_GB-cori-medium.tar.bz2` (default) or
   `vits-piper-en_GB-cori-high.tar.bz2`
-  (https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models), unchanged.
+  (https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-medium.tar.bz2,
+  release page https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models), unchanged.
   The archive and each file are pinned by sha256 in `install-tts.sh`; the
   installed hashes are in `voice/tts/manifest.json` under the controller's data
   dir (on the handset `/root/tinyagentos/data`).

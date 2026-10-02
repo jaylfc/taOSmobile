@@ -535,10 +535,25 @@ def test_health_is_503_before_load_and_200_after(daemon):
 
 
 def test_real_engine_identity():
-    e = ttsd.SherpaSynthesizer("/nonexistent.so", "/nonexistent")
+    # the model name is derived from the model dir, not hard-coded
+    e = ttsd.SherpaSynthesizer("/nonexistent.so", "/m/sherpa-onnx/piper/vits-piper-en_GB-cori-medium/")
     assert (e.engine, e.model, e.voice, e.sample_rate) == (
-        "sherpa-onnx", "vits-piper-en_GB-cori-high", "cori", 22050)
+        "sherpa-onnx", "vits-piper-en_GB-cori-medium", "cori", 22050)
     assert e.loaded is False
+    e = ttsd.SherpaSynthesizer("/nonexistent.so", "/nonexistent")
+    assert e.model == "nonexistent"
+
+
+def test_real_engine_explicit_model_overrides_the_dir_name():
+    e = ttsd.SherpaSynthesizer("/nonexistent.so", "/x/vits-piper-en_GB-cori-medium",
+                               model="vits-piper-en_GB-cori-high")
+    assert e.model == "vits-piper-en_GB-cori-high"
+
+
+def test_main_reads_tts_model_env():
+    src = open(DAEMON).read()
+    assert 'os.environ.get("TAOS_TTS_MODEL")' in src
+    assert "cori-high" not in src.split("DEFAULT_LIB")[0]
 
 
 def test_server_binds_loopback_only():
@@ -598,35 +613,101 @@ def test_install_stt_builds_with_tts_and_stamps_it():
     assert _pin(INSTALL, "SHERPA_FEATURES") == "tts"
 
 
-def _pins(name):
-    return _pin(INSTALL, name)
+def _arm(voice):
+    """The text of one `case "$VOICE"` arm of the installer."""
+    m = re.search(r"^[ \t]*%s\)[ \t]*\n(.*?)^[ \t]*;;" % voice, open(INSTALL).read(), re.M | re.S)
+    assert m, "no %s) arm in %s" % (voice, INSTALL)
+    return m.group(1)
 
 
-def test_installer_pins_the_cori_high_piper_voice():
-    assert _pins("MODEL_NAME") == "vits-piper-en_GB-cori-high"
-    assert _pins("MODEL_URL") == ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-                                  "tts-models/vits-piper-en_GB-cori-high.tar.bz2")
-    assert _pins("MODEL_ARCHIVE_SHA256") == \
-        "42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292"
-    assert _pins("SHA_voice_onnx") == \
-        "006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842"
-    assert _pins("SHA_voice_onnx_json") == \
-        "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec"
-    assert _pins("SHA_tokens_txt") == \
-        "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d"
-    assert _pins("SHA_model_card") == \
-        "136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f"
-    assert _pins("TREE_espeak_ng_data") == \
-        "1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332"
+def _pins(voice, name):
+    m = re.search(r"^[ \t]*%s=(\S+)$" % name, _arm(voice), re.M)
+    assert m, "%s not pinned for %s" % (name, voice)
+    return m.group(1)
+
+
+MEDIUM = {
+    "MODEL_NAME": "vits-piper-en_GB-cori-medium",
+    "MODEL_URL": "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+                 "tts-models/vits-piper-en_GB-cori-medium.tar.bz2",
+    "MODEL_ARCHIVE_SHA256": "49c9a5361bbdd95d7ca9687c4de11e5908481f65e7c7c368960df79949fdac2b",
+    "SHA_voice_onnx": "8b0d3cdd77f2878e0aa2048103eabb4d01b334783f99629f042bcf703aeba487",
+    "SHA_voice_onnx_json": "e262c16d7f192f69d4edd6b4ef8a5915379e67495fcc402f1ab15eeb33da3d36",
+    "SHA_tokens_txt": "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d",
+    "SHA_model_card": "38d76dfde845837b184668f8bab1c6426ad740b1af0fcebc349037822739e536",
+    "TREE_espeak_ng_data": "1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332",
+    "VOICE_FILE": "en_GB-cori-medium",
+}
+HIGH = {
+    "MODEL_NAME": "vits-piper-en_GB-cori-high",
+    "MODEL_URL": "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+                 "tts-models/vits-piper-en_GB-cori-high.tar.bz2",
+    "MODEL_ARCHIVE_SHA256": "42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292",
+    "SHA_voice_onnx": "006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842",
+    "SHA_voice_onnx_json": "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec",
+    "SHA_tokens_txt": "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d",
+    "SHA_model_card": "136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f",
+    "TREE_espeak_ng_data": "1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332",
+    "VOICE_FILE": "en_GB-cori-high",
+}
+
+
+@pytest.mark.parametrize("voice,want", [("medium", MEDIUM), ("high", HIGH)])
+def test_installer_pins_each_cori_voice(voice, want):
+    for name, value in want.items():
+        assert _pins(voice, name) == value, (voice, name)
+    # nothing outside the arms may pin a voice
+    outside = re.sub(r"^[ \t]*(medium|high)\)[ \t]*\n.*?^[ \t]*;;", "",
+                     open(INSTALL).read(), flags=re.M | re.S)
+    assert not re.search(r"^(MODEL_NAME|MODEL_URL|SHA_voice_onnx)=(?!\$)", outside, re.M)
     assert "voices.bin" not in open(INSTALL).read() and "SHA_voices_bin" not in open(INSTALL).read()
+
+
+def test_installer_defaults_to_medium_and_refuses_other_voices():
+    s = open(INSTALL).read()
+    assert 'VOICE="${TAOS_TTS_VOICE:-medium}"' in s
+    # the voice check runs before the source-only return and before the root check
+    assert s.index('case "$VOICE" in') < s.index("INSTALL_TTS_SOURCE_ONLY:-0") < s.index("run as root")
+    # sourcing with no TAOS_TTS_VOICE still works and selects medium
+    r = _sh('echo "$VOICE $MODEL_NAME $VOICE_FILE"')
+    assert r.returncode == 0 and r.stdout.split() == ["medium", MEDIUM["MODEL_NAME"], MEDIUM["VOICE_FILE"]], r
+    r = subprocess.run(["sh", "-c", ". '%s'; echo \"$MODEL_NAME\"" % INSTALL],
+                       env=dict(os.environ, INSTALL_TTS_SOURCE_ONLY="1", TAOS_TTS_VOICE="high"),
+                       capture_output=True, text=True)
+    assert r.stdout.strip() == HIGH["MODEL_NAME"], r
+
+
+@pytest.mark.parametrize("bad", ["foo", "Medium", "medium ", "medium|high", "../high"])
+def test_installer_refuses_an_unknown_voice_before_anything_else(bad):
+    env = dict(os.environ, TAOS_TTS_VOICE=bad)
+    env.pop("INSTALL_TTS_SOURCE_ONLY", None)
+    r = subprocess.run(["sh", INSTALL], env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "TAOS_TTS_VOICE" in r.stderr and "medium" in r.stderr and "high" in r.stderr, r.stderr
+    assert "run as root" not in r.stderr
+
+
+def test_unit_template_takes_the_model_name():
+    unit = open(os.path.join(HERE, "..", "systemd", "taos-ttsd.service")).read()
+    assert "@MODEL_NAME@" in unit and "TAOS_TTS_MODEL=@MODEL_NAME@" in unit
+    assert "cori-high" not in unit.splitlines()[1]  # Description
+    s = open(INSTALL).read()
+    assert '-e "s|@MODEL_NAME@|$MODEL_NAME|g"' in s
 
 
 def test_installer_model_dir_and_verify_lists():
     s = open(INSTALL).read()
     assert 'MODEL_DIR="$TAOS_MODELS_ROOT/sherpa-onnx/piper/$MODEL_NAME"' in s
     assert "sherpa-onnx/kitten" not in s
-    for f in ("en_GB-cori-high.onnx", "en_GB-cori-high.onnx.json", "tokens.txt", "MODEL_CARD"):
+    assert s.count("${VOICE_FILE}.onnx:$SHA_voice_onnx") == 1
+    assert "${VOICE_FILE}.onnx.json:$SHA_voice_onnx_json" in s
+    assert "for f in ${VOICE_FILE}.onnx ${VOICE_FILE}.onnx.json tokens.txt MODEL_CARD" in s
+    assert '"${VOICE_FILE}.onnx"' in s or "VOICE_FILE=$VOICE_FILE" in s
+    for f in ("tokens.txt", "MODEL_CARD"):
         assert f in s, f
+    # no hard-coded file name of either voice outside the pin arms
+    outside = re.sub(r"^[ \t]*(medium|high)\)[ \t]*\n.*?^[ \t]*;;", "", s, flags=re.M | re.S)
+    assert "en_GB-cori-high.onnx" not in outside and "en_GB-cori-medium.onnx" not in outside
     assert "24000" not in s and "kitten" not in s.lower()
 
 
@@ -644,6 +725,14 @@ CORI_CARD = """# Model card for cori (high)
 
 UK English female voice. All recordings came from LibriVox.org.
 """
+
+
+CORI_MEDIUM_CARD = CORI_CARD.replace("cori (high)", "cori (medium)")
+
+
+def test_licence_allowlist_accepts_the_medium_card(tmp_path):
+    assert "cori (medium)" in CORI_MEDIUM_CARD
+    assert _licence(tmp_path, CORI_MEDIUM_CARD).returncode == 0
 
 
 def _licence(tmp_path, card):

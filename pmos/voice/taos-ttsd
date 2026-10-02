@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """taos-ttsd: the handset's local text-to-speech daemon.
 
-One resident synthesizer (sherpa-onnx offline TTS, Piper voice en_GB-cori-high
+One resident synthesizer (sherpa-onnx offline TTS, Piper voice en_GB-cori, medium or high as chosen at install
 run through sherpa-onnx's VITS model config) behind a loopback-only HTTP API.
 No third-party Python: http.server for the wire, ctypes over
 libsherpa-onnx-c-api.so for the engine, mirroring the calls the bench measured
@@ -61,10 +61,12 @@ In a normal voice turn STT and TTS do not overlap: the transcript is final
 before the reply is synthesised.
 
 Environment (set by the unit, from what install-tts.sh resolved):
-  TAOS_TTS_MODEL_DIR  REQUIRED. The directory holding en_GB-cori-high.onnx,
+  TAOS_TTS_MODEL_DIR  REQUIRED. The directory holding the voice's .onnx,
                       tokens.txt and espeak-ng-data/: the controller's unified
                       model store, <models_root>/sherpa-onnx/piper/
-                      vits-piper-en_GB-cori-high. Never hardcoded here.
+                      vits-piper-en_GB-cori-<medium|high>. Never hardcoded here.
+  TAOS_TTS_MODEL      optional. The model name reported by /health; default the
+                      basename of TAOS_TTS_MODEL_DIR. The unit sets it.
   TAOS_TTS_LIB        path to libsherpa-onnx-c-api.so. There is ONE copy, built
                       (with TTS) by install-stt.sh; default
                       /opt/taos-voice/stt/lib/libsherpa-onnx-c-api.so
@@ -89,7 +91,6 @@ import traceback
 from array import array
 
 ENGINE = "sherpa-onnx"
-MODEL = "vits-piper-en_GB-cori-high"
 HOST = "127.0.0.1"          # never configurable: loopback only
 DEFAULT_PORT = 6976
 DEFAULT_LIB = "/opt/taos-voice/stt/lib/libsherpa-onnx-c-api.so"
@@ -128,10 +129,10 @@ class SherpaSynthesizer:
     client is gone and synthesis must stop."""
 
     engine = ENGINE
-    model = MODEL
     sample_rate = SAMPLE_RATE
 
-    def __init__(self, lib_path, model_dir, threads=4, sid=0):
+    def __init__(self, lib_path, model_dir, threads=4, sid=0, model=None):
+        self.model = model or os.path.basename(os.path.normpath(model_dir))
         self.lib_path = lib_path
         self.model_dir = model_dir
         self.threads = threads
@@ -506,7 +507,8 @@ def main():
     port = int(os.environ.get("TAOS_TTS_PORT", str(DEFAULT_PORT)))
     threads = int(os.environ.get("TAOS_TTS_THREADS", "4"))
     sid = int(os.environ.get("TAOS_TTS_SID", "0"))
-    eng = SherpaSynthesizer(lib_path, model_dir, threads, sid)
+    eng = SherpaSynthesizer(lib_path, model_dir, threads, sid,
+                            model=os.environ.get("TAOS_TTS_MODEL") or None)
     srv = make_server(eng, port)             # bound first: /health answers 503 while loading
 
     def load():
