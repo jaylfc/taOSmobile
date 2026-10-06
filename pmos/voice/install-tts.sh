@@ -5,10 +5,18 @@
 #     sudo sh pmos/voice/install-stt.sh     # once: builds the shared sherpa-onnx library
 #     sudo sh pmos/voice/install-tts.sh
 #
-# Downloads the Piper voice en_GB-cori-high (public domain, LibriVox) as
-# packaged by sherpa-onnx, REFUSES it unless its MODEL_CARD names an allowed
-# licence (public domain, CC0 or CC BY), and VERIFIES it against pinned sha256s, installs the daemon and its systemd unit, starts it, and proves it
-# with a real synthesis. A FILE in this repo, not a hand-edit: a reflash wipes
+# Downloads a Piper voice (public domain, LibriVox) as packaged by sherpa-onnx,
+# REFUSES it unless its MODEL_CARD names an allowed licence (public domain, CC0
+# or CC BY), and VERIFIES it against pinned sha256s, installs the daemon and its
+# systemd unit, starts it, and proves it with a real synthesis.
+#
+# Voice choice: TAOS_TTS_VOICE=medium|high (default medium). medium is
+# en_GB-cori-medium, the default since Jay's 2026-10-02 decision because first
+# audio is faster; high is en_GB-cori-high (larger, 115 MB), installed with
+# TAOS_TTS_VOICE=high. Any other value is refused. Both are 22050 Hz, one
+# speaker. Switching voice installs into a NEW model dir and leaves the other
+# voice's dir (about 115 MB for high) in the model store: harmless, delete it by
+# hand if wanted. There is no per-request voice parameter. A FILE in this repo, not a hand-edit: a reflash wipes
 # anything typed in.
 #
 # ONE sherpa-onnx library, not two. install-stt.sh already builds
@@ -35,8 +43,8 @@
 #   $TAOS_STT_PREFIX  (default /opt/taos-voice/stt; must equal the
 #                     TAOS_VOICE_PREFIX install-stt.sh used)
 #       lib/libsherpa-onnx-c-api.so       the ONE engine library, READ here
-#   $TAOS_MODELS_ROOT/sherpa-onnx/piper/vits-piper-en_GB-cori-high/
-#       en_GB-cori-high.onnx en_GB-cori-high.onnx.json tokens.txt MODEL_CARD
+#   $TAOS_MODELS_ROOT/sherpa-onnx/piper/<MODEL_NAME>/
+#       <VOICE_FILE>.onnx <VOICE_FILE>.onnx.json tokens.txt MODEL_CARD
 #       espeak-ng-data/
 #                                         the controller's UNIFIED MODEL STORE
 #                                         (tinyagentos installers/model_paths.py:
@@ -56,19 +64,6 @@ set -eu
 # required to have been built at
 SHERPA_COMMIT=11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf
 SHERPA_FEATURES=tts
-MODEL_NAME=vits-piper-en_GB-cori-high
-MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-high.tar.bz2
-# Computed 2026-10-01 by downloading MODEL_URL (115574061 bytes) and hashing it;
-# equal to the sha256 digest GitHub publishes for that release asset. The
-# per-file hashes below are of the files in that archive.
-MODEL_ARCHIVE_SHA256=42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292
-SHA_voice_onnx=006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842
-SHA_voice_onnx_json=9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec
-SHA_tokens_txt=ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d
-SHA_model_card=136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f
-# espeak-ng-data/ is 355 files (one has a space in its name): pinned as ONE
-# digest over the whole tree, computed by tree_sha256 below
-TREE_espeak_ng_data=1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332
 PORT=6976
 
 PREFIX="${TAOS_TTS_PREFIX:-/opt/taos-voice/tts}"
@@ -77,9 +72,6 @@ CACHE=/var/cache/taos-voice
 DL="$CACHE/dl-tts"
 SVC=taos-ttsd
 HERE="$(cd "$(dirname "$0")" && pwd)"
-
-die() { echo "install-tts: FAIL: $*" >&2; exit 1; }
-say() { echo "install-tts: $*"; }
 
 # verify_sha256 FILE WANT_HEX64 -> 0 if FILE hashes to WANT, else 1 (loudly).
 verify_sha256() {
@@ -173,6 +165,45 @@ print("voice licence ok: %s" % "; ".join(vals))
 PYEOF
 }
 
+# ---- the voice choice (before the source-only return, so tests see it too) ----
+die() { echo "install-tts: FAIL: $*" >&2; exit 1; }
+say() { echo "install-tts: $*"; }
+
+VOICE="${TAOS_TTS_VOICE:-medium}"
+case "$VOICE" in
+  medium)
+    MODEL_NAME=vits-piper-en_GB-cori-medium
+    MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-medium.tar.bz2
+    # Computed 2026-10-02 from the real archive (67257412 bytes); the per-file
+    # hashes are of the files in it. tokens.txt and espeak-ng-data are identical
+    # to the high voice's.
+    MODEL_ARCHIVE_SHA256=49c9a5361bbdd95d7ca9687c4de11e5908481f65e7c7c368960df79949fdac2b
+    SHA_voice_onnx=8b0d3cdd77f2878e0aa2048103eabb4d01b334783f99629f042bcf703aeba487
+    SHA_voice_onnx_json=e262c16d7f192f69d4edd6b4ef8a5915379e67495fcc402f1ab15eeb33da3d36
+    SHA_tokens_txt=ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d
+    SHA_model_card=38d76dfde845837b184668f8bab1c6426ad740b1af0fcebc349037822739e536
+    # espeak-ng-data/ is 355 files (one has a space in its name): pinned as ONE
+    # digest over the whole tree, computed by tree_sha256 below
+    TREE_espeak_ng_data=1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332
+    VOICE_FILE=en_GB-cori-medium
+    ;;
+  high)
+    MODEL_NAME=vits-piper-en_GB-cori-high
+    MODEL_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-high.tar.bz2
+    # Computed 2026-10-01 by downloading MODEL_URL (115574061 bytes) and hashing it;
+    # equal to the sha256 digest GitHub publishes for that release asset. The
+    # per-file hashes below are of the files in that archive.
+    MODEL_ARCHIVE_SHA256=42922f07738fcde2e49eed4e959635692f73b933de35a6b7c1010162ff566292
+    SHA_voice_onnx=006bb4db48e066f7f1be91d218db3b76617a707196271694ca6455d7bbd13842
+    SHA_voice_onnx_json=9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec
+    SHA_tokens_txt=ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d
+    SHA_model_card=136e7bd168b6c35b4a5df01a0253297e5773b5775ceae0af5160f264aa58208f
+    TREE_espeak_ng_data=1c2ec0747e40d30f8f123b65c93dcba64f2404195b3344ed614df41237df8332
+    VOICE_FILE=en_GB-cori-high
+    ;;
+  *) die "TAOS_TTS_VOICE='$VOICE' is not a voice; use medium (default) or high" ;;
+esac
+
 # Sourced by the tests to reach verify_sha256 and tree_sha256 alone.
 if [ "${INSTALL_TTS_SOURCE_ONLY:-0}" = 1 ]; then return 0; fi
 
@@ -259,7 +290,7 @@ chmod 0755 "$TAOS_DATA_DIR/voice" "$MANIFEST_DIR"
 
 # ---- 4. the model: verify, fetch only if needed, verify again -----------------
 verify_all() { # verify_all [quiet]
-  for f in en_GB-cori-high.onnx:$SHA_voice_onnx en_GB-cori-high.onnx.json:$SHA_voice_onnx_json tokens.txt:$SHA_tokens_txt MODEL_CARD:$SHA_model_card; do
+  for f in ${VOICE_FILE}.onnx:$SHA_voice_onnx ${VOICE_FILE}.onnx.json:$SHA_voice_onnx_json tokens.txt:$SHA_tokens_txt MODEL_CARD:$SHA_model_card; do
     if [ "${1:-}" = quiet ]; then verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" 2>/dev/null || return 1
     else verify_sha256 "$MODEL_DIR/${f%:*}" "${f##*:}" || return 1; fi
   done
@@ -278,7 +309,7 @@ else
   [ -d "$src" ] || die "archive did not contain the expected directory"
   # the licence gate: BEFORE anything is installed from the archive
   check_voice_licence "$src/MODEL_CARD" >&2 || die "refusing this voice: its licence is not public domain, CC0 or CC BY"
-  for f in en_GB-cori-high.onnx en_GB-cori-high.onnx.json tokens.txt MODEL_CARD; do
+  for f in ${VOICE_FILE}.onnx ${VOICE_FILE}.onnx.json tokens.txt MODEL_CARD; do
     install -m 0644 -o "${MODELS_OWNER%:*}" -g "${MODELS_OWNER#*:}" "$src/$f" "$MODEL_DIR/$f.new"
     mv -f "$MODEL_DIR/$f.new" "$MODEL_DIR/$f"
   done
@@ -311,7 +342,7 @@ LIB_ID=$(sha256sum "$LIB"); LIB_ID=${LIB_ID%% *}
 [ "$(cat "$PREFIX/.lib-sha256" 2>/dev/null || true)" = "$LIB_ID" ] || {
   printf '%s\n' "$LIB_ID" > "$PREFIX/.lib-sha256"; chmod 0644 "$PREFIX/.lib-sha256"; CHANGED=1; }
 # the unit is a template: prefix, library, model dir and port are filled in here
-sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@LIB@|$LIB|g" -e "s|@MODEL_DIR@|$MODEL_DIR|g" -e "s|@PORT@|$PORT|g" \
+sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@LIB@|$LIB|g" -e "s|@MODEL_DIR@|$MODEL_DIR|g" -e "s|@MODEL_NAME@|$MODEL_NAME|g" -e "s|@PORT@|$PORT|g" \
   "$HERE/../systemd/taos-ttsd.service" > "$CACHE/taos-ttsd.service.rendered"
 ! grep -q '@[A-Z_]*@' "$CACHE/taos-ttsd.service.rendered" || die "unit has an unfilled placeholder"
 put "$CACHE/taos-ttsd.service.rendered" /etc/systemd/system/taos-ttsd.service 0644
@@ -320,7 +351,7 @@ put "$CACHE/taos-ttsd.service.rendered" /etc/systemd/system/taos-ttsd.service 06
 SHA_onnx=$SHA_voice_onnx SHA_onnx_json=$SHA_voice_onnx_json SHA_card=$SHA_model_card SHA_tokens=$SHA_tokens_txt \
 TREE_espeak=$TREE_espeak_ng_data SHERPA_COMMIT=$SHERPA_COMMIT PORT=$PORT MODEL_NAME=$MODEL_NAME \
 MODEL_URL=$MODEL_URL MODEL_ARCHIVE_SHA256=$MODEL_ARCHIVE_SHA256 ORT=$ORT PREFIX=$PREFIX LIB=$LIB \
-MODEL_DIR=$MODEL_DIR MANIFEST_DIR=$MANIFEST_DIR DATA_OWNER=$DATA_OWNER \
+VOICE_FILE=$VOICE_FILE MODEL_DIR=$MODEL_DIR MANIFEST_DIR=$MANIFEST_DIR DATA_OWNER=$DATA_OWNER \
 python3 - <<'PYEOF'
 import json, os, shutil
 e = os.environ
@@ -331,8 +362,8 @@ m = {
     "sid": 0,
     "sample_rate": 22050,
     "files": {
-        "en_GB-cori-high.onnx": e["SHA_onnx"],
-        "en_GB-cori-high.onnx.json": e["SHA_onnx_json"],
+        e["VOICE_FILE"] + ".onnx": e["SHA_onnx"],
+        e["VOICE_FILE"] + ".onnx.json": e["SHA_onnx_json"],
         "MODEL_CARD": e["SHA_card"],
         "tokens.txt": e["SHA_tokens"],
     },
