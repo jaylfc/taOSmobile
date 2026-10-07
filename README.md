@@ -13,7 +13,8 @@ about 2026-10-05, so read it as last known, not live:
 - It boots straight into taOS full screen: sway runs Chromium as a kiosk
   (`pmos/kiosk/etc/sway-kiosk.conf`, `pmos/kiosk/bin/`). The power menu,
   double-tap to wake and the volume keys are handled below the page
-  (`taos-kiosk-power-hold`, `taos-kiosk-dt2w`, `taos-kiosk-volume`).
+  (`pmos/kiosk/bin/taos-kiosk-power-hold`, `pmos/kiosk/bin/taos-kiosk-dt2w`,
+  `pmos/kiosk/bin/taos-kiosk-volume`).
 - The taOS controller runs natively on the phone on `:6969`; the firewall opens
   it on the tailnet and wifi (`pmos/nftables/50_taos.nft`).
 - Local speech: Parakeet-TDT v3 speech-to-text and Piper `en_GB-cori-medium`
