@@ -6,31 +6,25 @@ the full-screen surface.
 
 ## Where things stand
 
-**Proven on hardware, but not installed right now.** The device was reflashed to
-Droidian on 2026-08-26, so Ubuntu Touch and everything below it is no longer on
-the phone. It is reflashable — the bootloader is unlocked, no partition layout
-was changed, and a verified UT rollback image is staged. What Ubuntu Touch
-demonstrated:
+**The current port is postmarketOS** (`pmos/`, from 2026-09-15). This is the
+state last measured on the handset (2026-10-03). The phone has been offline since
+about 2026-10-05, so read it as last known, not live:
 
-- taOS controller running natively as a systemd service on `:6969`, surviving
-  reboots. Every dependency resolved as an aarch64 wheel — the phone has no
-  compiler.
-- taOS rendering on the device through the platform webview.
-- Resilient remote access (Tailscale as a *system* service, so it survives the
-  graphical session dying).
+- It boots straight into taOS full screen: sway runs Chromium as a kiosk
+  (`pmos/kiosk/etc/sway-kiosk.conf`, `pmos/kiosk/bin/`). The power menu,
+  double-tap to wake and the volume keys are handled below the page
+  (`taos-kiosk-power-hold`, `taos-kiosk-dt2w`, `taos-kiosk-volume`).
+- The taOS controller runs natively on the phone on `:6969`; the firewall opens
+  it on the tailnet and wifi (`pmos/nftables/50_taos.nft`).
+- Local speech: Parakeet-TDT v3 speech-to-text and Piper `en_GB-cori-medium`
+  text-to-speech (`pmos/voice/`, attributions in `pmos/voice/NOTICE-STT.md` and
+  `pmos/voice/NOTICE-TTS.md`).
+- Cameras (`pmos/camera/`), audio (`docs/pmos-audio-bringup.md`), and a BLE
+  check for pairing the taOS Orb (`pmos/ble/`).
 
-**Not working:** full-screen exclusive boot. Ubuntu Touch's session shell is a
-nested Mir server, and QtWebEngine cannot obtain a graphics backend in that
-role — so a web-rendering shell cannot replace Lomiri. Eight approaches were
-tested on hardware; see `docs/android-kiosk-scope.md` for the full table of
-what was tried and how each failed.
-
-**In progress:** porting [Droidian](https://droidian.org) to the device. It is
-flashed but not yet booting — see `docs/flash-procedure.md` for the attempt log
-and the current state. Droidian
-is Debian (glibc + systemd, so the controller is a straight lift) on Halium (so
-the Android vendor blobs keep camera, RIL and VoLTE working), with wlroots — so
-`cage` + Chromium gives an exclusive kiosk without fighting the display stack.
+**History:** Ubuntu Touch ran the controller natively but could not give a web
+shell an exclusive full screen (`docs/android-kiosk-scope.md`). The Droidian port
+came next (`docs/droidian-port-plan.md`, `docs/flash-procedure.md`).
 
 ## Layout
 
@@ -38,6 +32,7 @@ the Android vendor blobs keep camera, RIL and VoLTE working), with wlroots — s
 bridge/     Rust hardware bridge (SMS/dial/battery over D-Bus) — scaffold
 kiosk/      Kiosk surface: launchers, systemd units, Plymouth theme, polyfills
 droidian/   Droidian port: kernel packaging (debian/, config fragments, CI)
+pmos/       postmarketOS port: kiosk, voice, camera, BLE, firewall, kernel patches
 scripts/    Device introspection and deployment helpers
             check-device-presence.sh -- is the phone on USB, and in what state?
             Run it on the Linux USB host; exits 0/2/3/4/5, never guesses.
