@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Inject touch on the handset glass through a virtual uinput touchscreen.
+
+  taos-touch tap X Y
+  taos-touch swipe X1 Y1 X2 Y2 [MS]
+  taos-touch hold X Y [MS]
+  taos-touch -          (keep one device; read the commands above from stdin)
+
+Coordinates are PHYSICAL panel pixels (1080x2400), the same space as a
+taos-shot screenshot, so an agent can read a point off the image and press it.
+Run as root (/dev/uinput is 0600 root).
+
+The panel must be ON: taos-kiosk-screen disables every type:touch device
+while the panel is off (the pocket-touch guard), and that includes this one.
+Wake with `taos-kiosk-screen on` first, and power it off again when done so
+the panel is never left lit (burn-in). Jay: every action a human can take on
+the glass needs an agent pathway; this is the screenshot + coordinates floor.
+"""
+import fcntl, os, struct, sys, time
+
+W, H = 1080, 2400
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+BTN_TOUCH = 0x14A
+ABS_X, ABS_Y = 0x00, 0x01
+ABS_MT_SLOT, ABS_MT_X, ABS_MT_Y, ABS_MT_TRACKING_ID = 0x2F, 0x35, 0x36, 0x39
+INPUT_PROP_DIRECT = 0x01
+UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_ABSBIT = 0x40045564, 0x40045565, 0x40045567
+UI_SET_PROPBIT = 0x4004556E
+UI_DEV_SETUP, UI_ABS_SETUP = 0x405C5503, 0x401C5504
+UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
+
+
+def open_dev():
+    fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_ABS)
+    fcntl.ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH)
+    fcntl.ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT)
+    for code, hi in ((ABS_X, W - 1), (ABS_Y, H - 1), (ABS_MT_SLOT, 0),
+                     (ABS_MT_X, W - 1), (ABS_MT_Y, H - 1), (ABS_MT_TRACKING_ID, 65535)):
+        fcntl.ioctl(fd, UI_SET_ABSBIT, code)
+        fcntl.ioctl(fd, UI_ABS_SETUP, struct.pack("H2xiiiiii",code, 0, 0, hi, 0, 0, 0))
+    fcntl.ioctl(fd, UI_DEV_SETUP, struct.pack("HHHH80sI", 0x06, 0x7461, 0x0001, 1, b"taos-touch", 0))
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    time.sleep(1.0)  # let libinput/sway pick the new device up
+    return fd
+
+
+def emit(fd, typ, code, val):
+    os.write(fd, struct.pack("llHHi", 0, 0, typ, code, val))
+
+
+def down(fd, x, y):
+    emit(fd, EV_ABS, ABS_MT_SLOT, 0)
+    emit(fd, EV_ABS, ABS_MT_TRACKING_ID, 1)
+    move(fd, x, y, key=True)
+
+
+def move(fd, x, y, key=False):
+    emit(fd, EV_ABS, ABS_MT_X, x); emit(fd, EV_ABS, ABS_MT_Y, y)
+    if key:
+        emit(fd, EV_KEY, BTN_TOUCH, 1)
+    emit(fd, EV_ABS, ABS_X, x); emit(fd, EV_ABS, ABS_Y, y)
+    emit(fd, EV_SYN, 0, 0)
+
+
+def up(fd):
+    emit(fd, EV_ABS, ABS_MT_TRACKING_ID, -1)
+    emit(fd, EV_KEY, BTN_TOUCH, 0)
+    emit(fd, EV_SYN, 0, 0)
+
+
+def run(fd, a):
+    n = [int(v) for v in a[1:]]
+    if a[0] == "tap":
+        # 150 ms, not a flick: a 60 ms tap was MEASURED not opening the launcher.
+        down(fd, n[0], n[1]); time.sleep(0.15); up(fd)
+    elif a[0] == "hold":
+        down(fd, n[0], n[1]); time.sleep((n[2] if len(n) > 2 else 800) / 1000); up(fd)
+    else:
+        x1, y1, x2, y2 = n[:4]
+        ms = n[4] if len(n) > 4 else 300
+        steps = max(8, ms // 16)
+        down(fd, x1, y1)
+        for i in range(1, steps + 1):
+            time.sleep(ms / 1000 / steps)
+            move(fd, x1 + (x2 - x1) * i // steps, y1 + (y2 - y1) * i // steps)
+        up(fd)
+    time.sleep(0.2)
+
+
+def main(a):
+    if not a or a[0] not in ("tap", "swipe", "hold", "-"):
+        sys.exit(__doc__)
+    fd = open_dev()
+    try:
+        if a[0] != "-":
+            run(fd, a)
+        else:  # one device for a whole session: one command per stdin line
+            for line in sys.stdin:
+                w = line.split()
+                if w and w[0] in ("tap", "swipe", "hold"):
+                    run(fd, w)
+                print("ok", *w, flush=True)
+    finally:
+        fcntl.ioctl(fd, UI_DEV_DESTROY)
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
