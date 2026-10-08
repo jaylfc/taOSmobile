@@ -170,13 +170,18 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
     declared_unscanned = invariants.get("unscanned_paths", [])
     scanned = set(files_to_scan)
     # Use git to enumerate .md files, excluding .git directories and git-ignored files
-    result = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # If git fails, report a git-related error that matches the gate's failure style
+        failures.append(f"config: git command failed to list .md files in repo")
+        return failures
     for doc_rel in sorted(result.stdout.splitlines()):
         if any(part == ".git" for part in Path(doc_rel).parts):
             continue

@@ -73,30 +73,21 @@ bash scripts/install-git-hooks.sh                     # wire it to pre-commit
   gets reported as protection. It also asserts the reverse direction: every
   `.md` in the repo must be named in `referenced_paths_scan` or declared in
   `unscanned_paths`, because Layer A's coverage is a hand-maintained list and
-  without this it silently shrank every time someone added a doc and forgot.
+  without this it shrank silently every time someone added a doc and forgot.
 - **Layer A (invariants)** — every `scripts/`, `docs/`, `droidian/`, `kiosk/`
   or `bridge/` path named in the doc set must exist on disk. This is what
   catches a procedure doc still pointing at a renamed script.
 - **Layer B (diff-gate)** — path→doc rules. A rule fires only on a *structural*
-  change (a file added or deleted, never a plain modification), because a noisy
-  gate gets disabled, so false positives are worse than an occasional
-  missed doc update.
+  change (a file added or deleted, never a plain edit), because a noisy gate
+  gets switched off. Satisfy it by editing one of the docs the rule names, or
+  by explaining yourself in a `Docs-Reviewed: <why>` commit trailer.
+
+The tests now use proper pytest assertions instead of print/return.
 
 Rules live in `docs/doc-gate.toml` and are data — cover a new area by adding a
 `[[rules]]` entry, not by editing the script. CI
 (`.github/workflows/doc-gate.yml`) is authoritative on push and PR, so
 `git commit --no-verify` skips the hook but not the gate.
-
-### Documentation gate tests
-
-A test suite `scripts/test_check_doc_gate.py` verifies that git-ignored .md files
-(doctests like .pytest_cache/README.md) are not incorrectly flagged, while untracked
-and tracked .md files not listed in the gate configuration continue to produce
-failures.
-
-```
-python3 -m pytest -q -p no:cacheprovider scripts/test_check_doc_gate.py
-```
 
 ## Upstream issues filed
 
