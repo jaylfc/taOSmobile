@@ -78,6 +78,8 @@ bash scripts/install-git-hooks.sh                     # wire it to pre-commit
   gets switched off. Satisfy it by editing one of the docs the rule names, or
   by explaining yourself in a `Docs-Reviewed: <why>` commit trailer.
 
+The tests now use proper pytest assertions instead of print/return.
+
 Rules live in `docs/doc-gate.toml` and are data — cover a new area by adding a
 `[[rules]]` entry, not by editing the script. CI
 (`.github/workflows/doc-gate.yml`) is authoritative on push and PR, so
