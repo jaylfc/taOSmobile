@@ -169,10 +169,18 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
     # defaulted by forgetting.
     declared_unscanned = invariants.get("unscanned_paths", [])
     scanned = set(files_to_scan)
-    for doc in sorted(repo_root.rglob("*.md")):
-        if any(part == ".git" for part in doc.parts):
+    # Use git to enumerate .md files, excluding .git directories and git-ignored files
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for doc_rel in sorted(result.stdout.splitlines()):
+        if any(part == ".git" for part in Path(doc_rel).parts):
             continue
-        rel = doc.relative_to(repo_root).as_posix()
+        rel = doc_rel
         if rel in scanned or _match_any(rel, declared_unscanned):
             continue
         failures.append(

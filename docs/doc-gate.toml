@@ -70,6 +70,10 @@ unscanned_paths = [
   # domain), sherpa-onnx and espeak-ng names on-device paths, upstream URLs and
   # upstream repos' files (sherpa-onnx's cmake/), none of which are in this repo.
   "pmos/voice/NOTICE-TTS.md",
+    # The changelog fragment for this doc gate fix
+  "changelog.d/tsk-i7scqy-docgate-fix.md",
+  # The red proof file containing the failing test output before the fix
+  "RED-PROOF.md",
 ]
 
 # Build outputs that are gitignored, so they are absent from a fresh clone and
