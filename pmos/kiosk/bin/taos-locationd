@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""taos-locationd -- daemon that keeps the modem GPS enabled and publishes the latest fix.
+
+WHY RUNTIME-ONLY:
+This daemon only works on the device while it is running: it enables the GNSS
+engine with --location-enable-gps-nmea --location-enable-gps-raw, then reads
+--location-get --output-keyvalue. This is safe for personal data (coordinates
+are written to a runtime-only file) and does not persist across reboots.
+
+NO-SIM MEASUREMENT:
+The GNSS engine works even when the modem reports failed/sim-missing (2026-10-09
+measurement on pmOS, ModemManager 1.25.95, Qualcomm modem 0). GPS NMEA data
+streams with one GLONASS satellite at SNR 30 indoors, no fix yet. The engine
+still enables and reads.
+
+CONSTRAINTS:
+- Coordinates are PERSONAL DATA: never print them to stdout/stderr/journal,
+  never write them anywhere but the output file, never commit a real location.
+  Fixtures use the made-up point 51.5000, -0.1200.
+- The script runs in the device runtime only; it does not ship as part of the
+  controller build.
+- Logs only transitions, exactly "taos-locationd: fix acquired" / "taos-locationd: fix lost".
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import subprocess
+import json
+import time
+from pathlib import Path
+from datetime import datetime, timezone
+
+
+def parse_location(text: str) -> dict | None:
+    """Parse mmcli --location-get --output-keyvalue output.
+
+    Lines are `key : value` with padding; split on the FIRST " : " (NMEA values
+    contain commas and colons are not in them, but keys are padded with spaces).
+    Return None unless both latitude and longitude parse as floats within
+    [-90,90] / [-180,180].
+
+    Accuracy: find a $G?GGA sentence among the modem.location.gps.nmea.value[N]
+    lines, take field 8 (HDOP, 0-based index 8 after splitting on ","),
+    and set accuracy_m = round(hdop * 5) (rough UERE 5 m); null when there is
+    no GGA or HDOP is empty. Return {"lat", "lon", "accuracy_m", "gps_utc": <raw
+    utc string or null>}.
+    """
+    lines = text.strip().splitlines()
+    data = {}
+
+    for line in lines:
+        line = line.strip()
+        if not line or " : " not in line:
+            continue
+        key, val = line.split(" : ", 1)
+        data[key.strip()] = val.strip()
+
+    # Check for latitude/longitude
+    lat_str = data.get("modem.location.gps.latitude")
+    lon_str = data.get("modem.location.gps.longitude")
+    if lat_str == "--" or lon_str == "--":
+        return None
+
+    try:
+        lat = float(lat_str)
+        lon = float(lon_str)
+    except (ValueError, TypeError):
+        return None
+
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+
+    # Find GGA sentence for HDOP
+    accuracy_m = None
+    for key in data.keys():
+        if "modem.location.gps.nmea.value" in key and "GPGGA" in data[key]:
+            nmea = data[key]
+            parts = nmea.split(",")
+            if len(parts) > 8 and parts[8]:
+                try:
+                    hdop = float(parts[8])
+                    accuracy_m = round(hdop * 5)
+                except ValueError:
+                    pass
+            break
+
+    utc_str = data.get("modem.location.gps.utc")
+    if utc_str == "--":
+        utc_str = None
+
+    return {
+        "lat": lat,
+        "lon": lon,
+        "accuracy_m": accuracy_m,
+        "gps_utc": utc_str,
+    }
+
+
+def write_fix(path: Path, fix: dict) -> None:
+    """Write a location fix to the output file.
+
+    Add "fix_utc" (now, ISO 8601 with Z) and "source": "modem-gnss";
+    write JSON to a temp file in the same dir, chmod 0640, os.replace onto
+    path (atomic, no temp left behind).
+    """
+    fix_with_meta = fix.copy()
+    fix_with_meta["fix_utc"] = datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+    fix_with_meta["source"] = "modem-gnss"
+
+    dir_path = path.parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    temp_path = dir_path / f".{path.name}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(fix_with_meta, f, separators=(",", ":"))
+
+    os.chmod(temp_path, 0o640)
+    os.replace(temp_path, path)
+
+
+def main() -> None:
+    out_path = Path(os.environ.get("TAOS_LOCATION_OUT", "/run/taos-location/location.json"))
+    mmcli = os.environ.get("TAOS_MMCLI", "mmcli")
+    interval = int(os.environ.get("TAOS_LOCATIOND_INTERVAL", "30"))
+    once_mode = os.environ.get("TAOS_LOCATIOND_ONCE") == "1"
+
+    has_fix = False
+
+    while True:
+        # Enable GPS
+        enable_cmd = [mmcli, "-m", "any", "--location-enable-gps-nmea",
+                      "--location-enable-gps-raw"]
+        try:
+            subprocess.run(enable_cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            # One stderr line WITHOUT coordinates
+            sys.stderr.write(f"taos-locationd: enable failed: {e.stderr.decode()}\n")
+            if once_mode:
+                sys.exit(1)
+            time.sleep(interval)
+            continue
+
+        # Get location
+        get_cmd = [mmcli, "-m", "any", "--location-get", "--output-keyvalue"]
+        try:
+            result = subprocess.run(get_cmd, check=True, capture_output=True, text=True)
+            fix = parse_location(result.stdout)
+
+            if fix:
+                if not has_fix:
+                    sys.stderr.write("taos-locationd: fix acquired\n")
+                    has_fix = True
+                write_fix(out_path, fix)
+            else:
+                if has_fix:
+                    sys.stderr.write("taos-locationd: fix lost\n")
+                    has_fix = False
+
+        except subprocess.CalledProcessError as e:
+            # Failed to get location - don't log coordinates
+            sys.stderr.write(f"taos-locationd: get location failed: {e.stderr.decode()}\n")
+            if has_fix:
+                sys.stderr.write("taos-locationd: fix lost\n")
+                has_fix = False
+
+        if once_mode:
+            sys.exit(0)
+
+        time.sleep(interval)
+
+
+if __name__ == "__main__":
+    main()

@@ -32,6 +32,8 @@ came next (`docs/droidian-port-plan.md`, `docs/flash-procedure.md`).
 ```
 bridge/     Rust hardware bridge (SMS/dial/battery over D-Bus) — scaffold
 kiosk/      Kiosk surface: launchers, systemd units, Plymouth theme, polyfills
+            install-locationd.sh  -- install the GPS location daemon
+            test_taos_locationd.py -- tests for the location daemon
 droidian/   Droidian port: kernel packaging (debian/, config fragments, CI)
 pmos/       postmarketOS port: kiosk, voice, camera, BLE, firewall, kernel patches
 scripts/    Device introspection and deployment helpers

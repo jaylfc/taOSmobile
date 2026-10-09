@@ -1,0 +1,21 @@
+[Unit]
+Description=Keep modem GPS enabled and publish location fixes to /run/taos-location/location.json
+After=ModemManager.service
+Wants=ModemManager.service
+
+[Service]
+Type=simple
+User=root
+Group=taos
+ExecStart=/usr/local/bin/taos-locationd
+RuntimeDirectory=taos-location
+RuntimeDirectoryMode=0750
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
