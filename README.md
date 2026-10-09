@@ -22,6 +22,11 @@ about 2026-10-05, so read it as last known, not live:
   `pmos/voice/NOTICE-TTS.md`).
 - Cameras (`pmos/camera/`), audio (`docs/pmos-audio-bringup.md`), and a BLE
   check for pairing the taOS Orb (`pmos/ble/`).
+- GPS (added 2026-10-09, not yet installed on the handset): `pmos/kiosk/bin/taos-locationd`
+  keeps the modem's GNSS on (it works with no SIM) and publishes the latest fix to
+  `/run/taos-location/location.json` for the controller's `GET /api/system/location`
+  (unit `pmos/kiosk/systemd/taos-locationd.service`, installer
+  `pmos/kiosk/install-locationd.sh`, tests `pmos/kiosk/test_taos_locationd.py`).
 
 **History:** Ubuntu Touch ran the controller natively but could not give a web
 shell an exclusive full screen (`docs/android-kiosk-scope.md`). The Droidian port
@@ -32,9 +37,6 @@ came next (`docs/droidian-port-plan.md`, `docs/flash-procedure.md`).
 ```
 bridge/     Rust hardware bridge (SMS/dial/battery over D-Bus) — scaffold
 kiosk/      Kiosk surface: launchers, systemd units, Plymouth theme, polyfills
-            install-locationd.sh           -- install the GPS location daemon
-            systemd/taos-locationd.service  -- keep the GPS enabled
-            test_taos_locationd.py          -- tests for the location daemon
 droidian/   Droidian port: kernel packaging (debian/, config fragments, CI)
 pmos/       postmarketOS port: kiosk, voice, camera, BLE, firewall, kernel patches
 scripts/    Device introspection and deployment helpers

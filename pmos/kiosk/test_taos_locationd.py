@@ -206,3 +206,47 @@ sys.exit(0 if not hasattr(mod, 'main') else mod.main())
     
     # Check script exited with code 0
     assert result.returncode == 0
+
+def _run_once(tmp_path, monkeypatch, fake_body):
+    fake_mmcli = tmp_path / "fake-mmcli"
+    fake_mmcli.write_text("#!/bin/sh\n" + fake_body)
+    fake_mmcli.chmod(0o755)
+    monkeypatch.setenv("TAOS_LOCATIOND_ONCE", "1")
+    monkeypatch.setenv("TAOS_LOCATION_OUT", str(tmp_path / "location.json"))
+    monkeypatch.setenv("TAOS_MMCLI", str(fake_mmcli))
+    return subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("bin") / "taos-locationd")],
+        capture_output=True, text=True, cwd=tmp_path, timeout=30,
+    )
+
+
+def test_failed_location_read_is_logged_not_a_crash(tmp_path, monkeypatch):
+    """mmcli failing the read (modem gone, ModemManager restarting) must log one
+    line and carry on, not kill the daemon with a traceback."""
+    result = _run_once(tmp_path, monkeypatch, (
+        'case "$*" in *--location-get*) echo "error: no modems were found" >&2; exit 1;; esac\n'
+        "exit 0\n"
+    ))
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "taos-locationd: get location failed: error: no modems were found" in result.stderr
+    assert not (tmp_path / "location.json").exists()
+
+
+def test_missing_mmcli_is_logged_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setenv("TAOS_LOCATIOND_ONCE", "1")
+    monkeypatch.setenv("TAOS_LOCATION_OUT", str(tmp_path / "location.json"))
+    monkeypatch.setenv("TAOS_MMCLI", str(tmp_path / "no-such-mmcli"))
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("bin") / "taos-locationd")],
+        capture_output=True, text=True, cwd=tmp_path, timeout=30,
+    )
+    assert "Traceback" not in result.stderr
+    assert "taos-locationd: enable failed" in result.stderr
+
+
+def test_gga_from_any_gnss_talker_gives_accuracy():
+    """$GNGGA (multi-constellation) is what a Qualcomm engine usually emits."""
+    text = FIX.replace("$GPGGA", "$GNGGA")
+    assert "$GNGGA" in text
+    assert _load_taos_locationd().parse_location(text)["accuracy_m"] == 6

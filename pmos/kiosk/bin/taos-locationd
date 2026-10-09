@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """taos-locationd -- daemon that keeps the modem GPS enabled and publishes the latest fix.
 
+Keeps the modem's GNSS engine on through ModemManager and, every
+TAOS_LOCATIOND_INTERVAL seconds, atomically rewrites the latest fix to
+/run/taos-location/location.json. The taOS controller serves it on
+GET /api/system/location so the weather widget can default to where the
+phone is.
+
 WHY RUNTIME-ONLY:
-This daemon only works on the device while it is running: it enables the GNSS
-engine with --location-enable-gps-nmea --location-enable-gps-raw, then reads
---location-get --output-keyvalue. This is safe for personal data (coordinates
-are written to a runtime-only file) and does not persist across reboots.
+Coordinates are personal data. /run is tmpfs and the directory is the unit's
+RuntimeDirectory (root:taos 0750), so the fix exists only while this daemon
+runs, is readable only by the controller's group, and never survives a reboot.
+The file is absent until the first fix ever.
 
 NO-SIM MEASUREMENT:
 The GNSS engine works even when the modem reports failed/sim-missing (2026-10-09
-measurement on pmOS, ModemManager 1.25.95, Qualcomm modem 0). GPS NMEA data
-streams with one GLONASS satellite at SNR 30 indoors, no fix yet. The engine
-still enables and reads.
+measurement on pmOS, ModemManager 1.25.95, Qualcomm modem 0): enabling
+gps-nmea + gps-raw succeeds and NMEA streams. Indoors it tracked up to 8 GPS
+satellites but produced no fix in 20 minutes: with no SIM there is no AGPS, so
+a cold first fix may need open sky.
 
 CONSTRAINTS:
 - Coordinates are PERSONAL DATA: never print them to stdout/stderr/journal,
@@ -33,6 +40,20 @@ import time
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+
+
+# A wedged ModemManager must not stall the loop forever.
+MMCLI_TIMEOUT_S = 60
+
+
+def _first_line(err: Exception) -> str:
+    """First line of mmcli's stderr, or the exception name: never the fix."""
+    stderr = getattr(err, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if stderr and stderr.strip():
+        return stderr.strip().splitlines()[0]
+    return type(err).__name__
 
 
 def parse_location(text: str) -> dict | None:
@@ -79,8 +100,8 @@ def parse_location(text: str) -> dict | None:
     for key in data.keys():
         if "modem.location.gps.nmea.value" in key:
             nmea = data[key]
-            # Match $G?GGA where ? is any talker ID (GP, GL, GN, etc.)
-            if re.match(r'^\$(?:GP|GL|GN)GGA,', nmea):
+            # $G?GGA: any GNSS talker (GP, GL, GA, GB, GN multi-constellation)
+            if re.match(r'^\$G[A-Z]GGA,', nmea):
                 parts = nmea.split(",")
                 if len(parts) > 8 and parts[8]:
                     try:
@@ -139,12 +160,11 @@ def main() -> None:
         enable_cmd = [mmcli, "-m", "any", "--location-enable-gps-nmea",
                       "--location-enable-gps-raw"]
         try:
-            subprocess.run(enable_cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
+            subprocess.run(enable_cmd, check=True, capture_output=True, text=True,
+                           timeout=MMCLI_TIMEOUT_S)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             # One stderr line WITHOUT coordinates
-            stderr_text = e.stderr.decode()
-            first_line = stderr_text.split('\n')[0] if stderr_text else ''
-            sys.stderr.write(f"taos-locationd: enable failed: {first_line}\n")
+            sys.stderr.write(f"taos-locationd: enable failed: {_first_line(e)}\n")
             if once_mode:
                 sys.exit(1)
             time.sleep(interval)
@@ -153,7 +173,8 @@ def main() -> None:
         # Get location
         get_cmd = [mmcli, "-m", "any", "--location-get", "--output-keyvalue"]
         try:
-            result = subprocess.run(get_cmd, check=True, capture_output=True, text=True)
+            result = subprocess.run(get_cmd, check=True, capture_output=True, text=True,
+                                    timeout=MMCLI_TIMEOUT_S)
             fix = parse_location(result.stdout)
 
             if fix:
@@ -166,11 +187,9 @@ def main() -> None:
                     sys.stderr.write("taos-locationd: fix lost\n")
                     has_fix = False
 
-        except subprocess.CalledProcessError as e:
-            # Failed to get location - don't log coordinates
-            stderr_text = e.stderr.decode()
-            first_line = stderr_text.split('\n')[0] if stderr_text else ''
-            sys.stderr.write(f"taos-locationd: get location failed: {first_line}\n")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            # Failed to get location. The error text is mmcli's, never the fix.
+            sys.stderr.write(f"taos-locationd: get location failed: {_first_line(e)}\n")
             if has_fix:
                 sys.stderr.write("taos-locationd: fix lost\n")
                 has_fix = False
