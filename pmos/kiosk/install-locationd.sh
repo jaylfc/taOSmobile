@@ -51,8 +51,10 @@ else
 fi
 
 # Check 3: prove the active unit is ours (ExecStart contains /usr/local/bin/taos-locationd)
-EXEC_START=$(systemctl show -p ExecStart taos-locationd.service | cut -d= -f2)
-if echo "$EXEC_START" | grep -q "/usr/local/bin/taos-locationd"; then
+# The value is "{ path=/usr/local/bin/taos-locationd ; argv[]=... }", which holds
+# several "=" signs, so match the whole line rather than cutting at the first one.
+EXEC_START=$(systemctl show -p ExecStart taos-locationd.service)
+if echo "$EXEC_START" | grep -q "path=/usr/local/bin/taos-locationd "; then
     echo "PASS: ExecStart is /usr/local/bin/taos-locationd"
 else
     echo "FAIL: ExecStart is not /usr/local/bin/taos-locationd"
