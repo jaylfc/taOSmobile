@@ -152,7 +152,6 @@ def test_run_script_once(tmp_path, monkeypatch):
     # Create fake mmcli script
     fake_mmcli = tmp_path / "fake-mmcli"
     fake_mmcli.write_text("""#!/bin/sh
-echo "$*"
 if [ "$*" = "-m any --location-enable-gps-nmea --location-enable-gps-raw" ]; then
     exit 0
 fi

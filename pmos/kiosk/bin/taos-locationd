@@ -20,6 +20,7 @@ CONSTRAINTS:
 - The script runs in the device runtime only; it does not ship as part of the
   controller build.
 - Logs only transitions, exactly "taos-locationd: fix acquired" / "taos-locationd: fix lost".
+- The GNSS engine may need open sky for a first fix.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import sys
 import subprocess
 import json
 import time
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -75,16 +77,18 @@ def parse_location(text: str) -> dict | None:
     # Find GGA sentence for HDOP
     accuracy_m = None
     for key in data.keys():
-        if "modem.location.gps.nmea.value" in key and "GPGGA" in data[key]:
+        if "modem.location.gps.nmea.value" in key:
             nmea = data[key]
-            parts = nmea.split(",")
-            if len(parts) > 8 and parts[8]:
-                try:
-                    hdop = float(parts[8])
-                    accuracy_m = round(hdop * 5)
-                except ValueError:
-                    pass
-            break
+            # Match $G?GGA where ? is any talker ID (GP, GL, GN, etc.)
+            if re.match(r'^\$(?:GP|GL|GN)GGA,', nmea):
+                parts = nmea.split(",")
+                if len(parts) > 8 and parts[8]:
+                    try:
+                        hdop = float(parts[8])
+                        accuracy_m = round(hdop * 5)
+                    except ValueError:
+                        pass
+                break
 
     utc_str = data.get("modem.location.gps.utc")
     if utc_str == "--":
@@ -138,7 +142,9 @@ def main() -> None:
             subprocess.run(enable_cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
             # One stderr line WITHOUT coordinates
-            sys.stderr.write(f"taos-locationd: enable failed: {e.stderr.decode()}\n")
+            stderr_text = e.stderr.decode()
+            first_line = stderr_text.split('\n')[0] if stderr_text else ''
+            sys.stderr.write(f"taos-locationd: enable failed: {first_line}\n")
             if once_mode:
                 sys.exit(1)
             time.sleep(interval)
@@ -162,7 +168,9 @@ def main() -> None:
 
         except subprocess.CalledProcessError as e:
             # Failed to get location - don't log coordinates
-            sys.stderr.write(f"taos-locationd: get location failed: {e.stderr.decode()}\n")
+            stderr_text = e.stderr.decode()
+            first_line = stderr_text.split('\n')[0] if stderr_text else ''
+            sys.stderr.write(f"taos-locationd: get location failed: {first_line}\n")
             if has_fix:
                 sys.stderr.write("taos-locationd: fix lost\n")
                 has_fix = False
