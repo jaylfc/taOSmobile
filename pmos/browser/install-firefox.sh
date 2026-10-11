@@ -15,8 +15,12 @@ set -eu
 # boot slot once (see pmos/etc-deviceinfo). Refuse rather than risk that.
 # Read the RESOLVED value the way boot-deploy does: a later assignment, here or
 # in /usr/share/deviceinfo, overrides a matching line in /etc/deviceinfo.
-RESOLVED="$(sh -c '. /usr/share/misc/source_deviceinfo 2>/dev/null
-                   printf "%s" "$deviceinfo_flash_kernel_on_update"')" || RESOLVED=""
+# Unset first so a value exported into this shell cannot stand in for the
+# device's own; deviceinfo_arch is the control that the source happened.
+RESOLVED="$(sh -c 'unset deviceinfo_flash_kernel_on_update deviceinfo_arch
+                   . /usr/share/misc/source_deviceinfo 2>/dev/null || exit 1
+                   [ -n "${deviceinfo_arch:-}" ] || exit 1
+                   printf "%s" "${deviceinfo_flash_kernel_on_update:-}"')" || RESOLVED=""
 [ "$RESOLVED" = "false" ] || {
   echo "refusing: deviceinfo_flash_kernel_on_update resolves to '$RESOLVED', not false (install pmos/etc-deviceinfo first)" >&2
   exit 1
