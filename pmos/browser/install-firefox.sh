@@ -13,8 +13,12 @@ set -eu
 
 # An `apk add` fires boot-deploy; without this guard it re-flashed the active
 # boot slot once (see pmos/etc-deviceinfo). Refuse rather than risk that.
-grep -q '^deviceinfo_flash_kernel_on_update="false"' /etc/deviceinfo 2>/dev/null || {
-  echo "refusing: /etc/deviceinfo lacks the boot-flash off switch (install pmos/etc-deviceinfo first)" >&2
+# Read the RESOLVED value the way boot-deploy does: a later assignment, here or
+# in /usr/share/deviceinfo, overrides a matching line in /etc/deviceinfo.
+RESOLVED="$(sh -c '. /usr/share/misc/source_deviceinfo 2>/dev/null
+                   printf "%s" "$deviceinfo_flash_kernel_on_update"')" || RESOLVED=""
+[ "$RESOLVED" = "false" ] || {
+  echo "refusing: deviceinfo_flash_kernel_on_update resolves to '$RESOLVED', not false (install pmos/etc-deviceinfo first)" >&2
   exit 1
 }
 
