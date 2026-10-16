@@ -1,4 +1,4 @@
-From 3da072932f21bf7ef837acf99c4d7584cbd6cce2 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: jaylfc <jaylfc25@gmail.com>
 Date: Fri, 16 Oct 2026 19:02:48 +0000
 Subject: [PATCH] udc: classify own NCM gadgets by name, not IP forwarding
@@ -11,52 +11,57 @@ leaving the port unbound.
 
 Gadgets created by usb-signaller carry their mode in their name, so use
 it. Other gadgets, such as one bound by the initramfs, keep the
-existing detection.
+existing detection. The name check comes before the IP forwarding
+read, so an own gadget is classified even when that read fails.
 
 Also skip disabling and removing the old gadget when it has the same
 name as the new one, since ConfigFsGadget::create() already replaced
 it. Mass storage and CD-ROM share a gadget, and so did the misdetected
 case above.
 ---
- src/udc.rs | 73 ++++++++++++++++++++++++++++++++++++++++++++----------
- 1 file changed, 60 insertions(+), 13 deletions(-)
+ src/udc.rs | 101 ++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 88 insertions(+), 13 deletions(-)
 
 diff --git a/src/udc.rs b/src/udc.rs
-index 11712dd..dc8b1d7 100644
+index 11712dd..ebea967 100644
 --- a/src/udc.rs
 +++ b/src/udc.rs
-@@ -88,6 +88,30 @@ impl UDC {
+@@ -88,6 +88,34 @@ impl UDC {
          unreachable!("IP forwarding state is either 0 or 1");
      }
  
-+    fn ncm_mode(gadget_name: &str, tethering: bool, netboot: bool) -> UDCMode {
++    fn ncm_mode(
++        gadget_name: &str,
++        tethering: impl FnOnce() -> anyhow::Result<bool>,
++        netboot: impl FnOnce() -> bool,
++    ) -> anyhow::Result<UDCMode> {
 +        /*
 +         * Gadgets created by usb-signaller carry their mode in their name.
 +         * IP forwarding is a global setting which Docker, incus or
-+         * NetworkManager may enable, so only rely on it for other gadgets.
++         * NetworkManager may enable, so only read it for other gadgets.
 +         */
 +        if gadget_name == "usb-signaller-developer" {
-+            return UDCMode::Developer;
++            return Ok(UDCMode::Developer);
 +        } else if gadget_name == "usb-signaller-tethering" {
-+            return UDCMode::Tethering;
++            return Ok(UDCMode::Tethering);
 +        }
 +
 +        /* Tethering mode allows IP forwarding such as using mobile data */
-+        if tethering {
-+            return UDCMode::Tethering;
++        if tethering()? {
++            return Ok(UDCMode::Tethering);
 +        /* Netboot enforces the USB port into an readonly state */
-+        } else if netboot {
-+            return UDCMode::Netboot;
++        } else if netboot() {
++            return Ok(UDCMode::Netboot);
 +        }
 +
 +        /* Developer mode only allows local data transfer */
-+        return UDCMode::Developer;
++        Ok(UDCMode::Developer)
 +    }
 +
      fn is_enabled(udc_name: &str) -> anyhow::Result<bool> {
          let state = sysfs_read(
              PathBuf::from(SYSFS_CLASS_BASE_PATH)
-@@ -269,12 +293,20 @@ impl UDC {
+@@ -269,12 +297,20 @@ impl UDC {
                  }
              }
  
@@ -80,7 +85,7 @@ index 11712dd..dc8b1d7 100644
              println!("Removing old gadget: {}", gadget.name);
              ConfigFsGadget::delete(gadget.name.as_str())?;
          }
-@@ -458,16 +490,11 @@ impl UDC {
+@@ -458,16 +494,11 @@ impl UDC {
                  if entry.enabled {
                      /* USB Ethernet NCM gadget */
                      if entry.configs[0].functions[0].name.starts_with("ncm.") {
@@ -96,13 +101,13 @@ index 11712dd..dc8b1d7 100644
 -                        }
 +                        mode = Self::ncm_mode(
 +                            &entry.name,
-+                            Self::detect_tethering_mode()?,
-+                            Self::detect_netboot_mode(),
-+                        );
++                            Self::detect_tethering_mode,
++                            Self::detect_netboot_mode,
++                        )?;
                      /* USB FunctionFS MTP gadget */
                      } else if entry.configs[0].functions[0].name.starts_with("ffs.mtp") {
                          mode = UDCMode::MTP;
-@@ -525,6 +552,26 @@ impl UDC {
+@@ -525,6 +556,50 @@ impl UDC {
  mod tests {
      use super::*;
  
@@ -110,20 +115,44 @@ index 11712dd..dc8b1d7 100644
 +    fn ncm_mode_own_gadget_name_wins_over_ip_forwarding() {
 +        /* Docker, incus or NetworkManager may enable IP forwarding globally */
 +        assert_eq!(
-+            UDC::ncm_mode("usb-signaller-developer", true, false),
++            UDC::ncm_mode("usb-signaller-developer", || Ok(true), || false).unwrap(),
 +            UDCMode::Developer
 +        );
 +        assert_eq!(
-+            UDC::ncm_mode("usb-signaller-tethering", false, false),
++            UDC::ncm_mode("usb-signaller-tethering", || Ok(false), || false).unwrap(),
 +            UDCMode::Tethering
 +        );
 +    }
 +
 +    #[test]
++    fn ncm_mode_own_gadget_does_not_read_ip_forwarding() {
++        /* A failing IP forwarding read must not hide an own gadget's mode */
++        assert_eq!(
++            UDC::ncm_mode(
++                "usb-signaller-developer",
++                || anyhow::bail!("ip_forward unreadable"),
++                || false
++            )
++            .unwrap(),
++            UDCMode::Developer
++        );
++    }
++
++    #[test]
 +    fn ncm_mode_foreign_gadget_falls_back_to_detection() {
-+        assert_eq!(UDC::ncm_mode("g1", true, false), UDCMode::Tethering);
-+        assert_eq!(UDC::ncm_mode("g1", false, true), UDCMode::Netboot);
-+        assert_eq!(UDC::ncm_mode("g1", false, false), UDCMode::Developer);
++        assert_eq!(
++            UDC::ncm_mode("g1", || Ok(true), || false).unwrap(),
++            UDCMode::Tethering
++        );
++        assert_eq!(
++            UDC::ncm_mode("g1", || Ok(false), || true).unwrap(),
++            UDCMode::Netboot
++        );
++        assert_eq!(
++            UDC::ncm_mode("g1", || Ok(false), || false).unwrap(),
++            UDCMode::Developer
++        );
++        assert!(UDC::ncm_mode("g1", || anyhow::bail!("ip_forward unreadable"), || false).is_err());
 +    }
 +
      #[test]

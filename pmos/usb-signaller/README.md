@@ -1,6 +1,6 @@
 # usb-signaller, patched
 
-Alpine's `community/usb-signaller` 0.4.2 APKBUILD plus one patch, rebuilt as `-r1` so it
+Alpine's `community/usb-signaller` 0.4.2 APKBUILD plus one patch, rebuilt as `-r2` so it
 upgrades the stock `-r0` on the handset.
 
 ## Why
@@ -20,8 +20,9 @@ which run with `cargo test` on the build host (`check()` is off: the cross linke
 link the test binary). The same patch is meant for upstream
 (codeberg.org/DylanVanAssche/usb-signaller); drop this directory once a release carries it.
 
-`pmos/kiosk/bin/taos-usb-mode` keeps its own guard (it does not re-ask for a mode that is
-already bound), so the handset is safe on either build.
+`pmos/kiosk/bin/taos-usb-mode` asks for a mode over D-Bus without checking what is bound,
+so on the stock build a repeated developer-mode request with forwarding on still unbinds the
+port. Install this package on any handset that runs Docker, incus or NetworkManager.
 
 ## Build (on the pmbootstrap host)
 
@@ -40,7 +41,7 @@ Run one pmbootstrap command at a time. The packages land in
 ## Install (on the handset, as root)
 
 ```sh
-apk add --allow-untrusted ./usb-signaller-0.4.2-r1.apk ./usb-signaller-systemd-0.4.2-r1.apk
+apk add --allow-untrusted ./usb-signaller-0.4.2-r2.apk ./usb-signaller-systemd-0.4.2-r2.apk
 systemctl restart usb-signaller
 ```
 

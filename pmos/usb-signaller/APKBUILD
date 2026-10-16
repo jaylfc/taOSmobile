@@ -1,7 +1,7 @@
 maintainer="Dylan Van Assche <dylan@postmarketos.org>"
 pkgname=usb-signaller
 pkgver=0.4.2
-pkgrel=1
+pkgrel=2
 pkgdesc="Switch between different USB gadgets"
 url="https://codeberg.org/DylanVanAssche/usb-signaller"
 arch="all"
@@ -54,5 +54,5 @@ package() {
 sha512sums="
 b0a57842cbc1e6e91ea5fc85ac9ab029e305408d52d14bb1df28a5eaf9d73c70ef2977cdf59ee8f819e286033dec122c9ef5d86d7a7fa8b0835ca46b3984ec30  usb-signaller-0.4.2.tar.gz
 39d604f91a8cb5bdb358fda05902a67de6403b99e5cba8d094b18f463cc1520cf80a43e2a60acf7fcfff85b9d4b0c57f64cedba8d080acd2f809b0c699683490  usb-signaller.initd
-abef4a31d806f454bc4a0646578a1fdeb49c1affa887eb4ec0d3b43b529c2a75da2682c8091f425ea6a36578edc26b1914ae7d02f3e919615fb6037509431429  0001-udc-classify-own-ncm-gadgets-by-name.patch
+bee42df9764170a8fb32d570edbfd9867f0a1c1a3e3198c0725044d379a6199769efc7e4cb50aca02ad3617e4d1298654e4409dd3f6f725a21f1bef8f4acc67e  0001-udc-classify-own-ncm-gadgets-by-name.patch
 "
