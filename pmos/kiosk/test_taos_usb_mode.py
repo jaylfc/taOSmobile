@@ -151,6 +151,19 @@ def test_ncm_restarts_the_helper_so_usb0_gets_its_address_back(um):
     assert um.saved() == "ncm"
 
 
+def test_ncm_when_ncm_is_already_bound_does_not_ask_usb_signaller(um):
+    # Measured 2026-10-16: usb-signaller labels its own developer gadget
+    # "Tethering", so set_mode developer_mode while it is bound REMOVES the
+    # bound gadget and then fails to enable the same one ("Path does not
+    # exists ... usb-signaller-developer"), leaving the port unbound. The
+    # fixture starts with usb-signaller-developer bound.
+    um.fake.address = False               # bound, usb0 down: the state Jay hit
+    assert um.main(["set", "ncm"]) == 0
+    assert um.fake.set_modes() == []
+    assert ["systemctl", "restart", um.DEV_HELPER] in um.fake.calls
+    assert um.fake.address is True
+
+
 def test_ncm_with_the_gadget_bound_but_no_address_is_a_failure(um, capsys):
     # The measured failure: developer gadget bound, usb0 empty. Without the
     # address check current() alone reads "ncm" and this would exit 0.
