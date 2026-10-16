@@ -1,0 +1,56 @@
+maintainer="Dylan Van Assche <dylan@postmarketos.org>"
+pkgname=usb-signaller
+pkgver=0.4.2
+pkgrel=1
+pkgdesc="Switch between different USB gadgets"
+url="https://codeberg.org/DylanVanAssche/usb-signaller"
+arch="all"
+license="GPL-3.0-or-later"
+source="$pkgname-$pkgver.tar.gz::https://codeberg.org/DylanVanAssche/usb-signaller/archive/v$pkgver.tar.gz
+	usb-signaller.initd
+	0001-udc-classify-own-ncm-gadgets-by-name.patch
+"
+makedepends="cargo-auditable eudev-dev"
+subpackages="$pkgname-systemd $pkgname-openrc"
+options="net"
+builddir="$srcdir/$pkgname"
+
+prepare() {
+	default_prepare
+	cargo fetch --target="$CHOST" --locked
+}
+
+build() {
+	cargo auditable build --release --frozen
+}
+
+check() {
+	cargo test --frozen
+}
+
+package() {
+	install -Dm755 target/release/usb-signaller "$pkgdir"/usr/bin/usb-signaller
+
+	# Init service files
+	for f in "$srcdir"/usb-signaller.initd distro/openrc/*.initd; do
+		install -Dm755 "$f" "$pkgdir"/etc/init.d/"$(basename "$f" .initd)"
+	done
+
+	for f in *.service distro/systemd/*.service; do
+		install -Dm644 "$f" "$pkgdir"/usr/lib/systemd/system/"$(basename "$f")"
+	done
+
+	for f in distro/scripts/*.sh; do
+		# service scripts/units expect no .sh extension
+		install -Dm755 "$f" "$pkgdir"/usr/bin/"$(basename "$f" .sh)"
+	done
+
+	# DBus policy
+	install -Dm644 com.meego.usb_moded.conf -t "$pkgdir"/usr/share/dbus-1/system.d/
+}
+
+sha512sums="
+b0a57842cbc1e6e91ea5fc85ac9ab029e305408d52d14bb1df28a5eaf9d73c70ef2977cdf59ee8f819e286033dec122c9ef5d86d7a7fa8b0835ca46b3984ec30  usb-signaller-0.4.2.tar.gz
+39d604f91a8cb5bdb358fda05902a67de6403b99e5cba8d094b18f463cc1520cf80a43e2a60acf7fcfff85b9d4b0c57f64cedba8d080acd2f809b0c699683490  usb-signaller.initd
+abef4a31d806f454bc4a0646578a1fdeb49c1affa887eb4ec0d3b43b529c2a75da2682c8091f425ea6a36578edc26b1914ae7d02f3e919615fb6037509431429  0001-udc-classify-own-ncm-gadgets-by-name.patch
+"
