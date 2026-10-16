@@ -29,7 +29,7 @@ systemctl restart tinyagentos.service
 
 i=0
 while [ "$i" -lt 30 ]; do
-    if curl -fsS --max-time 5 http://127.0.0.1:6969/api/version >/dev/null; then
+    if curl -fs --max-time 5 http://127.0.0.1:6969/api/version >/dev/null; then
         echo "demo mode is off; the controller is back on 6969."
         exit 0
     fi
