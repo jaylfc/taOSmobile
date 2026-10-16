@@ -12,7 +12,9 @@ source="$pkgname-$pkgver.tar.gz::https://codeberg.org/DylanVanAssche/usb-signall
 "
 makedepends="cargo-auditable eudev-dev"
 subpackages="$pkgname-systemd $pkgname-openrc"
-options="net"
+# check() links the test binary through pmbootstrap's crossdirect linker, which
+# fails (liblto_plugin.so not found). The tests run natively instead, see README.
+options="net !check"
 builddir="$srcdir/$pkgname"
 
 prepare() {

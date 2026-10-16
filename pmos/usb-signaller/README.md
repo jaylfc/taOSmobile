@@ -16,7 +16,8 @@ name, which is the new one. The port is left unbound.
 `0001-udc-classify-own-ncm-gadgets-by-name.patch` classifies usb-signaller's own gadgets by
 name, keeps the old detection for other gadgets (the initramfs binds `g1` at boot), and skips
 disabling and removing the old gadget when it has the new gadget's name. It adds unit tests,
-which `check()` runs. The same patch is meant for upstream
+which run with `cargo test` on the build host (`check()` is off: the cross linker cannot
+link the test binary). The same patch is meant for upstream
 (codeberg.org/DylanVanAssche/usb-signaller); drop this directory once a release carries it.
 
 `pmos/kiosk/bin/taos-usb-mode` keeps its own guard (it does not re-ask for a mode that is
