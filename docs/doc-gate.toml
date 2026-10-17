@@ -36,6 +36,7 @@ referenced_paths_scan = [
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
   "pmos/gunyah/README.md",
+  "pmos/usb-signaller/README.md",
   "droidian/kernel-debian/README.md",
   "droidian/artifacts/README.md",
   "docs/superpowers/specs/2026-07-20-taosmobile-demo-design.md",
