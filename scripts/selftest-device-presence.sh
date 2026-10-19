@@ -228,6 +228,14 @@ scenario
 echo 0 > "$SCEN/ping.rc"
 assert_state "rndis0 spelling is honoured too" "PRESENT / BOOTED" 0
 
+# omarchy as the USB host: pmos/host/70-taos-handset-usb.rules names the
+# phone's link taosphone0. Without the rule it keeps its port name, which no
+# exact-name check can know in advance.
+scenario
+{ printf '%s\n' "$PI_LINKS"; up_iface taosphone0; } > "$SCEN/ip.out"
+echo 0 > "$SCEN/ping.rc"
+assert_state "taosphone0 (udev-named on omarchy) up and answering" "PRESENT / BOOTED" 0
+
 scenario
 printf 'ABC12345\tfastboot\n' > "$SCEN/fastboot.out"
 printf '%s\n' "$LSUSB_PHONE" > "$SCEN/lsusb.out"

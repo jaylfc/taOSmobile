@@ -1,0 +1,11 @@
+# Give the handset's USB network link one stable name on the flash host.
+#
+# WHY: the phone's NCM gadget (1d6b:0103, serial "nothing,spacewar") shows up
+# on omarchy under a port-dependent name (enp0s20f0u6 on 2026-09-17), and the
+# taOSusb Pi is an NCM gadget too, so neither a name nor a driver match picks
+# out the phone. NetworkManager cannot match on a USB serial; udev can. The
+# NM profile taos-handset-usb.nmconnection binds to the name set here, and
+# scripts/check-device-presence.sh accepts it.
+#
+# Install with pmos/host/install-handset-usb-host.sh (root, on the USB host).
+SUBSYSTEM=="net", ACTION=="add", ATTRS{idVendor}=="1d6b", ATTRS{serial}=="nothing,spacewar", NAME="taosphone0"
