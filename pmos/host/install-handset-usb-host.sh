@@ -27,17 +27,27 @@ echo "installed: $RULE $PROFILE"
 
 # A link that enumerated before the rule existed keeps its old name: re-run
 # the add event for the phone's net device so the rule renames it now.
+# NM is told first: a plain link-down does not stop it reactivating the
+# link mid-rename (systemd.link(5) names this case).
+seen=""
 for dev in /sys/class/net/*; do
     name=${dev##*/}
     [ "$name" = "$IFACE" ] && continue
     if udevadm info -a -p "$dev" 2>/dev/null | grep -q 'ATTRS{serial}=="nothing,spacewar"'; then
         echo "renaming $name -> $IFACE"
+        seen=$name
+        nmcli device disconnect "$name" >/dev/null 2>&1 || true
         ip link set "$name" down
         udevadm trigger --action=add "$dev"
         udevadm settle
     fi
 done
 
+if [ ! -e "/sys/class/net/$IFACE" ] && [ -n "$seen" ]; then
+    # The phone IS here; the rename failed. Not the same as "no phone".
+    echo "FAIL: the phone's link $seen was not renamed to $IFACE"
+    exit 1
+fi
 if [ ! -e "/sys/class/net/$IFACE" ]; then
     echo "NOT PROVEN: no $IFACE (phone not on this host's USB, or not in NCM mode)"
     exit 2

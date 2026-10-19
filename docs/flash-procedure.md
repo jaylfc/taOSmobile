@@ -206,7 +206,7 @@ and the presence check to one name and one subnet.
 
 ### Ask `scripts/check-device-presence.sh` — do not reassemble the check by hand
 
-Run it **on the Linux USB host** (the Pi) after any reboot or flash. It is one name that
+Run it **on the Linux USB host** (omarchy since 2026-10, the Pi before) after any reboot or flash. It is one name that
 replaces a pipeline that was being rewritten from memory every session, and it exits on a
 code a caller can branch on:
 
