@@ -11,7 +11,9 @@ state last measured on the handset (2026-10-03). The phone has been offline sinc
 about 2026-10-05, so read it as last known, not live:
 
 - It boots straight into taOS full screen: sway runs Chromium as a kiosk
-  (`pmos/kiosk/etc/sway-kiosk.conf`, `pmos/kiosk/bin/`). The power menu,
+  (the generic session comes from taOS `session/`, pinned in
+  `pmos/TAOS_SESSION_PIN`; the handset layer is `pmos/kiosk/etc/sway.d/`,
+  `pmos/kiosk/bin/`). The power menu,
   double-tap to wake and the volume keys are handled below the page
   (`pmos/kiosk/bin/taos-kiosk-power-hold`, `pmos/kiosk/bin/taos-kiosk-dt2w`,
   `pmos/kiosk/bin/taos-kiosk-volume`).
