@@ -119,6 +119,12 @@ systemctl daemon-reload
 systemctl show -p OnFailure taos-kiosk.service | grep -q 'plasma-mobile.service' \
     && echo "PASS: taos-kiosk.service falls back to plasma-mobile.service" \
     || { echo "FAIL: OnFailure=plasma-mobile.service not in effect after daemon-reload"; exit 1; }
+# The line above cannot tell the drop-in from an older unit that still carries
+# OnFailure= itself (a handset installed before the move does). Only systemd's
+# list of loaded drop-ins proves this file is in effect.
+systemctl show -p DropInPaths taos-kiosk.service | grep -q '/taos-kiosk.service.d/10-plasma-fallback.conf' \
+    && echo "PASS: 10-plasma-fallback.conf is loaded" \
+    || { echo "FAIL: 10-plasma-fallback.conf is not among the unit's drop-ins"; exit 1; }
 
 # 5b. Switching between the taOS kiosk and Plasma Mobile.
 #
