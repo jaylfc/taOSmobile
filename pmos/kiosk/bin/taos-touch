@@ -70,6 +70,22 @@ def up(fd):
     emit(fd, EV_SYN, 0, 0)
 
 
+NEED = {"tap": 2, "hold": 2, "swipe": 4}  # required integer arguments per verb
+
+
+def check(a):
+    """Return why command a is unusable, or None. Never inject a half-parsed command."""
+    if not a or a[0] not in NEED:
+        return "unknown verb"
+    if len(a) - 1 < NEED[a[0]]:
+        return "needs %d numbers" % NEED[a[0]]
+    try:
+        [int(v) for v in a[1:]]
+    except ValueError:
+        return "not a number"
+    return None
+
+
 def run(fd, a):
     n = [int(v) for v in a[1:]]
     if a[0] == "tap":
@@ -92,6 +108,8 @@ def run(fd, a):
 def main(a):
     if not a or a[0] not in ("tap", "swipe", "hold", "-"):
         sys.exit(__doc__)
+    if a[0] != "-" and check(a):
+        sys.exit("taos-touch: %s: %s" % (check(a), " ".join(a)))
     fd = open_dev()
     try:
         if a[0] != "-":
@@ -99,9 +117,15 @@ def main(a):
         else:  # one device for a whole session: one command per stdin line
             for line in sys.stdin:
                 w = line.split()
-                if w and w[0] in ("tap", "swipe", "hold"):
-                    run(fd, w)
-                print("ok", *w, flush=True)
+                if not w:
+                    continue
+                err = check(w)
+                if not err:
+                    try:
+                        run(fd, w)
+                    except OSError as e:  # keep the session for the next command
+                        err = str(e)
+                print("err %s:" % err if err else "ok", *w, flush=True)
     finally:
         fcntl.ioctl(fd, UI_DEV_DESTROY)
         os.close(fd)
