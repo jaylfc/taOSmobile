@@ -122,6 +122,9 @@ The plan for pairing the taOSusb board (a Pi Zero 2W agent) over Bluetooth into
 the Cluster app, with Bluetooth kept as its fallback link, is
 `docs/taosusb-pairing-plan.md`.
 
+The plan for taOS Mirror, which shows and drives the handset from the MacBook over
+Tailscale with the phone's own panel dark, is `docs/remote-mirror-plan.md`.
+
 ## Licence
 
 taOSmobile is licensed under the GNU Affero General Public License v3.0 or later

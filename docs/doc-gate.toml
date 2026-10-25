@@ -63,6 +63,9 @@ unscanned_paths = [
   # in tinyagentos (routes/auth.py, hub/relay.py) or in the taosusb board repo,
   # not here.
   "docs/taosusb-pairing-plan.md",
+  # The remote-mirror plan names files that stages 1-3 will create (taos-mirror,
+  # taos-mirrord, the Mac app) and taos-touch, which is still on PR #5.
+  "docs/remote-mirror-plan.md",
   # The CC-BY-4.0 attribution for the speech model names on-device paths
   # (manifest.json under the install prefix) and upstream URLs, none of which
   # are in this repo.
