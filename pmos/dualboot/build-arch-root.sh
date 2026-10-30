@@ -94,6 +94,8 @@ chroot "$MNT" /bin/bash /root/stage-a-config.sh
 chroot "$MNT" chown -R jay:jay /home/jay/.ssh
 # jay's password = taOS's hash, so sudo on the guest uses the same password
 H=$(awk -F: '$1=="jay"{print $2}' /etc/shadow); chroot "$MNT" usermod -p "$H" jay
+. "$(dirname "$0")/guest-agent.sh"
+dualboot_agent_account "$MNT" "$MNT/home/taos-agent" /home/taos-agent /home/jay/.ssh/authorized_keys
 
 step umount
 sync
