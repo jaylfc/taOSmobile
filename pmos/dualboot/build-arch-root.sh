@@ -38,6 +38,8 @@ rm -f "$MNT/etc/resolv.conf"; cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 step pacman
 cat > "$MNT/root/stage-a.sh" <<'EOF'
 set -eu
+# The pmOS kernel (here and when the guest boots) has no Landlock, which pacman's download sandbox needs
+grep -q '^DisableSandbox' /etc/pacman.conf || sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf
 pacman-key --init
 pacman-key --populate archlinuxarm
 # The ALARM tarball's own kernel never runs here (the pmOS kernel does)
