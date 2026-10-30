@@ -76,6 +76,17 @@ Jay picked option A on 2026-10-30.
 Option A gets Omarchy running in days with no partition writes. It can move to B later, if the
 space ever justifies it.
 
+**Sizes (Jay 2026-10-30):** sparse image files, capped at 64G for Omarchy and 32G for Luma. A
+cap is a ceiling: real use grows as the guest fills it. taOS keeps everything else and is never
+shrunk. Raising or lowering a cap means resizing a file, not a partition table.
+
+**Stock Nothing OS (Android): research only (Jay 2026-10-30).** Android mounts `/data` from the
+partition named `userdata`, which taOS owns entirely. If that mount fails, Android offers a
+factory reset that would format all of userdata, wiping taOS and every guest. Android also needs
+its own kernel, vendor_boot, dtbo and vbmeta on its slot. A read-only study of whether `/data`
+can be redirected without touching the outer GPT, and of how to close off the reset path, is in
+progress. Nothing is written until it reports.
+
 ## Stages
 
 **Stage 0 (done 2026-10-30, see above): read-only.** `lsblk`, `blkid` and `sgdisk -p` on the
