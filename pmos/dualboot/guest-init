@@ -41,10 +41,24 @@ done
 # nodelalloc + commit=1: a crash seconds after switch_root once left a 0-byte log (data never flushed)
 mount -t ext4 -o rw,nodelalloc,commit=1 "${LOOP}p2" /taos || fail "mount ${LOOP}p2"
 log "taOS root mounted from ${LOOP}p2"
-# No pstore RAM backend on this kernel: keep the kernel log on taOS's root. The fd and the mapped
-# busybox survive switch_root, so this also records Arch systemd's early life (log_target=kmsg)
+# No pstore RAM backend on this kernel: keep the kernel log on taOS's root. The fds and the mapped
+# busybox survive switch_root, so this also records Arch systemd's early life (log_target=kmsg).
+# cat exits on the EPIPE of a ring overrun, so it is rerun on the same fd, which resumes at the oldest
+# record. ash's read cannot be the reader (one-byte reads of /dev/kmsg fail, measured). No ramdisk path
+# resolves after switch_root, so cat comes from taOS's static busybox (its plain one needs musl's loader,
+# which Arch lacks) at each place taOS's root lives in turn.
 echo "=== guest boot $(cut -d' ' -f1 /proc/uptime)" >> /taos/var/lib/dualboot/guest-kmsg.log
-cat /dev/kmsg >> /taos/var/lib/dualboot/guest-kmsg.log &
+if [ -x /taos/bin/busybox.static ]; then
+  exec 3</dev/kmsg 4>>/taos/var/lib/dualboot/guest-kmsg.log
+  while :; do
+    for b in /taos/bin/busybox.static /newroot/mnt/taos/bin/busybox.static /mnt/taos/bin/busybox.static; do
+      [ -x "$b" ] && "$b" cat <&3 >&4
+    done
+  done &
+  exec 3<&- 4>&-
+else
+  log "no busybox.static on taOS's root: no kernel log kept"
+fi
 
 IMG=/taos/var/lib/dualboot/arch-root.img
 [ -f "$IMG" ] || fail "no $IMG"

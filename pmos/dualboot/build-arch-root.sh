@@ -80,7 +80,7 @@ echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 # The default alarm user has a well-known password: remove it
 userdel -r alarm 2>/dev/null || true
 passwd -l root
-systemctl enable sshd NetworkManager tailscaled dualboot-marker.service
+systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot-heartbeat.service
 # ALARM enables systemd-networkd, which would fight NetworkManager for wlan0
 systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
 for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
@@ -100,6 +100,30 @@ ExecStart=/bin/sh -c 'mount -o remount,rw /mnt/taos 2>/dev/null; { date -u; unam
 
 [Install]
 WantedBy=multi-user.target
+EOF
+# From sysinit on, a line per second on taOS's root: after a guest death it shows how long userspace lived
+cat > "$MNT/usr/local/bin/dualboot-heartbeat" <<'EOF'
+#!/bin/sh
+f=/mnt/taos/var/lib/dualboot/heartbeat
+echo "=== guest boot" >> "$f"
+while :; do
+  read -r up _ < /proc/uptime
+  echo "$up $(systemctl is-system-running 2>/dev/null)" >> "$f"
+  sync "$f"
+  sleep 1
+done
+EOF
+chmod 755 "$MNT/usr/local/bin/dualboot-heartbeat"
+cat > "$MNT/etc/systemd/system/dualboot-heartbeat.service" <<'EOF'
+[Unit]
+Description=Write guest uptime to taOS's root each second
+DefaultDependencies=no
+
+[Service]
+ExecStart=/usr/local/bin/dualboot-heartbeat
+
+[Install]
+WantedBy=sysinit.target
 EOF
 mkdir -p "$MNT/mnt/taos"
 chroot "$MNT" /bin/bash /root/stage-a-config.sh

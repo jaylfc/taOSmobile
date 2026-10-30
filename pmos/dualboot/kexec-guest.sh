@@ -12,6 +12,8 @@ HERE=$(dirname "$0")
 [ -f "$D/arch-root.img" ] || { echo "no $D/arch-root.img"; exit 1; }
 [ -f "$G/kernel" ] && [ -f "$G/ramdisk" ] || { echo "need $G/kernel and $G/ramdisk"; exit 1; }
 command -v kexec >/dev/null || apk add --no-progress kexec-tools
+# guest-init's kernel log writer reruns this after switch_root, where no musl loader exists
+[ -x /bin/busybox.static ] || apk add --no-progress busybox-static
 
 zcat "$G/kernel" > "$G/Image"
 # Same build as the running kernel, or the modules on taOS's root will not load
@@ -27,7 +29,7 @@ install -m755 "$HERE/guest-init" "$G/rd/init"
 # The live tree carries abl's fixups (memory, reserved-memory) that the packed dtb lacks
 cat /sys/firmware/fdt > "$G/live.dtb"
 CMD=$(tr ' ' '\n' < /proc/cmdline | grep -vE '^(quiet|splash|ro|plymouth\..*|pmos_.*)$' | tr '\n' ' ')
-CMD="$CMD panic=10 printk.devkmsg=on systemd.log_level=debug systemd.log_target=kmsg"
+CMD="$CMD panic=10 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg"
 echo "cmdline: $CMD"
 
 kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-line="$CMD"
