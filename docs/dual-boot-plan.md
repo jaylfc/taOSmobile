@@ -61,15 +61,17 @@ There is no boot menu: abl boots whichever slot is active. Each OS gets a "reboo
 OS" action that sets the other slot active and reboots. Fallback, with Jay's hands:
 `fastboot set_active a|b`.
 
-## Storage: where the Arch root lives (decision for Jay)
+## Storage: where the Arch root lives
+
+Jay picked option A on 2026-10-30.
 
 | Option | What it costs |
 |---|---|
 | **A. Loop image file on pmOS_root** (recommended for stage 1) | No partition-table write at all. Our initramfs mounts pmOS_root and loop-mounts e.g. `/var/lib/dualboot/arch-root.img` as `/`. Arch then depends on pmOS's ext4 being clean, and a pmOS reflash of userdata deletes both OSes (true of every option). |
 | B. Third inner partition (p3) | Needs an **offline shrink** of pmOS_root (e2fsck, resize2fs shrink, `parted resizepart 2`, `mkpart` p3) from outside the running pmOS, over the USB initramfs shell. Afterwards pmOS's resize finds no free space and leaves p3 alone. A failed shrink loses taOS's root, so it needs a full verified userdata backup first. |
 
-Option A gets Omarchy running in days with no partition writes, and can move to B later once it
-is worth the space.
+Option A gets Omarchy running in days with no partition writes. It can move to B later, if the
+space ever justifies it.
 
 ## Stages
 
