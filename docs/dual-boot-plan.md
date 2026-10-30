@@ -1,4 +1,4 @@
-# Dual boot: taOS (postmarketOS) + Omarchy Mobile on the handset
+# Dual boot: taOS (postmarketOS) + guest Linux OSes (Omarchy Mobile, Luma) on the handset
 
 Owner: @taOSmobile-dev (device layer). Jay asked for it on 2026-10-30 and chose **true slot dual
 boot**: one OS per A/B boot slot, sharing the userdata partition. He picked that direction over
@@ -6,8 +6,9 @@ the alternatives, so it is a decision. It is not a go for any write: every write
 or to userdata still needs Jay's own go, at the device, at that step (software fastboot does not
 work on this handset, so every flash needs his hands anyway).
 
-Status: **plan only.** The handset is offline, so nothing here has been run on it yet. Stage 0
-re-measures every device fact below before anything is written.
+Jay added Luma Mobile as a second guest on 2026-10-30 (section below).
+
+Status: **stage 0 done 2026-10-30 (read-only).** Nothing has been written to the handset.
 
 ## What Omarchy Mobile is (read 2026-10-30)
 
@@ -28,22 +29,24 @@ re-measures every device fact below before anything is written.
   `/chosen/bootargs`, an injected `/memory` and simplefb, and a board dtbo. It also notes the
   slot trap below.
 
-## What the handset has today (from notes and pmOS source; stage 0 re-measures)
+## What the handset has today (stage 0, measured 2026-10-30)
 
-- The **same** pmOS boot.img is on boot_a and boot_b, and slot b is active. The duplicate on
-  slot a is our soft-brick fallback today.
-- **Inner GPT in userdata (read from pmbootstrap source, not yet seen on the device).** spacewar
-  sets no `partition_type`, so `pmb/install/partition.py` writes a GPT inside userdata with
-  p1 `pmOS_boot` and p2 `pmOS_root` ending at 100%.
+- Slot b is active and running. boot_a and boot_b are both 96 MiB but **no longer identical**.
+  Slot a holds `boot-r5-plygraphical.img` (kernel 7.2.2 build #5). Slot b holds build #9, which
+  matches none of the saved images on the build host. A fallback to slot a boots an older build
+  of the same kernel version. Both are dumped, with sha256 verified, under
+  `~/dualboot-stage0-20261030/` on the build host.
+- **Inner GPT in userdata, confirmed.** userdata (226.2 GiB) is loop-mapped. p1 `pmOS_boot` is
+  480 MiB ext2. p2 `pmOS_root` is ext4 and runs to the end of the partition: 218.7 GiB with
+  178.5 GiB free, so loop images fit easily.
 - **pmOS keeps the root grown to the end.** On every boot, while the inner GPT has unallocated
   space, `resize_root_partition` (postmarketos-initramfs `init_functions_2nd.sh`) runs
   `parted resizepart 2 100%`. Once another inner partition takes that space, it finds none and
   does nothing.
-- `device-nothing-spacewar` depends on `soc-qcom-qbootctl`, but that package enables the
-  mark-successful service **only on OpenRC** (`soc-qcom-qbootctl-openrc.post-install` runs
-  `rc-update add qbootctl default`; soc-qcom has no qbootctl systemd subpackage). Our handset runs
-  systemd, so pmOS may not mark slot b successful at all today. Because both slots carry the same
-  image, a fallback from b to a would currently be invisible. Stage 0 reads the real slot state.
+- **Slot marking already works on taOS.** `qbootctl-systemd` 0.2.2 ships an enabled
+  `qbootctl.service` (`qbootctl -m`). `qbootctl` reports slot b as Active 1, Successful 1,
+  Bootable 1, and slot a as Active 0, Successful 0, Bootable 1. (Reading pmaports alone suggested
+  that only OpenRC was wired up. The device proved that wrong.)
 - **The slot trap (Omarchy CONTRIBUTING):** on Qualcomm A/B, flashing `boot_X` clears that slot's
   "successful" GPT attribute. A slot that is never marked successful burns its retry count, and
   abl then falls back to the other slot. Each OS must mark its own slot on every boot.
@@ -75,7 +78,7 @@ space ever justifies it.
 
 ## Stages
 
-**Stage 0: read-only, when the handset is back.** `lsblk`, `blkid` and `sgdisk -p` on the
+**Stage 0 (done 2026-10-30, see above): read-only.** `lsblk`, `blkid` and `sgdisk -p` on the
 loop-mapped userdata (inner GPT), `/proc/cmdline`, `qbootctl` slot state (current, successful,
 unbootable, retry count) for both slots. Dump both boot slots over ssh **to the build host**
 (never the phone's /tmp, which is tmpfs in RAM) with size and sha256, and check the two are
@@ -92,13 +95,20 @@ still identical. Fix this doc to match whatever differs.
 - Pack it with mkbootimg from deviceinfo: header v2, `append_dtb`, dtb
   `qcom/sm7325-nothing-spacewar`, pagesize 4096. Same kernel, so our DT patches (700MHz) come
   along.
-- Slot marking: a unit in Arch marks slot a successful on each boot (qbootctl, built for ALARM
-  if it is not packaged there). pmOS on systemd needs the same for slot b (a small unit in
-  taOSmobile), because the soc-qcom package only enables it on OpenRC.
+- Slot marking: each guest marks slot a successful on every boot (`qbootctl -m`, built for the
+  guest if it is not packaged there). taOS already does this for slot b.
 - Flash `boot_a` only, with Jay at the device. **This removes the duplicate fallback kernel.**
   Recovery is `fastboot flash boot_a <stage-0 dump>`: a soft brick, never a hard one.
 
 **Stage 2: Hyprland plus the Omarchy packages and config on that root.** No kernel change.
+
+**Luma Mobile as a second guest (Jay 2026-10-30).** Luma (simplyluma.com) is Fedora-based and in
+alpha. Its "Generic (for porting)" image ships with no kernel, firmware or boot image. Its porting
+brief asks for a mainline-based kernel and device tree, which our pmOS kernel already provides.
+Slot a becomes a guest-OS booter: our initramfs reads a "next OS" flag on pmOS_root and
+loop-mounts `arch-root.img` or `luma-root.img` to match. To be checked once the 1.1 GB image is
+unpacked: its format, and whether Fedora's SELinux expectations hold on our kernel. Omarchy comes
+first; Luma follows on the same booter.
 
 **Switching from an app (Jay asked 2026-10-30).** An "Omarchy" tile in taOS confirms, then asks a
 root device helper (taOSmobile, alongside the taos-kiosk-* scripts; the page never runs root
