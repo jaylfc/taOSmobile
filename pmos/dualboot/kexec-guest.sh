@@ -1,5 +1,6 @@
 #!/bin/sh
-# Stage the Omarchy guest for a RAM-only kexec from taOS (runs on the handset as root).
+# Stage a guest OS for a RAM-only kexec from taOS (runs on the handset as root).
+# Usage: kexec-guest.sh [--guest omarchy|luma] [--go]   (omarchy by default)
 # Writes no partition and no slot attribute. Without --go it only loads; with --go it hands over
 # via systemctl kexec, so taOS stops cleanly and its root (which the guest mounts rw) is unmounted.
 # Inputs in $D/guest: kernel + ramdisk unpacked from the ACTIVE slot's boot image (unpack_bootimg),
@@ -8,8 +9,21 @@ set -eu
 D=/var/lib/dualboot
 G=$D/guest
 HERE=$(dirname "$0")
-
-[ -f "$D/arch-root.img" ] || { echo "no $D/arch-root.img"; exit 1; }
+GUEST=omarchy GO=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --guest) GUEST=${2:?--guest needs a name}; shift ;;
+    --go) GO=1 ;;
+    *) echo "unknown argument $1"; exit 1 ;;
+  esac
+  shift
+done
+case "$GUEST" in
+  omarchy) IMG=$D/arch-root.img ;;
+  luma) IMG=$D/luma-root.img ;;
+  *) echo "unknown guest $GUEST"; exit 1 ;;
+esac
+[ -f "$IMG" ] || { echo "no $IMG"; exit 1; }
 [ -f "$G/kernel" ] && [ -f "$G/ramdisk" ] || { echo "need $G/kernel and $G/ramdisk"; exit 1; }
 command -v kexec >/dev/null || apk add --no-progress kexec-tools
 # guest-init's kernel log writer reruns this after switch_root, where no musl loader exists
@@ -30,12 +44,25 @@ install -m755 "$HERE/guest-init" "$G/rd/init"
 cat /sys/firmware/fdt > "$G/live.dtb"
 CMD=$(tr ' ' '\n' < /proc/cmdline | grep -vE '^(quiet|splash|ro|plymouth\..*|pmos_.*)$' | tr '\n' ' ')
 # net.ifnames=0: the guest renamed wlan0 to wld0, which the NetworkManager connection from taOS does not match
-CMD="$CMD panic=10 net.ifnames=0 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg"
+CMD="$CMD panic=10 net.ifnames=0 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg dualboot.guest=$GUEST"
+if [ "$GUEST" = luma ]; then
+  # Read the deployment at every launch, not once at staging: an update inside Luma adds a newer
+  # boot entry (and keeps the old one for rollback), and the newest version is the one to boot
+  M=$(mktemp -d)
+  mount -o ro,noload "$IMG" "$M"
+  OST=$(for e in "$M"/boot/loader/entries/*.conf; do
+          printf '%s %s\n' "$(sed -n 's/^version //p' "$e")" "$(tr ' ' '\n' < "$e" | sed -n 's/^ostree=//p')"
+        done | sort -n | tail -n1 | cut -d' ' -f2)
+  umount "$M"; rmdir "$M"
+  [ -n "$OST" ] || { echo "no ostree= boot entry in $IMG"; exit 1; }
+  # Luma ships SELINUX=enforcing for its own kernel; the taOS kernel and the staged files carry no labels for it
+  CMD="$CMD ostree=$OST selinux=0"
+fi
 echo "cmdline: $CMD"
 
 kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-line="$CMD"
 echo "kexec loaded"
-if [ "${1:-}" = --go ]; then
+if [ -n "$GO" ]; then
   # The q6v5 remoteprocs have no shutdown hook, so kexec leaves them running and the guest kernel's
   # attempt to boot them again hard-reset the phone (guest died at 5.6s as wpss/cdsp/adsp powered up;
   # with their driver blacklisted the guest lived). Stop them first; wifi and ssh drop here.

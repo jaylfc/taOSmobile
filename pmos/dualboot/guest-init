@@ -1,7 +1,7 @@
 #!/bin/busybox ash
-# /init of the Omarchy guest initramfs: the pmOS ramdisk's own tools, this script in place of its init.
+# /init of the guest initramfs (Omarchy, Luma): the pmOS ramdisk's own tools, this script in place of its init.
 # Finds taOS's root inside userdata, loop-mounts the guest root image from it, and switch_roots into
-# Arch's systemd with taOS's root at /mnt/taos. Any failure logs and reboots, which lands back in
+# the guest's systemd with taOS's root at /mnt/taos. Any failure logs and reboots, which lands back in
 # taOS on the active slot. Never marks a slot.
 /bin/busybox --install -s
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -65,10 +65,41 @@ else
   log "no busybox.static on taOS's root: no kernel log kept"
 fi
 
-IMG=/taos/var/lib/dualboot/arch-root.img
+# dualboot.guest= picks the image (the launcher sets it); ostree= marks an OSTree guest (Luma)
+GUEST=omarchy OST=
+for a in $(cat /proc/cmdline); do
+  case "$a" in
+    dualboot.guest=*) GUEST=${a#*=} ;;
+    ostree=*) OST=${a#*=} ;;
+  esac
+done
+case "$GUEST" in
+  omarchy) IMG=/taos/var/lib/dualboot/arch-root.img ;;
+  luma) IMG=/taos/var/lib/dualboot/luma-root.img ;;
+  *) fail "unknown dualboot.guest=$GUEST" ;;
+esac
 [ -f "$IMG" ] || fail "no $IMG"
 GLOOP=$(losetup --show -f "$IMG") || fail "losetup $IMG"
-mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
+if [ -z "$OST" ]; then
+  mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
+else
+  # What ostree-prepare-root does, without composefs: the deployment becomes /, the physical root
+  # /sysroot, the stateroot's var /var, and /usr goes read-only
+  mkdir -p /sysroot
+  mount -t ext4 -o rw "$GLOOP" /sysroot || fail "mount $GLOOP"
+  DEP=$(readlink -f "/sysroot$OST") || fail "resolve ostree=$OST"
+  [ -d "$DEP/usr" ] || fail "ostree=$OST is not a deployment ($DEP)"
+  mount --bind "$DEP" /newroot || fail "bind deployment"
+  mount --bind /sysroot /newroot/sysroot || fail "bind sysroot"
+  mount --bind "${DEP%/deploy/*}/var" /newroot/var || fail "bind stateroot var"
+  mount --bind /newroot/usr /newroot/usr && mount -o remount,bind,ro /newroot/usr || fail "usr read-only"
+  mount -t tmpfs -o mode=755 tmpfs /newroot/run || fail "tmpfs run"
+  touch /newroot/run/ostree-booted
+  # The guest ships another kernel's modules: taOS's match the kernel we kexec'd
+  mount --bind /taos/lib/modules /newroot/usr/lib/modules || fail "bind modules"
+  mount --bind /taos/lib/firmware /newroot/usr/lib/firmware || fail "bind firmware"
+  log "ostree deployment $DEP"
+fi
 [ -x /newroot/usr/lib/systemd/systemd ] || fail "guest image has no systemd"
 mkdir -p /newroot/mnt/taos
 mount --move /taos /newroot/mnt/taos || fail "move taOS root"
