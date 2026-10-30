@@ -14,7 +14,7 @@ LOG=/run/guest-init.log
 log() { echo "[guest-init] $(cut -d' ' -f1 /proc/uptime) $*" | tee -a "$LOG" > /dev/kmsg; }
 keep_log() {
   for d in /newroot/mnt/taos /taos; do
-    [ -d "$d/var/lib/dualboot" ] && { cat "$LOG" >> "$d/var/lib/dualboot/initramfs.log"; return; }
+    [ -d "$d/var/lib/dualboot" ] && { cat "$LOG" >> "$d/var/lib/dualboot/initramfs.log"; sync; return; }
   done
 }
 fail() { log "FAIL: $*"; keep_log; sync; sleep 15; reboot -f; }
@@ -38,8 +38,13 @@ while [ ! -b "${LOOP}p2" ]; do
   i=$((i + 1)); [ "$i" -ge 20 ] && fail "${LOOP}p2 never appeared"
   sleep 0.5
 done
-mount -t ext4 -o rw "${LOOP}p2" /taos || fail "mount ${LOOP}p2"
+# nodelalloc + commit=1: a crash seconds after switch_root once left a 0-byte log (data never flushed)
+mount -t ext4 -o rw,nodelalloc,commit=1 "${LOOP}p2" /taos || fail "mount ${LOOP}p2"
 log "taOS root mounted from ${LOOP}p2"
+# No pstore RAM backend on this kernel: keep the kernel log on taOS's root. The fd and the mapped
+# busybox survive switch_root, so this also records Arch systemd's early life (log_target=kmsg)
+echo "=== guest boot $(cut -d' ' -f1 /proc/uptime)" >> /taos/var/lib/dualboot/guest-kmsg.log
+cat /dev/kmsg >> /taos/var/lib/dualboot/guest-kmsg.log &
 
 IMG=/taos/var/lib/dualboot/arch-root.img
 [ -f "$IMG" ] || fail "no $IMG"
@@ -50,6 +55,7 @@ mkdir -p /newroot/mnt/taos
 mount --move /taos /newroot/mnt/taos || fail "move taOS root"
 log "guest root on $GLOOP, switching"
 keep_log
+sleep 2
 
 exec switch_root /newroot /usr/lib/systemd/systemd
 fail "switch_root returned"
