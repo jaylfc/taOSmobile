@@ -43,6 +43,11 @@ if [ "${1:-}" = --go ]; then
     [ "$(cat "$r/state")" = running ] && echo stop > "$r/state"
     echo "$(cat "$r/name") $(cat "$r/state")" >> "$D/rproc-stop.log"
   done
+  # Same for GPI DMA: a bound geni_spi keeps its channels, and the guest's touch SPI then fails
+  # "EV ALLOCATE ret:-5" and times out. Unbinding releases them (touch on taOS stops here).
+  for d in /sys/bus/platform/drivers/geni_spi/*.spi; do
+    [ -e "$d" ] && echo "${d##*/}" > /sys/bus/platform/drivers/geni_spi/unbind
+  done
   systemctl kexec
 fi
 exit 0
