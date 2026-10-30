@@ -34,5 +34,14 @@ echo "cmdline: $CMD"
 
 kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-line="$CMD"
 echo "kexec loaded"
-[ "${1:-}" = --go ] && systemctl kexec
+if [ "${1:-}" = --go ]; then
+  # The q6v5 remoteprocs have no shutdown hook, so kexec leaves them running and the guest kernel's
+  # attempt to boot them again hard-reset the phone (guest died at 5.6s as wpss/cdsp/adsp powered up;
+  # with their driver blacklisted the guest lived). Stop them first; wifi and ssh drop here.
+  for r in /sys/class/remoteproc/remoteproc*; do
+    [ "$(cat "$r/state")" = running ] && echo stop > "$r/state"
+    echo "$(cat "$r/name") $(cat "$r/state")" >> "$D/rproc-stop.log"
+  done
+  systemctl kexec
+fi
 exit 0
