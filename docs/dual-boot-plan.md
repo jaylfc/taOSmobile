@@ -121,6 +121,23 @@ loop-mounts `arch-root.img` or `luma-root.img` to match. To be checked once the 
 unpacked: its format, and whether Fedora's SELinux expectations hold on our kernel. Omarchy comes
 first; Luma follows on the same booter.
 
+**Quick OS switching is a headline feature of taOSmobile (Jay 2026-10-30):** "can't choose a
+mobile OS? Have them all!" Each guest OS is one sparse image on pmOS_root (Omarchy 64G, Luma 32G),
+and switching is a single action from the running OS. After Luma, Jay wants Waydroid two ways:
+Android apps as native windows in taOS next to Linux apps, and a full Android OS as another
+switch target (`DUALBOOT-android-research` notes: feasible with patching, low confidence, and a
+`formattable` fstab flag that would wipe userdata must be removed first).
+
+**What runs today (measured 2026-10-30): kexec from taOS, no slot write.** taOS loads its own
+kernel with our guest initramfs (`pmos/dualboot/kexec-guest.sh`, `pmos/dualboot/guest-init`) and
+kexecs into it. The launcher stops the four remoteprocs and unbinds geni_spi first; a running
+remoteproc made the guest kernel hard-reset at about 5 s, and a bound SPI controller kept its
+GPI DMA channels so the guest touchscreen failed to probe. Omarchy then boots to its stock
+Hyprland desktop on the panel (sddm autologin, Omarchy's own config, scale 2.5) with wifi, the
+tailnet, a USB network gadget, the GPU, and the touchscreen registered as a Hyprland touch
+device. Going back is a reboot, which lands on slot b (taOS). Slot a is untouched, so this path
+cannot brick; the slot a booter above stays the option for a guest that should start cold.
+
 **Switching from an app (Jay asked 2026-10-30).** An "Omarchy" tile in taOS confirms, then asks a
 root device helper (taOSmobile, alongside the taos-kiosk-* scripts; the page never runs root
 commands itself) to set slot a active and reboot. Omarchy gets a matching "taOS" launcher entry
