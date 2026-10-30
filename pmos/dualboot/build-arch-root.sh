@@ -80,7 +80,7 @@ echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 # The default alarm user has a well-known password: remove it
 userdel -r alarm 2>/dev/null || true
 passwd -l root
-systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot-heartbeat.service dualboot-return.service
+systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot-heartbeat.service dualboot-return.service dualboot-usbnet.service
 # ALARM enables systemd-networkd, which would fight NetworkManager for wlan0
 systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
 for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
@@ -139,6 +139,41 @@ ExecStart=/bin/sh -c 'sleep "$$(cat /mnt/taos/var/lib/dualboot/return-after)"; s
 [Install]
 WantedBy=sysinit.target
 EOF
+# USB network like taOS's fallback (pmOS initramfs defaults: 18d1:d001, ncm, phone at 172.16.42.1), so the
+# guest answers over the cable whether or not wifi comes up
+cat > "$MNT/usr/local/bin/dualboot-usbnet" <<'EOF'
+#!/bin/sh
+set -eu
+modprobe libcomposite
+modprobe usb_f_ncm
+mountpoint -q /sys/kernel/config || mount -t configfs configfs /sys/kernel/config
+G=/sys/kernel/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/ncm.usb0"
+echo 0x18D1 > "$G/idVendor"
+echo 0xD001 > "$G/idProduct"
+echo omarchy-mobile > "$G/strings/0x409/product"
+echo ncm > "$G/configs/c.1/strings/0x409/configuration"
+[ -e "$G/configs/c.1/ncm.usb0" ] || ln -s "$G/functions/ncm.usb0" "$G/configs/c.1/"
+ls /sys/class/udc > "$G/UDC"
+ip addr replace 172.16.42.1/24 dev usb0
+ip link set usb0 up
+EOF
+chmod 755 "$MNT/usr/local/bin/dualboot-usbnet"
+cat > "$MNT/etc/systemd/system/dualboot-usbnet.service" <<'EOF'
+[Unit]
+Description=USB network gadget at 172.16.42.1
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/dualboot-usbnet
+
+[Install]
+WantedBy=multi-user.target
+EOF
+mkdir -p "$MNT/etc/NetworkManager/conf.d"
+printf '[keyfile]\nunmanaged-devices=interface-name:usb0\n' > "$MNT/etc/NetworkManager/conf.d/50-usb0-unmanaged.conf"
 mkdir -p "$MNT/mnt/taos"
 chroot "$MNT" /bin/bash /root/stage-a-config.sh
 chroot "$MNT" chown -R jay:jay /home/jay/.ssh

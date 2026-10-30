@@ -29,7 +29,8 @@ install -m755 "$HERE/guest-init" "$G/rd/init"
 # The live tree carries abl's fixups (memory, reserved-memory) that the packed dtb lacks
 cat /sys/firmware/fdt > "$G/live.dtb"
 CMD=$(tr ' ' '\n' < /proc/cmdline | grep -vE '^(quiet|splash|ro|plymouth\..*|pmos_.*)$' | tr '\n' ' ')
-CMD="$CMD panic=10 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg"
+# net.ifnames=0: the guest renamed wlan0 to wld0, which the NetworkManager connection from taOS does not match
+CMD="$CMD panic=10 net.ifnames=0 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg"
 echo "cmdline: $CMD"
 
 kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-line="$CMD"
