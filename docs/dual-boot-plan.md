@@ -39,8 +39,11 @@ re-measures every device fact below before anything is written.
   space, `resize_root_partition` (postmarketos-initramfs `init_functions_2nd.sh`) runs
   `parted resizepart 2 100%`. Once another inner partition takes that space, it finds none and
   does nothing.
-- `device-nothing-spacewar` depends on `soc-qcom-qbootctl`. Whether pmOS marks its slot
-  successful on each boot today is still unmeasured.
+- `device-nothing-spacewar` depends on `soc-qcom-qbootctl`, but that package enables the
+  mark-successful service **only on OpenRC** (`soc-qcom-qbootctl-openrc.post-install` runs
+  `rc-update add qbootctl default`; soc-qcom has no qbootctl systemd subpackage). Our handset runs
+  systemd, so pmOS may not mark slot b successful at all today. Because both slots carry the same
+  image, a fallback from b to a would currently be invisible. Stage 0 reads the real slot state.
 - **The slot trap (Omarchy CONTRIBUTING):** on Qualcomm A/B, flashing `boot_X` clears that slot's
   "successful" GPT attribute. A slot that is never marked successful burns its retry count, and
   abl then falls back to the other slot. Each OS must mark its own slot on every boot.
@@ -88,7 +91,8 @@ still identical. Fix this doc to match whatever differs.
   `qcom/sm7325-nothing-spacewar`, pagesize 4096. Same kernel, so our DT patches (700MHz) come
   along.
 - Slot marking: a unit in Arch marks slot a successful on each boot (qbootctl, built for ALARM
-  if it is not packaged there). Prove pmOS does the same for slot b before we rely on it.
+  if it is not packaged there). pmOS on systemd needs the same for slot b (a small unit in
+  taOSmobile), because the soc-qcom package only enables it on OpenRC.
 - Flash `boot_a` only, with Jay at the device. **This removes the duplicate fallback kernel.**
   Recovery is `fastboot flash boot_a <stage-0 dump>`: a soft brick, never a hard one.
 
