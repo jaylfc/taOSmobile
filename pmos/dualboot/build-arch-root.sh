@@ -45,9 +45,19 @@ pacman-key --populate archlinuxarm
 # The ALARM tarball's own kernel never runs here (the pmOS kernel does)
 pacman -Rdd --noconfirm linux-aarch64 linux-firmware 2>/dev/null || true
 pacman -Syu --noconfirm --needed base sudo openssh networkmanager e2fsprogs kmod python polkit \
-  less usbutils wireless-regdb tailscale
+  less usbutils wireless-regdb wpa_supplicant tailscale
 # pd-mapper and the qrtr nameserver are in-kernel on 7.2; tqftpserv is not packaged by ALARM (built later, wifi)
 for p in qrtr rmtfs; do pacman -S --noconfirm --needed "$p" || echo "NOPKG $p"; done
+# tqftpserv serves the wifi (WPSS) firmware files and ALARM does not package it: build taOS's release
+if [ ! -x /usr/bin/tqftpserv ]; then
+  pacman -S --noconfirm --needed base-devel meson git zstd
+  S=/root/src/tqftpserv
+  rm -rf "$S"
+  git clone -q --branch v1.2 https://github.com/linux-msm/tqftpserv "$S"
+  [ "$(git -C "$S" rev-parse HEAD)" = b6bb92d40cfffe28621abcf7bfaa6d99beea46cb ] || { echo "tqftpserv v1.2 moved"; exit 1; }
+  meson setup --prefix=/usr "$S/build" "$S"
+  ninja -C "$S/build" install
+fi
 EOF
 chroot "$MNT" /bin/bash /root/stage-a.sh
 
@@ -71,7 +81,9 @@ echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 userdel -r alarm 2>/dev/null || true
 passwd -l root
 systemctl enable sshd NetworkManager tailscaled dualboot-marker.service
-for u in rmtfs; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
+# ALARM enables systemd-networkd, which would fight NetworkManager for wlan0
+systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
 EOF
 mkdir -p "$MNT/home/jay/.ssh"
 cp /home/jay/.ssh/authorized_keys "$MNT/home/jay/.ssh/authorized_keys"
