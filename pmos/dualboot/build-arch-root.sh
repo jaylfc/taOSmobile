@@ -80,7 +80,7 @@ echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 # The default alarm user has a well-known password: remove it
 userdel -r alarm 2>/dev/null || true
 passwd -l root
-systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot-heartbeat.service
+systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot-heartbeat.service dualboot-return.service
 # ALARM enables systemd-networkd, which would fight NetworkManager for wlan0
 systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
 for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
@@ -121,6 +121,20 @@ DefaultDependencies=no
 
 [Service]
 ExecStart=/usr/local/bin/dualboot-heartbeat
+
+[Install]
+WantedBy=sysinit.target
+EOF
+# Test mode, armed from taOS by touching $D/return-after (seconds): the guest reboots back to taOS
+# on its own, so a run with no network in the guest still ends without a hand on the power key
+cat > "$MNT/etc/systemd/system/dualboot-return.service" <<'EOF'
+[Unit]
+Description=Reboot back to taOS after the delay in taOS's return-after file
+DefaultDependencies=no
+ConditionPathExists=/mnt/taos/var/lib/dualboot/return-after
+
+[Service]
+ExecStart=/bin/sh -c 'sleep "$$(cat /mnt/taos/var/lib/dualboot/return-after)"; systemctl reboot || reboot -f'
 
 [Install]
 WantedBy=sysinit.target
