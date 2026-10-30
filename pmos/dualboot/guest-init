@@ -1,0 +1,55 @@
+#!/bin/busybox ash
+# /init of the Omarchy guest initramfs: the pmOS ramdisk's own tools, this script in place of its init.
+# Finds taOS's root inside userdata, loop-mounts the guest root image from it, and switch_roots into
+# Arch's systemd with taOS's root at /mnt/taos. Any failure logs and reboots, which lands back in
+# taOS on the active slot. Never marks a slot.
+/bin/busybox --install -s
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs dev /dev
+mkdir -p /run /taos /newroot
+LOG=/run/guest-init.log
+
+log() { echo "[guest-init] $(cut -d' ' -f1 /proc/uptime) $*" | tee -a "$LOG" > /dev/kmsg; }
+keep_log() {
+  for d in /newroot/mnt/taos /taos; do
+    [ -d "$d/var/lib/dualboot" ] && { cat "$LOG" >> "$d/var/lib/dualboot/initramfs.log"; return; }
+  done
+}
+fail() { log "FAIL: $*"; keep_log; sync; sleep 15; reboot -f; }
+
+log "start, cmdline: $(cat /proc/cmdline)"
+
+# userdata holds pmOS's inner GPT (p1 pmOS_boot, p2 pmOS_root), 4096-byte sectors like pmOS's own init
+i=0
+while :; do
+  UEV=$(grep -l '^PARTNAME=userdata$' /sys/class/block/*/uevent 2>/dev/null | head -n1)
+  [ -n "$UEV" ] && break
+  i=$((i + 1)); [ "$i" -ge 40 ] && fail "no PARTNAME=userdata after 20s"
+  sleep 0.5
+done
+UD=/dev/$(basename "$(dirname "$UEV")")
+log "userdata is $UD"
+
+LOOP=$(losetup --show -Pf --sector-size 4096 "$UD") || fail "losetup $UD"
+i=0
+while [ ! -b "${LOOP}p2" ]; do
+  i=$((i + 1)); [ "$i" -ge 20 ] && fail "${LOOP}p2 never appeared"
+  sleep 0.5
+done
+mount -t ext4 -o rw "${LOOP}p2" /taos || fail "mount ${LOOP}p2"
+log "taOS root mounted from ${LOOP}p2"
+
+IMG=/taos/var/lib/dualboot/arch-root.img
+[ -f "$IMG" ] || fail "no $IMG"
+GLOOP=$(losetup --show -f "$IMG") || fail "losetup $IMG"
+mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
+[ -x /newroot/usr/lib/systemd/systemd ] || fail "guest image has no systemd"
+mkdir -p /newroot/mnt/taos
+mount --move /taos /newroot/mnt/taos || fail "move taOS root"
+log "guest root on $GLOOP, switching"
+keep_log
+
+exec switch_root /newroot /usr/lib/systemd/systemd
+fail "switch_root returned"

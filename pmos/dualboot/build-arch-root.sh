@@ -46,7 +46,8 @@ pacman-key --populate archlinuxarm
 pacman -Rdd --noconfirm linux-aarch64 linux-firmware 2>/dev/null || true
 pacman -Syu --noconfirm --needed base sudo openssh networkmanager e2fsprogs kmod python polkit \
   less usbutils wireless-regdb tailscale
-for p in qrtr rmtfs tqftpserv pd-mapper; do pacman -S --noconfirm --needed "$p" || echo "NOPKG $p"; done
+# pd-mapper and the qrtr nameserver are in-kernel on 7.2; tqftpserv is not packaged by ALARM (built later, wifi)
+for p in qrtr rmtfs; do pacman -S --noconfirm --needed "$p" || echo "NOPKG $p"; done
 EOF
 chroot "$MNT" /bin/bash /root/stage-a.sh
 
@@ -70,7 +71,7 @@ echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 userdel -r alarm 2>/dev/null || true
 passwd -l root
 systemctl enable sshd NetworkManager tailscaled dualboot-marker.service
-for u in rmtfs tqftpserv pd-mapper qrtr-ns; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
+for u in rmtfs; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
 EOF
 mkdir -p "$MNT/home/jay/.ssh"
 cp /home/jay/.ssh/authorized_keys "$MNT/home/jay/.ssh/authorized_keys"
@@ -96,6 +97,9 @@ H=$(awk -F: '$1=="jay"{print $2}' /etc/shadow); chroot "$MNT" usermod -p "$H" ja
 
 step umount
 sync
-for m in run dev/pts dev sys proc; do umount "$MNT/$m" 2>/dev/null || true; done
+# pacman-key leaves a gpg-agent inside the chroot holding /dev (umount: target is busy, measured)
+for p in /proc/[0-9]*; do [ "$(readlink "$p/root")" = "$MNT" ] && kill "${p#/proc/}" 2>/dev/null; done
+sleep 1
+for m in run dev/pts dev sys proc; do umount "$MNT/$m" 2>/dev/null || umount -l "$MNT/$m" 2>/dev/null || true; done
 umount "$MNT"
 step DONE
