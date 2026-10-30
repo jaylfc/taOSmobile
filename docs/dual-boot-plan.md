@@ -100,6 +100,13 @@ still identical. Fix this doc to match whatever differs.
 
 **Stage 2: Hyprland plus the Omarchy packages and config on that root.** No kernel change.
 
+**Switching from an app (Jay asked 2026-10-30).** An "Omarchy" tile in taOS confirms, then asks a
+root device helper (taOSmobile, alongside the taos-kiosk-* scripts; the page never runs root
+commands itself) to set slot a active and reboot. Omarchy gets a matching "taOS" launcher entry
+that sets slot b. A switch is a reboot, not an in-place launch. A slot that fails to come up burns
+its retries and abl falls back to the other one, so this lands only after both OSes mark their own
+slot successful. Otherwise a healthy OS gets bounced back.
+
 **Stage 3 (maybe): Omarchy's own mainline kernel on slot a.** Only if stage 2 shows a reason.
 It would need a spacewar DTB and none of the Pixel-bootloader assumptions above; for now it is
 out of scope.
