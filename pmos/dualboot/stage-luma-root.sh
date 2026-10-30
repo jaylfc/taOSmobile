@@ -2,8 +2,9 @@
 # On the handset in taOS, as root: make luma-root.img (from build-luma-image.sh) bootable by
 # kexec-guest.sh --guest luma. Unpacks $D/luma-root.img.zst sparse, then edits only the OSTree
 # deployment's /etc and the stateroot's /var: the dualboot units (guest-units.sh), taOS's wifi
-# connections, jay's ssh key for the luma user, and luma's password set to taOS's. Never touches
-# taOS's own root otherwise.
+# connections and jay's ssh key for the luma user. luma keeps Luma's factory password and its
+# first-user state stays empty, so Luma's own owner setup still runs on the first launch by hand.
+# Never touches taOS's own root otherwise.
 set -eu
 D=/var/lib/dualboot
 HERE=$(dirname "$0")
@@ -61,14 +62,6 @@ mkdir -p "$SR/var/home/luma/.ssh"
 cp /home/jay/.ssh/authorized_keys "$SR/var/home/luma/.ssh/authorized_keys"
 chmod 700 "$SR/var/home/luma/.ssh"; chmod 600 "$SR/var/home/luma/.ssh/authorized_keys"
 chown -R 1000:1000 "$SR/var/home/luma"
-H=$(awk -F: '$1=="jay"{print $2}' /etc/shadow)
-if grep -q '^luma:' "$DEP/etc/shadow"; then
-  awk -F: -v OFS=: -v h="$H" '$1=="luma"{$2=h} {print}' "$DEP/etc/shadow" > "$DEP/etc/shadow.new"
-  chmod "$(stat -c %a "$DEP/etc/shadow")" "$DEP/etc/shadow.new"; mv "$DEP/etc/shadow.new" "$DEP/etc/shadow"
-  echo "luma password = taOS's"
-else
-  echo "NOSHADOW luma"
-fi
 echo luma-mobile > "$DEP/etc/hostname"
 
 sync
