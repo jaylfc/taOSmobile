@@ -49,4 +49,16 @@ while read -r p; do
 done < <(list /usr/share/omarchy/install/omarchy-base.packages)
 echo "want ${#want[@]}, not built for aarch64: ${unavailable[*]}"
 pacman -S --noconfirm --needed "${want[@]}"
+
+say "desktop session"
+# jay predates the omarchy package, so useradd never copied its /etc/skel: seed it the way
+# omarchy-reinstall-configs does, minus that script's limine/plymouth refresh (abl boots this phone)
+runuser -u jay -- cp -af /etc/skel/. /home/jay/
+runuser -u jay -- env OMARCHY_SETUP_CONTEXT=provision-owner omarchy-provision-user --first-install
+# The panel is 1080x2400 at 68 mm wide: scale 2.5 gives a 432x960 logical desktop
+grep -q '"DSI-1"' /home/jay/.config/hypr/monitors.lua ||
+  echo 'hl.monitor({ output = "DSI-1", mode = "1080x2400@120", position = "0x0", scale = 2.5 })' \
+    >> /home/jay/.config/hypr/monitors.lua
+printf '[Autologin]\nUser=jay\nSession=hyprland-uwsm\n' > /etc/sddm.conf.d/20-autologin.conf
+systemctl enable sddm
 say DONE
