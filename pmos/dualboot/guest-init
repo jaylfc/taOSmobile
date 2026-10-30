@@ -66,11 +66,12 @@ else
 fi
 
 # dualboot.guest= picks the image (the launcher sets it); ostree= marks an OSTree guest (Luma)
-GUEST=omarchy OST=
+GUEST=omarchy OST= MODS=
 for a in $(cat /proc/cmdline); do
   case "$a" in
     dualboot.guest=*) GUEST=${a#*=} ;;
     ostree=*) OST=${a#*=} ;;
+    dualboot.modules=*) MODS=/${a#*=} ;;
   esac
 done
 case "$GUEST" in
@@ -82,6 +83,8 @@ esac
 GLOOP=$(losetup --show -f "$IMG") || fail "losetup $IMG"
 if [ -z "$OST" ]; then
   mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
+  # Omarchy carries a copy of taOS's modules; a kernel under test (kexec-guest.sh --kernel) brings its own
+  [ -z "$MODS" ] || mount --bind "/taos$MODS" /newroot/usr/lib/modules || fail "bind test modules $MODS"
 else
   # What ostree-prepare-root does, without composefs: the deployment becomes /, the physical root
   # /sysroot, the stateroot's var /var, and /usr goes read-only
@@ -96,7 +99,7 @@ else
   mount -t tmpfs -o mode=755 tmpfs /newroot/run || fail "tmpfs run"
   touch /newroot/run/ostree-booted
   # The guest ships another kernel's modules: taOS's match the kernel we kexec'd
-  mount --bind /taos/lib/modules /newroot/usr/lib/modules || fail "bind modules"
+  mount --bind "/taos${MODS:-/lib/modules}" /newroot/usr/lib/modules || fail "bind modules"
   mount --bind /taos/lib/firmware /newroot/usr/lib/firmware || fail "bind firmware"
   log "ostree deployment $DEP"
 fi

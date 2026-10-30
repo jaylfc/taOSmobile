@@ -1,18 +1,21 @@
 #!/bin/sh
 # Stage a guest OS for a RAM-only kexec from taOS (runs on the handset as root).
-# Usage: kexec-guest.sh [--guest omarchy|luma] [--go]   (omarchy by default)
+# Usage: kexec-guest.sh [--guest omarchy|luma] [--kernel <linux-*.apk>] [--go]   (omarchy by default)
 # Writes no partition and no slot attribute. Without --go it only loads; with --go it hands over
 # via systemctl kexec, so taOS stops cleanly and its root (which the guest mounts rw) is unmounted.
 # Inputs in $D/guest: kernel + ramdisk unpacked from the ACTIVE slot's boot image (unpack_bootimg),
 # so modules on taOS's root match. guest-init sits next to this script.
+# --kernel boots an UNFLASHED kernel package instead: its Image and its own modules (bound over the
+# guest's by guest-init) come from the apk, so a new kernel is tried from RAM before any flash.
 set -eu
 D=/var/lib/dualboot
 G=$D/guest
 HERE=$(dirname "$0")
-GUEST=omarchy GO=
+GUEST=omarchy GO= KAPK=
 while [ $# -gt 0 ]; do
   case "$1" in
     --guest) GUEST=${2:?--guest needs a name}; shift ;;
+    --kernel) KAPK=${2:?--kernel needs a package}; shift ;;
     --go) GO=1 ;;
     *) echo "unknown argument $1"; exit 1 ;;
   esac
@@ -29,10 +32,21 @@ command -v kexec >/dev/null || apk add --no-progress kexec-tools
 # guest-init's kernel log writer reruns this after switch_root, where no musl loader exists
 [ -x /bin/busybox.static ] || apk add --no-progress busybox-static
 
-zcat "$G/kernel" > "$G/Image"
-# Same build as the running kernel, or the modules on taOS's root will not load
-want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
-strings "$G/Image" | grep -m1 '^Linux version' | grep -q "^Linux version $want" || { echo "kernel build != running"; exit 1; }
+if [ -n "$KAPK" ]; then
+  [ -f "$KAPK" ] || { echo "no $KAPK"; exit 1; }
+  K=$D/test-kernel
+  rm -rf "$K"; mkdir -p "$K"
+  # an apk is concatenated gzip members (signature, control, data); zcat reads them all
+  zcat "$KAPK" | tar -x -C "$K" 2>/dev/null || true
+  [ -f "$K/boot/vmlinuz" ] && [ -d "$K/usr/lib/modules/$(uname -r)" ] || { echo "$KAPK has no vmlinuz or $(uname -r) modules"; exit 1; }
+  zcat "$K/boot/vmlinuz" > "$G/Image"
+  strings "$G/Image" | grep -m1 '^Linux version'
+else
+  zcat "$G/kernel" > "$G/Image"
+  # Same build as the running kernel, or the modules on taOS's root will not load
+  want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
+  strings "$G/Image" | grep -m1 '^Linux version' | grep -q "^Linux version $want" || { echo "kernel build != running"; exit 1; }
+fi
 
 rm -rf "$G/rd"; mkdir -p "$G/rd"
 (cd "$G/rd" && zcat "$G/ramdisk" | cpio -id 2>/dev/null)
@@ -45,6 +59,7 @@ cat /sys/firmware/fdt > "$G/live.dtb"
 CMD=$(tr ' ' '\n' < /proc/cmdline | grep -vE '^(quiet|splash|ro|plymouth\..*|pmos_.*)$' | tr '\n' ' ')
 # net.ifnames=0: the guest renamed wlan0 to wld0, which the NetworkManager connection from taOS does not match
 CMD="$CMD panic=10 net.ifnames=0 printk.devkmsg=on systemd.log_level=info systemd.log_target=kmsg dualboot.guest=$GUEST"
+[ -n "$KAPK" ] && CMD="$CMD dualboot.modules=${D#/}/test-kernel/usr/lib/modules"
 if [ "$GUEST" = luma ]; then
   # Read the deployment at every launch, not once at staging: an update inside Luma adds a newer
   # boot entry (and keeps the old one for rollback), and the newest version is the one to boot
@@ -55,8 +70,10 @@ if [ "$GUEST" = luma ]; then
         done | sort -n | tail -n1 | cut -d' ' -f2)
   umount "$M"; rmdir "$M"
   [ -n "$OST" ] || { echo "no ostree= boot entry in $IMG"; exit 1; }
-  # Luma ships SELINUX=enforcing for its own kernel; the taOS kernel and the staged files carry no labels for it
-  CMD="$CMD ostree=$OST selinux=0"
+  # The taOS kernel (r9 on) builds SELinux in but leaves it out of its default LSM order; Luma names it.
+  # enforcing=0 (needs SECURITY_SELINUX_DEVELOP) until its root is relabelled: the staged files carry
+  # no labels yet, and Luma's own config says enforcing. selinux must come before bpf.
+  CMD="$CMD ostree=$OST lsm=landlock,lockdown,yama,loadpin,safesetid,selinux,smack,tomoyo,ipe,bpf enforcing=0"
 fi
 echo "cmdline: $CMD"
 
