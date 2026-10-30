@@ -1,0 +1,188 @@
+# r9 -- SELinux COMPILED IN, OFF FOR taOS. Built 2026-10-30 on omarchy.
+#
+# Why: Luma (a kexec guest) ships SELINUX=enforcing and its rpm-ostree/podman
+# stack expects labels. One shared kernel, per-boot choice
+# (~/.taos-team/SELINUX-luma-research-20261030.md, recommendation 2).
+#
+# How taOS stays off: `selinux` is REMOVED from the CONFIG_LSM default order,
+# so the taOS boot (whose cmdline carries no lsm=) initialises exactly the
+# LSMs it did on r8. Only kexec-guest.sh --guest luma names selinux in lsm=.
+# This deliberately fails pmOS's kconfig "hardening" check, which wants
+# selinux in CONFIG_LSM; the alternative is a taOS cmdline change in the
+# boot image, a second thing to carry.
+#
+# SECURITY_SELINUX_DEVELOP=y is what makes `enforcing=0` on the guest cmdline
+# work, so an unlabelled Luma root can boot permissive for its first relabel.
+# SECURITY_NETWORK and AUDIT are dependencies of SECURITY_SELINUX: without
+# them the symbol is hidden, not merely unset, and a hand-added line is dropped.
+#
+# Waydroid: NO change needed. ANDROID_BINDER_IPC=y with the static
+# binder,hwbinder,vndbinder devices was already on, and pmOS's kconfig
+# "waydroid" check REQUIRES ANDROID_BINDERFS to stay unset.
+#
+# Resolved with `make olddefconfig` in the pmbootstrap native chroot;
+# `make listnewconfig` printed nothing, so the build cannot stop on a prompt.
+# The VERSION/CC_* hunks are the edge toolchain (clang 22.1.8 -> 23.1.4),
+# recomputed by every build, not choices.
+#
+# Needs `pkgrel=9` AND `pmbootstrap build --force`: the binary repo carries
+# 7.2.9-r2, so without --force pmbootstrap reports the local 7.2.2-r9 "up to
+# date" and exits 0 having built nothing.
+--- i/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
++++ w/device/community/linux-postmarketos-qcom-sc7280/config-postmarketos-qcom-sc7280.aarch64
+@@ -2,15 +2,15 @@
+ # Automatically generated file; DO NOT EDIT.
+ # Linux/arm64 7.2.2 Kernel Configuration
+ #
+-CONFIG_CC_VERSION_TEXT="Alpine clang version 22.1.8"
++CONFIG_CC_VERSION_TEXT="Alpine clang version 23.1.4"
+ CONFIG_GCC_VERSION=0
+ CONFIG_CC_IS_CLANG=y
+-CONFIG_CLANG_VERSION=220108
++CONFIG_CLANG_VERSION=230104
+ CONFIG_AS_IS_LLVM=y
+-CONFIG_AS_VERSION=220108
++CONFIG_AS_VERSION=230104
+ CONFIG_LD_VERSION=0
+ CONFIG_LD_IS_LLD=y
+-CONFIG_LLD_VERSION=220108
++CONFIG_LLD_VERSION=230104
+ CONFIG_RUSTC_VERSION=0
+ CONFIG_RUSTC_LLVM_VERSION=0
+ CONFIG_RUSTC_LLVM_MAJOR_VERSION=0
+@@ -25,7 +25,7 @@
+ CONFIG_CC_HAS_ALLOC_TOKEN=y
+ CONFIG_CC_HAS_MULTIDIMENSIONAL_NONSTRING=y
+ CONFIG_LD_CAN_USE_KEEP_IN_OVERLAY=y
+-CONFIG_PAHOLE_VERSION=131
++CONFIG_PAHOLE_VERSION=132
+ CONFIG_IRQ_WORK=y
+ CONFIG_BUILDTIME_TABLE_SORT=y
+ CONFIG_THREAD_INFO_IN_TASK=y
+@@ -52,8 +52,9 @@
+ CONFIG_POSIX_MQUEUE_SYSCTL=y
+ # CONFIG_WATCH_QUEUE is not set
+ CONFIG_CROSS_MEMORY_ATTACH=y
+-# CONFIG_AUDIT is not set
++CONFIG_AUDIT=y
+ CONFIG_HAVE_ARCH_AUDITSYSCALL=y
++CONFIG_AUDITSYSCALL=y
+ 
+ #
+ # IRQ subsystem
+@@ -175,7 +176,7 @@
+ CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH=y
+ CONFIG_CC_HAS_INT128=y
+ CONFIG_CC_IMPLICIT_FALLTHROUGH="-Wimplicit-fallthrough"
+-CONFIG_CC_MS_EXTENSIONS="-fms-extensions"
++CONFIG_CC_MS_EXTENSIONS="-fms-anonymous-structs"
+ CONFIG_GCC10_NO_ARRAY_BOUNDS=y
+ CONFIG_GCC_NO_STRINGOP_OVERFLOW=y
+ CONFIG_ARCH_SUPPORTS_INT128=y
+@@ -1179,7 +1180,7 @@
+ # CONFIG_IPV6_IOAM6_LWTUNNEL is not set
+ # CONFIG_NETLABEL is not set
+ # CONFIG_MPTCP is not set
+-# CONFIG_NETWORK_SECMARK is not set
++CONFIG_NETWORK_SECMARK=y
+ CONFIG_NET_PTP_CLASSIFY=y
+ # CONFIG_NETWORK_PHY_TIMESTAMPING is not set
+ CONFIG_NETFILTER=y
+@@ -1202,6 +1203,7 @@
+ CONFIG_NF_CONNTRACK=m
+ # CONFIG_NF_LOG_SYSLOG is not set
+ CONFIG_NF_CONNTRACK_MARK=y
++# CONFIG_NF_CONNTRACK_SECMARK is not set
+ # CONFIG_NF_CONNTRACK_ZONES is not set
+ CONFIG_NF_CONNTRACK_PROCFS=y
+ # CONFIG_NF_CONNTRACK_EVENTS is not set
+@@ -1261,6 +1263,7 @@
+ #
+ # Xtables targets
+ #
++# CONFIG_NETFILTER_XT_TARGET_AUDIT is not set
+ CONFIG_NETFILTER_XT_TARGET_CHECKSUM=m
+ # CONFIG_NETFILTER_XT_TARGET_CLASSIFY is not set
+ # CONFIG_NETFILTER_XT_TARGET_CONNMARK is not set
+@@ -1283,6 +1286,7 @@
+ # CONFIG_NETFILTER_XT_TARGET_TEE is not set
+ # CONFIG_NETFILTER_XT_TARGET_TPROXY is not set
+ # CONFIG_NETFILTER_XT_TARGET_TRACE is not set
++CONFIG_NETFILTER_XT_TARGET_SECMARK=m
+ CONFIG_NETFILTER_XT_TARGET_TCPMSS=m
+ # CONFIG_NETFILTER_XT_TARGET_TCPOPTSTRIP is not set
+ 
+@@ -2276,6 +2280,7 @@
+ # CONFIG_DM_SWITCH is not set
+ # CONFIG_DM_LOG_WRITES is not set
+ CONFIG_DM_INTEGRITY=m
++CONFIG_DM_AUDIT=y
+ # CONFIG_DM_VDO is not set
+ # CONFIG_TARGET_CORE is not set
+ # CONFIG_FUSION is not set
+@@ -6609,6 +6614,7 @@
+ # CONFIG_DMABUF_DEBUG is not set
+ CONFIG_DMABUF_HEAPS=y
+ CONFIG_DMABUF_HEAPS_SYSTEM=y
++# CONFIG_DMABUF_HEAPS_SYSTEM_CC_SHARED is not set
+ CONFIG_DMABUF_HEAPS_CMA=y
+ # end of DMABUF options
+ 
+@@ -8285,10 +8291,20 @@
+ # CONFIG_PROC_MEM_FORCE_PTRACE is not set
+ # CONFIG_PROC_MEM_NO_FORCE is not set
+ CONFIG_SECURITY=y
++CONFIG_HAS_SECURITY_AUDIT=y
+ CONFIG_SECURITYFS=y
+-# CONFIG_SECURITY_NETWORK is not set
++CONFIG_SECURITY_NETWORK=y
+ CONFIG_SECURITY_PATH=y
++CONFIG_LSM_MMAP_MIN_ADDR=32768
+ # CONFIG_STATIC_USERMODEHELPER is not set
++CONFIG_SECURITY_SELINUX=y
++# CONFIG_SECURITY_SELINUX_BOOTPARAM is not set
++CONFIG_SECURITY_SELINUX_DEVELOP=y
++CONFIG_SECURITY_SELINUX_AVC_STATS=y
++CONFIG_SECURITY_SELINUX_SIDTAB_HASH_BITS=9
++CONFIG_SECURITY_SELINUX_SID2STR_CACHE_SIZE=256
++CONFIG_SECURITY_SELINUX_AVC_HASH_BITS=9
++# CONFIG_SECURITY_SELINUX_DEBUG is not set
+ # CONFIG_SECURITY_SMACK is not set
+ # CONFIG_SECURITY_TOMOYO is not set
+ # CONFIG_SECURITY_APPARMOR is not set
+@@ -8301,13 +8317,16 @@
+ # CONFIG_LOCK_DOWN_KERNEL_FORCE_INTEGRITY is not set
+ # CONFIG_LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY is not set
+ # CONFIG_SECURITY_LANDLOCK is not set
++# CONFIG_SECURITY_IPE is not set
+ CONFIG_INTEGRITY=y
+ # CONFIG_INTEGRITY_SIGNATURE is not set
++CONFIG_INTEGRITY_AUDIT=y
+ # CONFIG_IMA is not set
+ # CONFIG_IMA_SECURE_AND_OR_TRUSTED_BOOT is not set
+ # CONFIG_EVM is not set
++# CONFIG_DEFAULT_SECURITY_SELINUX is not set
+ CONFIG_DEFAULT_SECURITY_DAC=y
+-CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,selinux,smack,tomoyo,ipe,bpf"
++CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,smack,tomoyo,ipe,bpf"
+ 
+ #
+ # Kernel hardening options
+@@ -8641,7 +8660,9 @@
+ CONFIG_RAID6_PQ_ARCH=y
+ CONFIG_RAID6_PQ_BENCHMARK=y
+ CONFIG_XXHASH=y
++CONFIG_AUDIT_GENERIC=y
+ CONFIG_AUDIT_ARCH_COMPAT_GENERIC=y
++CONFIG_AUDIT_COMPAT_GENERIC=y
+ # CONFIG_RANDOM32_SELFTEST is not set
+ CONFIG_842_COMPRESS=y
+ CONFIG_842_DECOMPRESS=y
+@@ -8794,6 +8815,7 @@
+ CONFIG_ARCH_WANT_FRAME_POINTERS=y
+ CONFIG_FRAME_POINTER=y
+ # CONFIG_DEBUG_FORCE_WEAK_PER_CPU is not set
++CONFIG_WARN_CONTEXT_ANALYSIS=y
+ # end of Compile-time checks and compiler options
+ 
+ #

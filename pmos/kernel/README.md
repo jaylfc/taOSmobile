@@ -255,3 +255,28 @@ rear 8192 for 8152 — so convert with `ffmpeg -f rawvideo -pix_fmt rgba -s <str
 
 ⚠ `/tmp` on the phone is tmpfs in RAM. A 20-frame front burst is 318 MB and one rear frame is
 201 MB; delete them after converting.
+
+---
+
+# r9 -- SELinux compiled in, off for taOS (`config-r9-selinux.diff`)
+
+For the Luma guest. The header of the diff carries the reasoning; the short version:
+
+- `SECURITY_SELINUX=y` (+ its hidden dependencies `SECURITY_NETWORK`, `AUDIT`, and
+  `SECURITY_SELINUX_DEVELOP` so `enforcing=0` works for the first relabel).
+- `selinux` is taken OUT of the `CONFIG_LSM` default order, so a taOS boot is unchanged
+  without touching its cmdline. A guest that wants it names it: `lsm=...,selinux,...,bpf`
+  (selinux before bpf).
+- Waydroid needs nothing new: binder IPC with static devices was already on, and pmOS's
+  waydroid kconfig check requires `ANDROID_BINDERFS` to stay unset.
+
+Check after any boot of r9:
+
+```
+cat /sys/kernel/security/lsm     # taOS: no "selinux";  Luma guest: contains "selinux"
+getenforce                       # Luma guest only
+```
+
+⚠ The edge binary repo is ahead of the local aport (7.2.9-r2 vs 7.2.2-r9), so
+`pmbootstrap build` without `--force` says "up to date", exits 0 and builds nothing.
+Assert on `packages/edge/aarch64/linux-postmarketos-qcom-sc7280-7.2.2-r9.apk`.
