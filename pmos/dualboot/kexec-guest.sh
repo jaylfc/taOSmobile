@@ -39,6 +39,10 @@ if [ -n "$KAPK" ]; then
   # an apk is concatenated gzip members (signature, control, data); zcat reads them all
   zcat "$KAPK" | tar -x -C "$K" 2>/dev/null || true
   [ -f "$K/boot/vmlinuz" ] && [ -d "$K/usr/lib/modules/$(uname -r)" ] || { echo "$KAPK has no vmlinuz or $(uname -r) modules"; exit 1; }
+  # The apk's modules.dep lists no dependencies (apk's install trigger runs depmod); without this
+  # usb_f_ncm loads before u_ether and the guest's USB network never comes up
+  depmod -b "$K/usr" "$(uname -r)"
+  grep -q '^kernel/drivers/usb/gadget/function/usb_f_ncm.ko[^:]*: .*u_ether' "$K/usr/lib/modules/$(uname -r)/modules.dep" || { echo "depmod left usb_f_ncm without u_ether"; exit 1; }
   zcat "$K/boot/vmlinuz" > "$G/Image"
   strings "$G/Image" | grep -m1 '^Linux version'
 else

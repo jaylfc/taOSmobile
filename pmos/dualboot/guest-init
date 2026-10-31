@@ -92,6 +92,9 @@ else
   mount -t ext4 -o rw "$GLOOP" /sysroot || fail "mount $GLOOP"
   DEP=$(readlink -f "/sysroot$OST") || fail "resolve ostree=$OST"
   [ -d "$DEP/usr" ] || fail "ostree=$OST is not a deployment ($DEP)"
+  # A boot without SELinux marks a relabel; Fedora's then walks taOS's root at /mnt/taos and the
+  # /sysroot bind (a directory cycle), fails, and reboots. The deployment's files carry their labels.
+  rm -f "$DEP/.autorelabel"
   mount --bind "$DEP" /newroot || fail "bind deployment"
   mount --bind /sysroot /newroot/sysroot || fail "bind sysroot"
   mount --bind "${DEP%/deploy/*}/var" /newroot/var || fail "bind stateroot var"
