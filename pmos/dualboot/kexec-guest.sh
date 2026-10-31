@@ -3,7 +3,7 @@
 # Usage: kexec-guest.sh [--guest omarchy|luma] [--kernel <linux-*.apk>] [--go]   (omarchy by default)
 # Writes no partition and no slot attribute. Without --go it only loads; with --go it hands over
 # via systemctl kexec, so taOS stops cleanly and its root (which the guest mounts rw) is unmounted.
-# Inputs in $D/guest: kernel + ramdisk unpacked from the ACTIVE slot's boot image (unpack_bootimg),
+# Inputs in $D/guest: kernel + ramdisk unpacked from the ACTIVE slot's boot image (refresh-guest-boot.sh),
 # so modules on taOS's root match. guest-init sits next to this script.
 # --kernel boots an UNFLASHED kernel package instead: its Image and its own modules (bound over the
 # guest's by guest-init) come from the apk, so a new kernel is tried from RAM before any flash.
@@ -83,6 +83,11 @@ echo "cmdline: $CMD"
 
 kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-line="$CMD"
 echo "kexec loaded"
+if [ -z "$GO" ]; then
+  # a dry run must not leave an image armed for the next systemctl kexec
+  kexec -u && echo "unloaded (dry run)"
+  exit 0
+fi
 if [ -n "$GO" ]; then
   # The q6v5 remoteprocs have no shutdown hook, so kexec leaves them running and the guest kernel's
   # attempt to boot them again hard-reset the phone (guest died at 5.6s as wpss/cdsp/adsp powered up;
