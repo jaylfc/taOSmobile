@@ -39,12 +39,26 @@ ensure_session() {
     fi
     i=0
     while [ $i -lt 60 ]; do
-        session_running && { echo "PASS: waydroid session RUNNING"; return; }
+        session_running && { echo "PASS: waydroid session RUNNING"; multi_windows; return; }
         sleep 1; i=$((i + 1))
     done
     echo "FAIL: waydroid session not RUNNING after 60 s"
     as_taos 'waydroid status' || true
     exit 1
+}
+# One window per Android app in the sway session, not one Android screen.
+# A persist. property lives in Android's data, so it is set once per init,
+# but it can only be set through a running session (prop set talks to the
+# IPlatform service inside Android), which is why it lives here and not in
+# the installer. Read back, or "set" is a claim.
+multi_windows() {
+    [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ] && return
+    as_taos 'waydroid prop set persist.waydroid.multi_windows true'
+    if [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ]; then
+        echo "PASS: persist.waydroid.multi_windows=true (takes effect for windows opened from now)"
+    else
+        echo "WARN: persist.waydroid.multi_windows did not read back true (Android still booting?); rerun show"
+    fi
 }
 case "${1:-start}" in
     start) exec su taos -s /bin/sh -c "$ENV exec waydroid session start" ;;

@@ -15,8 +15,9 @@
 #      waydroid-net.sh adds at start. Firewall first, container second, and any
 #      later firewall reload needs `systemctl restart waydroid-container`.
 #   5. `waydroid init` (the download), unless already initialised
-#   6. enable + start the container; the drop-in's check runs as ExecStartPre
-#   7. the multi-window property, so each Android app is its own window
+#   6. enable + start the container manager; the drop-in's check runs as
+#      ExecStartPre. The LXC container only starts with the first session
+#      (taos-waydroid-session), which also sets the multi-window property.
 #
 # WAYDROID_SYSTEM_TYPE=VANILLA|GAPPS picks the image on first init (default
 # VANILLA, Jay 2026-10-31). Changing it later: `waydroid init -f -s GAPPS`.
@@ -121,35 +122,32 @@ fi
 echo "waydroid_base.prop:"
 grep -E '^ro\.hardware\.(gralloc|egl|vulkan)=|^gralloc\.gbm\.device=' "$WORK/waydroid_base.prop" | sed 's/^/  /'
 
-# 6. The container. Enable, then (re)start so the ExecStartPre check runs
-#    against this install; a firewall reload above wiped its nft tables if it
-#    was already running, so a restart is right in both cases.
+# 6. The container manager. Enable, then (re)start so the ExecStartPre check
+#    runs against this install; a firewall reload above wiped its nft tables if
+#    it was already running, so a restart is right in both cases.
+#    `waydroid container start` only claims the id.waydro.Container bus name:
+#    the LXC container itself is launched by the Start() bus call a SESSION
+#    makes (container_manager.do_start), so "unit active" plus the check's PASS
+#    lines in its journal is all this step can prove. RUNNING comes with the
+#    first session, below.
 systemctl enable --quiet $UNIT
 if [ "$CONTAINER_WAS_ACTIVE" = 1 ]; then systemctl restart $UNIT; else systemctl start $UNIT; fi
 systemctl is-active --quiet $UNIT && echo "PASS: $UNIT active" \
     || { echo "FAIL: $UNIT not active"; systemctl status --no-pager $UNIT | tail -20; exit 1; }
+INV="$(systemctl show -p InvocationID --value $UNIT)"
+journalctl _SYSTEMD_INVOCATION_ID="$INV" -o cat --no-pager 2>/dev/null | grep -q '^PASS: .* handset lxc lines present' \
+    && echo "PASS: ExecStartPre check ran for this start (harden line applied)" \
+    || { echo "FAIL: no harden PASS line in this start's journal"; journalctl _SYSTEMD_INVOCATION_ID="$INV" -o cat --no-pager | tail -20; exit 1; }
 grep -qxF 'lxc.cgroup2.devices.deny = b *:* rwm' "$WORK/lxc/waydroid/config" \
     && echo "PASS: block devices denied in $WORK/lxc/waydroid/config" \
     || { echo "FAIL: the block-device deny line is not in the lxc config"; exit 1; }
-i=0
-while [ $i -lt 90 ]; do
-    waydroid status 2>/dev/null | grep -q '^Container:[[:space:]]*RUNNING' && break
-    sleep 1; i=$((i + 1))
-done
-waydroid status 2>/dev/null | grep -q '^Container:[[:space:]]*RUNNING' \
-    && echo "PASS: waydroid status says Container RUNNING (after ${i}s)" \
-    || { echo "FAIL: container not RUNNING after 90 s"; waydroid status || true; exit 1; }
-
-# 7. One window per Android app in the sway session, not one Android screen.
-waydroid prop set persist.waydroid.multi_windows true
-[ "$(waydroid prop get persist.waydroid.multi_windows)" = true ] \
-    && echo "PASS: persist.waydroid.multi_windows=true" \
-    || { echo "FAIL: persist.waydroid.multi_windows did not read back true"; exit 1; }
 
 echo
 echo "NOT PROVEN by this script, and it must not claim to be:"
-echo "  - that an Android window reaches the glass. That needs the kiosk session"
-echo "    running and a look at the panel:"
-echo "      taos-waydroid-session show      # Android's own UI as a window"
+echo "  - that the Android container boots: that happens with the first session,"
+echo "    which needs the kiosk session running:"
+echo "      taos-waydroid-session show      # starts the session, sets multi_windows,"
+echo "                                      # shows Android's own UI as a window"
+echo "      waydroid status                 # Container: RUNNING"
 echo "      taos-shot                        # then put the panel back off"
 echo "  - that Android has network: from inside, waydroid shell -- ping -c1 1.1.1.1"

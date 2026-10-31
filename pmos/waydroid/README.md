@@ -15,6 +15,10 @@ in the taOS sway session. A full-Android boot slot is a separate plan
 - The session is the kiosk user's (`taos`): `bin/taos-waydroid-session` starts
   `waydroid session start` with the kiosk session's `XDG_RUNTIME_DIR` and
   `WAYLAND_DISPLAY`, so Android surfaces land in the sway session as windows.
+  The unit alone only registers the container manager on the system bus; the
+  LXC container boots when the first session calls it, and the session helper
+  sets `persist.waydroid.multi_windows` once Android answers (a property can
+  only be set through a running session).
   `taos-waydroid-session show` brings up Android's own UI as one window;
   `taos-waydroid-session app <pkg>` launches one app.
 - `bin/taos-waydroid-check` refuses to start the container on a kernel that
