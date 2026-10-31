@@ -1,0 +1,116 @@
+#!/bin/sh
+# Refuse to start the Waydroid container on a handset that cannot run it, and
+# harden its LXC config before every start.
+#
+# Runs as ExecStartPre= of waydroid-container.service (root). Every check prints
+# a PASS or FAIL line and a FAIL exits 1, so a container that cannot work never
+# starts half-way: the stock unit would start lxc against a missing binder node
+# and leave Android looping in the journal with a dark glass.
+#
+# The kernel facts checked here were measured on the live r9 handset
+# (Linux 7.2.2, 2026-10-31): static binder nodes (no binderfs, by design),
+# renderD128 bound to msm_dpu (Adreno 642L through DRM_MSM), cgroup2 mounted at
+# /sys/fs/cgroup, PSI under /proc/pressure. Waydroid's own gpu.py maps the
+# kernel driver msm/msm_dpu to the freedreno Vulkan driver, so the driver NAME
+# is what to check, not the node's existence: a render node bound to anything
+# else means software rendering and a different bug to chase.
+#
+# HARDEN: `waydroid init` and `waydroid upgrade` regenerate
+# /var/lib/waydroid/lxc/waydroid/config from the package's snippets, so a
+# one-time edit of that file does not survive an upgrade. The lines in
+# lxc-taos.conf are appended here, before every start, if they are missing.
+# The important one denies the container every block device: Android inside
+# must never see the UFS partitions (the never-touch-xbl/abl rule, enforced by
+# the kernel instead of by hope). Waydroid loop-mounts system.img and
+# vendor.img on the HOST, so the container needs no block node.
+#
+# TAOS_WAYDROID_SYSROOT prefixes /dev, /sys and /proc, and
+# TAOS_WAYDROID_LXC_CONFIG / TAOS_WAYDROID_LXC_EXTRA name the two files, so
+# the tests can run this against a fake tree without root. Production leaves
+# all three unset.
+set -u
+
+R="${TAOS_WAYDROID_SYSROOT:-}"
+LXC_CONFIG="${TAOS_WAYDROID_LXC_CONFIG:-/var/lib/waydroid/lxc/waydroid/config}"
+LXC_EXTRA="${TAOS_WAYDROID_LXC_EXTRA:-/etc/taos/waydroid/lxc-taos.conf}"
+RC=0
+fail() { echo "FAIL: $*"; RC=1; }
+
+# 1. Binder. Three static nodes, major 10, created by the kernel from
+#    CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder".
+for n in binder hwbinder vndbinder; do
+    if [ -c "$R/dev/$n" ]; then
+        echo "PASS: /dev/$n is a character device"
+    else
+        fail "/dev/$n missing or not a character device (kernel without binder, or binderfs instead of static nodes)"
+    fi
+done
+
+# 2. A render node driven by msm. Read the DRIVER= line of each node's device
+#    uevent, exactly what waydroid's gpu.py reads. List every node found so a
+#    FAIL says what IS there, not only what is not.
+FOUND=""
+MSM=""
+for ue in "$R"/sys/class/drm/renderD*/device/uevent; do
+    [ -r "$ue" ] || continue
+    node="$(basename "$(dirname "$(dirname "$ue")")")"
+    drv="$(sed -n 's/^DRIVER=//p' "$ue" | head -1)"
+    FOUND="$FOUND $node=${drv:-?}"
+    case "$drv" in msm|msm_dpu) MSM="$node ($drv)" ;; esac
+done
+if [ -n "$MSM" ]; then
+    echo "PASS: render node $MSM"
+elif [ -n "$FOUND" ]; then
+    fail "no msm render node; found:$FOUND"
+else
+    fail "no render node under /sys/class/drm (no GPU driver bound)"
+fi
+
+# 3. cgroup v2 mounted where lxc looks for it.
+if grep -qE '^[^ ]+ /sys/fs/cgroup cgroup2 ' "$R/proc/mounts" 2>/dev/null; then
+    echo "PASS: cgroup2 mounted at /sys/fs/cgroup"
+else
+    fail "cgroup2 is not mounted at /sys/fs/cgroup"
+fi
+
+# 4. PSI: Android's lmkd reads /proc/pressure/memory and exits without it.
+if [ -r "$R/proc/pressure/memory" ]; then
+    echo "PASS: PSI available (/proc/pressure/memory)"
+else
+    fail "/proc/pressure/memory missing (CONFIG_PSI off or psi=0 on the cmdline)"
+fi
+
+# 5. Harden the generated LXC config. Not initialised = no config = refuse;
+#    appending to a path that does not exist would create a file waydroid then
+#    overwrites, and the unit must not run before `waydroid init` anyway.
+if [ ! -f "$LXC_CONFIG" ]; then
+    fail "$LXC_CONFIG missing: waydroid is not initialised (run pmos/waydroid/install-waydroid.sh)"
+elif [ ! -r "$LXC_EXTRA" ]; then
+    fail "$LXC_EXTRA missing: the handset lines to append are not installed"
+else
+    ADDED=0
+    WANT=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        WANT=$((WANT + 1))
+        if ! grep -qxF -- "$line" "$LXC_CONFIG"; then
+            printf '%s\n' "$line" >> "$LXC_CONFIG"
+            ADDED=$((ADDED + 1))
+        fi
+    done < "$LXC_EXTRA"
+    # Control: count what the file now holds, or "appended" is a claim.
+    HAVE=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        grep -qxF -- "$line" "$LXC_CONFIG" && HAVE=$((HAVE + 1))
+    done < "$LXC_EXTRA"
+    if [ "$WANT" -eq 0 ]; then
+        fail "$LXC_EXTRA has no config lines: the harden step measured nothing"
+    elif [ "$HAVE" -eq "$WANT" ]; then
+        echo "PASS: $HAVE/$WANT handset lxc lines present in $LXC_CONFIG ($ADDED appended now)"
+    else
+        fail "only $HAVE/$WANT handset lxc lines present in $LXC_CONFIG after appending"
+    fi
+fi
+
+exit $RC

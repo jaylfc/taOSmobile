@@ -1,0 +1,55 @@
+#!/bin/sh
+# Start the Waydroid session inside the taOS kiosk session, so Android app
+# windows appear as Wayland windows on the glass.
+#
+#   taos-waydroid-session            start the session (blocks while it runs)
+#   taos-waydroid-session show       start it if needed, then show Android's own UI
+#   taos-waydroid-session app <pkg>  start it if needed, then launch one app
+#
+# Run as root (switches to the kiosk user and borrows its sockets, the way
+# taos-shot does) or as taos inside the session. `waydroid session start`
+# must run as the SESSION user with XDG_RUNTIME_DIR and WAYLAND_DISPLAY set;
+# run under sudo it refuses outright. The container itself is root's
+# (waydroid-container.service); the session talks to it over the system bus,
+# which the package's dbus policy opens to every user.
+set -eu
+RUNDIR=/run/user/$(id -u taos)
+WD="$(cd "$RUNDIR" && ls | grep -m1 '^wayland-[0-9]*$')"
+[ -n "$WD" ] || { echo "FAIL: no wayland socket in $RUNDIR (kiosk session not running?)"; exit 1; }
+ENV="XDG_RUNTIME_DIR=$RUNDIR WAYLAND_DISPLAY=$WD HOME=/home/taos"
+as_taos() {
+    if [ "$(id -un)" = taos ]; then env $ENV sh -c "$1"; else su taos -s /bin/sh -c "$ENV $1"; fi
+}
+session_running() {
+    as_taos 'waydroid status 2>/dev/null' | grep -q '^Session:[[:space:]]*RUNNING'
+}
+ensure_session() {
+    if session_running; then
+        echo "session already running"
+        return
+    fi
+    # Backgrounded inside the session user's shell so it outlives this script,
+    # and in a transient unit when started from ssh so it outlives THAT too.
+    if command -v systemd-run >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+        systemd-run --quiet --unit "taos-waydroid-session-$$" --uid taos --gid taos \
+            --setenv=XDG_RUNTIME_DIR="$RUNDIR" --setenv=WAYLAND_DISPLAY="$WD" --setenv=HOME=/home/taos \
+            /usr/bin/waydroid session start
+    else
+        as_taos 'waydroid session start >/dev/null 2>&1 &'
+    fi
+    i=0
+    while [ $i -lt 60 ]; do
+        session_running && { echo "PASS: waydroid session RUNNING"; return; }
+        sleep 1; i=$((i + 1))
+    done
+    echo "FAIL: waydroid session not RUNNING after 60 s"
+    as_taos 'waydroid status' || true
+    exit 1
+}
+case "${1:-start}" in
+    start) exec su taos -s /bin/sh -c "$ENV exec waydroid session start" ;;
+    show)  ensure_session; as_taos 'waydroid show-full-ui' ;;
+    app)   [ -n "${2:-}" ] || { echo "FAIL: app needs a package name"; exit 1; }
+           ensure_session; as_taos "waydroid app launch '$2'" ;;
+    *)     echo "usage: taos-waydroid-session [start|show|app <pkg>]"; exit 2 ;;
+esac
