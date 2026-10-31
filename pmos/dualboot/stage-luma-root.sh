@@ -3,8 +3,9 @@
 # kexec-guest.sh --guest luma. Unpacks $D/luma-root.img.zst sparse, then edits only the OSTree
 # deployment's /etc and the stateroot's /var: the dualboot units (guest-units.sh), taOS's wifi
 # connections, jay's ssh key for the luma user and the taOS agent's own sudo account
-# (guest-agent.sh). luma keeps Luma's factory password and its
-# first-user state stays empty, so Luma's own owner setup still runs on the first launch by hand.
+# (guest-agent.sh). luma keeps Luma's factory password unless LUMA_PIN is set in the environment
+# (never written to the repo), and its first-user state stays empty, so Luma's own owner setup still
+# runs on the first launch by hand.
 # Never touches taOS's own root otherwise.
 set -eu
 D=/var/lib/dualboot
@@ -66,6 +67,17 @@ chown -R 1000:1000 "$SR/var/home/luma"
 . "$HERE/guest-agent.sh"
 dualboot_agent_account "$DEP" "$SR/var/home/taos-agent" /home/taos-agent /home/jay/.ssh/authorized_keys
 echo luma-mobile > "$DEP/etc/hostname"
+
+# luma's PIN (the lock screen's password). Written through the existing file so its inode, mode and
+# label stay as they are
+if [ -n "${LUMA_PIN:-}" ]; then
+  h=$(printf '%s\n' "$LUMA_PIN" | openssl passwd -6 -stdin)
+  awk -F: -v OFS=: -v h="$h" '$1 == "luma" { $2 = h; n++ } { print } END { exit n != 1 }' \
+    "$DEP/etc/shadow" > "$MNT/.shadow.new" || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
+  cat "$MNT/.shadow.new" > "$DEP/etc/shadow"
+  rm -f "$MNT/.shadow.new"
+  echo "luma PIN set"
+fi
 
 # /etc/shadow keeps the mode and SELinux label OSTree ships in usr/etc (an earlier hand edit of this
 # image left it mode 000 with no label); fail loud if they still differ
