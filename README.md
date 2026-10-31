@@ -22,6 +22,9 @@ about 2026-10-05, so read it as last known, not live:
   `pmos/voice/NOTICE-TTS.md`).
 - Cameras (`pmos/camera/`), audio (`docs/pmos-audio-bringup.md`), and a BLE
   check for pairing the taOS Orb (`pmos/ble/`).
+- Android apps as windows in the taOS session (added 2026-10-31): Waydroid, with a
+  handset check that refuses a kernel it cannot run on and denies the container
+  every block device (`pmos/waydroid/`, installer `pmos/waydroid/install-waydroid.sh`).
 - GPS (added 2026-10-09, not yet installed on the handset): `pmos/kiosk/bin/taos-locationd`
   keeps the modem's GNSS on (it works with no SIM) and publishes the latest fix to
   `/run/taos-location/location.json` for the controller's `GET /api/system/location`

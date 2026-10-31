@@ -1,0 +1,69 @@
+#!/bin/sh
+# Start the Waydroid session inside the taOS kiosk session, so Android app
+# windows appear as Wayland windows on the glass.
+#
+#   taos-waydroid-session            start the session (blocks while it runs)
+#   taos-waydroid-session show       start it if needed, then show Android's own UI
+#   taos-waydroid-session app <pkg>  start it if needed, then launch one app
+#
+# Run as root (switches to the kiosk user and borrows its sockets, the way
+# taos-shot does) or as taos inside the session. `waydroid session start`
+# must run as the SESSION user with XDG_RUNTIME_DIR and WAYLAND_DISPLAY set;
+# run under sudo it refuses outright. The container itself is root's
+# (waydroid-container.service); the session talks to it over the system bus,
+# which the package's dbus policy opens to every user.
+set -eu
+RUNDIR=/run/user/$(id -u taos)
+WD="$(cd "$RUNDIR" && ls | grep -m1 '^wayland-[0-9]*$')"
+[ -n "$WD" ] || { echo "FAIL: no wayland socket in $RUNDIR (kiosk session not running?)"; exit 1; }
+ENV="XDG_RUNTIME_DIR=$RUNDIR WAYLAND_DISPLAY=$WD HOME=/home/taos"
+as_taos() {
+    if [ "$(id -un)" = taos ]; then env $ENV sh -c "$1"; else su taos -s /bin/sh -c "$ENV $1"; fi
+}
+session_running() {
+    as_taos 'waydroid status 2>/dev/null' | grep -q '^Session:[[:space:]]*RUNNING'
+}
+ensure_session() {
+    if session_running; then
+        echo "session already running"
+        return
+    fi
+    # Backgrounded inside the session user's shell so it outlives this script,
+    # and in a transient unit when started from ssh so it outlives THAT too.
+    if command -v systemd-run >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+        systemd-run --quiet --unit "taos-waydroid-session-$$" --uid taos --gid taos \
+            --setenv=XDG_RUNTIME_DIR="$RUNDIR" --setenv=WAYLAND_DISPLAY="$WD" --setenv=HOME=/home/taos \
+            /usr/bin/waydroid session start
+    else
+        as_taos 'waydroid session start >/dev/null 2>&1 &'
+    fi
+    i=0
+    while [ $i -lt 60 ]; do
+        session_running && { echo "PASS: waydroid session RUNNING"; multi_windows; return; }
+        sleep 1; i=$((i + 1))
+    done
+    echo "FAIL: waydroid session not RUNNING after 60 s"
+    as_taos 'waydroid status' || true
+    exit 1
+}
+# One window per Android app in the sway session, not one Android screen.
+# A persist. property lives in Android's data, so it is set once per init,
+# but it can only be set through a running session (prop set talks to the
+# IPlatform service inside Android), which is why it lives here and not in
+# the installer. Read back, or "set" is a claim.
+multi_windows() {
+    [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ] && return
+    as_taos 'waydroid prop set persist.waydroid.multi_windows true'
+    if [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ]; then
+        echo "PASS: persist.waydroid.multi_windows=true (takes effect for windows opened from now)"
+    else
+        echo "WARN: persist.waydroid.multi_windows did not read back true (Android still booting?); rerun show"
+    fi
+}
+case "${1:-start}" in
+    start) exec su taos -s /bin/sh -c "$ENV exec waydroid session start" ;;
+    show)  ensure_session; as_taos 'waydroid show-full-ui' ;;
+    app)   [ -n "${2:-}" ] || { echo "FAIL: app needs a package name"; exit 1; }
+           ensure_session; as_taos "waydroid app launch '$2'" ;;
+    *)     echo "usage: taos-waydroid-session [start|show|app <pkg>]"; exit 2 ;;
+esac
