@@ -58,21 +58,42 @@ echo "installed /usr/local/bin/taos-waydroid-check, /usr/local/bin/taos-waydroid
 #     (helpers/lxc.py generate_session_lxc_config), and lxc refuses to start
 #     when the source is missing: measured 2026-10-31, "Failed to mount
 #     /run/user/999/pulse/native". The kiosk session runs PipeWire +
-#     WirePlumber as user units (install-kiosk-continuity.sh) but not the
-#     pipewire-pulse shim that creates that socket, so install and enable it
-#     for the kiosk user; Android's audio then rides the Pulse protocol into
-#     PipeWire, the standard Waydroid path. Checked by the socket's existence,
-#     which is what lxc checks.
-apk add --quiet pipewire-pulse
+#     WirePlumber as user units (install-kiosk-continuity.sh) but the pmOS
+#     audio backend package on the image was the PulseAudio one, which
+#     conflicts with pipewire-pulse (apk: breaks ...-backend-pulseaudio
+#     [!pipewire-pulse]), while pulseaudio itself was not even running. Both
+#     backends provide postmarketos-base-ui-audio-backend, so swap them in one
+#     transaction (simulated 2026-10-31: purges pulseaudio*, installs
+#     pipewire-pulse, pipewire-alsa, pipewire-spa-bluez). Then restart the
+#     kiosk user's PipeWire so the upgraded server runs and enable the Pulse
+#     socket. Checked by the socket's existence, which is what lxc checks.
+#     Android's audio then rides the Pulse protocol into PipeWire, the
+#     standard Waydroid path.
+if ! apk info -e pipewire-pulse >/dev/null 2>&1; then
+    apk add --quiet postmarketos-base-ui-audio-backend-pipewire '!postmarketos-base-ui-audio-backend-pulseaudio' \
+        || { echo "FAIL: could not swap the pmOS audio backend to pipewire (apk add ...-backend-pipewire !...-backend-pulseaudio)"; exit 1; }
+    echo "PASS: audio backend swapped to postmarketos-base-ui-audio-backend-pipewire (pipewire-pulse $(apk version pipewire-pulse 2>/dev/null | awk 'NR==2{print $1}' | sed 's/^pipewire-pulse-//'))"
+    PW_SWAPPED=1
+else
+    echo "PASS: pipewire-pulse already installed"
+    PW_SWAPPED=0
+fi
 KIOSK_UID="$(id -u taos)"
 KIOSK_RUN="/run/user/$KIOSK_UID"
-su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user enable --now pipewire-pulse.socket" >/dev/null 2>&1 \
-    || echo "WARN: could not enable pipewire-pulse.socket for taos (kiosk session not running?)"
-su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user start pipewire-pulse.service" >/dev/null 2>&1 || true
+as_kiosk() { su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN $1"; }
+if [ -d "$KIOSK_RUN/systemd" ]; then
+    as_kiosk "systemctl --user enable pipewire-pulse.socket pipewire-pulse.service" >/dev/null 2>&1 || true
+    if [ "$PW_SWAPPED" = 1 ]; then
+        as_kiosk "systemctl --user restart pipewire.service wireplumber.service" >/dev/null 2>&1 || true
+    fi
+    as_kiosk "systemctl --user start pipewire-pulse.socket pipewire-pulse.service" >/dev/null 2>&1 || true
+else
+    echo "WARN: $KIOSK_RUN/systemd missing (kiosk session not running); pipewire-pulse starts with the next session"
+fi
 i=0; while [ $i -lt 10 ] && [ ! -S "$KIOSK_RUN/pulse/native" ]; do sleep 1; i=$((i + 1)); done
 [ -S "$KIOSK_RUN/pulse/native" ] \
     && echo "PASS: $KIOSK_RUN/pulse/native exists (pipewire-pulse for the kiosk user)" \
-    || { echo "FAIL: $KIOSK_RUN/pulse/native missing; the container cannot start without it"; su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user status --no-pager pipewire-pulse.socket pipewire-pulse.service" 2>&1 | tail -15; exit 1; }
+    || { echo "FAIL: $KIOSK_RUN/pulse/native missing; the container cannot start without it"; as_kiosk "systemctl --user status --no-pager pipewire-pulse.socket pipewire-pulse.service" 2>&1 | tail -15; exit 1; }
 
 # 3. The drop-in. Only systemd's own list of loaded drop-ins proves it is in
 #    effect; a unit that merely starts does not.
