@@ -76,7 +76,14 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
    Agent), a model from your cluster, free taOS models (later, shown as coming soon), or
    "Skip for now" (taOS Agent uses the on-device model with limited abilities).
 8. **Privacy summary.** What stays on device, what leaves it.
-9. **First chat.** Opens the chat with the agent, three suggested prompts tailored from step 5.
+9. **First chat.** Opens the chat with the personal assistant, three suggested prompts tailored
+   from step 5.
+
+Jay's ruling on the agent order (2026-10-31): the tailored first agent is a SEPARATE personal
+assistant, created before taOS Agent ("maybe they should create their personal assistant first").
+taOS Agent is its own onboarding step that explains what taOS Agent is for and that it is
+powerful, which is why a powerful model is recommended; support for smaller on-device models for
+taOS Agent is "coming soon".
 
 Identity rule: the system agent is always named "taOS Agent" whatever harness or model sits
 behind it; a harness swap must not rename it or reset its memory.
@@ -104,7 +111,11 @@ behind it; a harness swap must not rename it or reset its memory.
 - Sampling: temp 0.1, top_k 50, top_p 1.0, min_p 0, repeat 1.1; `enable_thinking: false` for speed.
   Keep onboarding turns short.
 
-## 7. Open questions for Jay
+Jay (2026-10-31): test LFM3, and also look for larger quants or remixes that work better;
+benchmark them on the phone.
 
-- Is the "first agent" in step 9 the taOS Agent itself, or a separate agent tailored to the user?
-- Personal taos.my account while signups are closed: operator-created account, or open signups briefly?
+## 7. Decided
+
+- First agent: a separate personal assistant, created first; taOS Agent is its own later step.
+- Personal taos.my account: operator-created by @taOS-website-dev (card tsk-cx3hj6, no signups flip);
+  Jay sets the password from the reset email, then the account is comped.
