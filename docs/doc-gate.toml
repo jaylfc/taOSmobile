@@ -52,6 +52,9 @@ referenced_paths_scan = [
 # design. Scanning it would demand we either create those files or rewrite the
 # historical record; neither is right, so it is declared out of scope here.
 unscanned_paths = [
+  # The onboarding walkthrough names taOS (tinyagentos) paths and API routes that
+  # live in the other repo; scanning it would demand they exist here.
+  "docs/onboarding/fresh-user-walkthrough-20261031.md",
   "docs/superpowers/plans/2026-07-20-taosmobile-demo-plan.md",
   # The kernel-patch note deliberately names paths OUTSIDE this repo: the
   # pmaports package directory it is applied in, and the two ~/.taos-team
