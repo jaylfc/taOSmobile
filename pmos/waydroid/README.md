@@ -27,6 +27,11 @@ in the taOS sway session. A full-Android boot slot is a separate plan
   never gets a block device, so the UFS partitions stay out of reach whatever
   runs inside. `waydroid init`/`upgrade` regenerate that config, which is why
   the lines are re-applied at start rather than edited in once.
+- Audio: the session config bind-mounts the kiosk user's Pulse socket into the
+  container as a non-optional entry, and lxc refuses to start without it
+  (measured 2026-10-31). The installer adds `pipewire-pulse` and enables its
+  user socket for `taos`, so Android audio reaches PipeWire over the Pulse
+  protocol.
 - `51_waydroid.nft` lets the `waydroid0` bridge through the firewall's
   policy-drop input and forward chains (same shape as `51_docker.nft`).
 

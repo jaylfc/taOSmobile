@@ -8,7 +8,9 @@
 #
 # What it installs, in order, and why that order:
 #   1. the packages (waydroid pulls waydroid-systemd, whose unit this drops in on)
-#   2. the handset check/harden script, the session helper, the lxc lines
+#   2. the handset check/harden script, the session helper, the lxc lines,
+#      and pipewire-pulse for the kiosk user (the session config bind-mounts
+#      its socket, non-optional)
 #   3. the unit drop-in (ExecStartPre check, a real ExecStop)
 #   4. the firewall file, BEFORE the first container start: /etc/nftables.nft
 #      begins with `flush ruleset`, so a firewall reload wipes the nft tables
@@ -50,6 +52,27 @@ install -m 755 "$HERE/bin/taos-waydroid-session" /usr/local/bin/taos-waydroid-se
 install -d -m 755 /etc/taos/waydroid
 install -m 644 "$HERE/lxc-taos.conf" /etc/taos/waydroid/lxc-taos.conf
 echo "installed /usr/local/bin/taos-waydroid-check, /usr/local/bin/taos-waydroid-session, /etc/taos/waydroid/lxc-taos.conf"
+
+# 2b. The Pulse socket. waydroid's session config bind-mounts
+#     $XDG_RUNTIME_DIR/pulse/native into the container as a NON-optional entry
+#     (helpers/lxc.py generate_session_lxc_config), and lxc refuses to start
+#     when the source is missing: measured 2026-10-31, "Failed to mount
+#     /run/user/999/pulse/native". The kiosk session runs PipeWire +
+#     WirePlumber as user units (install-kiosk-continuity.sh) but not the
+#     pipewire-pulse shim that creates that socket, so install and enable it
+#     for the kiosk user; Android's audio then rides the Pulse protocol into
+#     PipeWire, the standard Waydroid path. Checked by the socket's existence,
+#     which is what lxc checks.
+apk add --quiet pipewire-pulse
+KIOSK_UID="$(id -u taos)"
+KIOSK_RUN="/run/user/$KIOSK_UID"
+su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user enable --now pipewire-pulse.socket" >/dev/null 2>&1 \
+    || echo "WARN: could not enable pipewire-pulse.socket for taos (kiosk session not running?)"
+su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user start pipewire-pulse.service" >/dev/null 2>&1 || true
+i=0; while [ $i -lt 10 ] && [ ! -S "$KIOSK_RUN/pulse/native" ]; do sleep 1; i=$((i + 1)); done
+[ -S "$KIOSK_RUN/pulse/native" ] \
+    && echo "PASS: $KIOSK_RUN/pulse/native exists (pipewire-pulse for the kiosk user)" \
+    || { echo "FAIL: $KIOSK_RUN/pulse/native missing; the container cannot start without it"; su taos -s /bin/sh -c "XDG_RUNTIME_DIR=$KIOSK_RUN systemctl --user status --no-pager pipewire-pulse.socket pipewire-pulse.service" 2>&1 | tail -15; exit 1; }
 
 # 3. The drop-in. Only systemd's own list of loaded drop-ins proves it is in
 #    effect; a unit that merely starts does not.
