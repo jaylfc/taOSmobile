@@ -19,6 +19,7 @@ import pytest
 HERE = Path(__file__).parent
 CHECK = HERE / "bin" / "taos-waydroid-check"
 EXTRA = HERE / "lxc-taos.conf"
+ALLOW = "lxc.cgroup2.devices.allow = c *:* rwm"
 DENY = "lxc.cgroup2.devices.deny = b *:* rwm"
 
 
@@ -54,12 +55,17 @@ def test_good_tree_passes_and_appends_deny_line(tmp_path):
     assert r.returncode == 0, r.stdout
     assert "FAIL" not in r.stdout
     assert "PASS: render node renderD128 (msm_dpu)" in r.stdout
-    assert DENY in (tmp_path / "lxc/config").read_text()
-    assert "(1 appended now)" in r.stdout
+    text = (tmp_path / "lxc/config").read_text()
+    assert DENY in text and ALLOW in text
+    # The char allow must precede the block deny: LXC's cgroup2 device filter
+    # is an allowlist once any rule exists (measured 2026-10-31).
+    assert text.index(ALLOW) < text.index(DENY)
+    assert "(2 appended now)" in r.stdout
     # Second run: idempotent, nothing appended twice.
     r2 = run(tmp_path)
     assert r2.returncode == 0
-    assert (tmp_path / "lxc/config").read_text().count(DENY) == 1
+    text2 = (tmp_path / "lxc/config").read_text()
+    assert text2.count(DENY) == 1 and text2.count(ALLOW) == 1
     assert "(0 appended now)" in r2.stdout
 
 
@@ -133,9 +139,9 @@ def test_extra_file_with_only_comments_fails(tmp_path):
     assert "measured nothing" in r.stdout
 
 
-def test_shipped_extra_holds_the_block_device_deny():
+def test_shipped_extra_holds_char_allow_then_block_deny():
     lines = [l for l in EXTRA.read_text().splitlines() if l.strip() and not l.startswith("#")]
-    assert lines == [DENY]
+    assert lines == [ALLOW, DENY]
 
 
 def test_dropin_runs_the_check_and_stops_cleanly():
