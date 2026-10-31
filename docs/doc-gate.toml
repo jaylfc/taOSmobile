@@ -63,6 +63,9 @@ unscanned_paths = [
   # in tinyagentos (routes/auth.py, hub/relay.py) or in the taosusb board repo,
   # not here.
   "docs/taosusb-pairing-plan.md",
+  # The dual-boot plan names upstream Omarchy Mobile and pmaports paths
+  # (initramfs/init, tools/install-phone, init_functions_2nd.sh), none in this repo.
+  "docs/dual-boot-plan.md",
   # The CC-BY-4.0 attribution for the speech model names on-device paths
   # (manifest.json under the install prefix) and upstream URLs, none of which
   # are in this repo.

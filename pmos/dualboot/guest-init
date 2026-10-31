@@ -1,0 +1,117 @@
+#!/bin/busybox ash
+# /init of the guest initramfs (Omarchy, Luma): the pmOS ramdisk's own tools, this script in place of its init.
+# Finds taOS's root inside userdata, loop-mounts the guest root image from it, and switch_roots into
+# the guest's systemd with taOS's root at /mnt/taos. Any failure logs and reboots, which lands back in
+# taOS on the active slot. Never marks a slot.
+/bin/busybox --install -s
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs dev /dev
+mkdir -p /run /taos /newroot
+LOG=/run/guest-init.log
+
+log() { echo "[guest-init] $(cut -d' ' -f1 /proc/uptime) $*" | tee -a "$LOG" > /dev/kmsg; }
+keep_log() {
+  for d in /newroot/mnt/taos /taos; do
+    [ -d "$d/var/lib/dualboot" ] && { cat "$LOG" >> "$d/var/lib/dualboot/initramfs.log"; sync; return; }
+  done
+}
+fail() { log "FAIL: $*"; keep_log; sync; sleep 15; reboot -f; }
+
+log "start, cmdline: $(cat /proc/cmdline)"
+
+# userdata holds pmOS's inner GPT (p1 pmOS_boot, p2 pmOS_root), 4096-byte sectors like pmOS's own init
+i=0
+while :; do
+  UEV=$(grep -l '^PARTNAME=userdata$' /sys/class/block/*/uevent 2>/dev/null | head -n1)
+  [ -n "$UEV" ] && break
+  i=$((i + 1)); [ "$i" -ge 40 ] && fail "no PARTNAME=userdata after 20s"
+  sleep 0.5
+done
+UD=/dev/$(basename "$(dirname "$UEV")")
+log "userdata is $UD"
+
+LOOP=$(losetup --show -Pf --sector-size 4096 "$UD") || fail "losetup $UD"
+i=0
+while [ ! -b "${LOOP}p2" ]; do
+  i=$((i + 1)); [ "$i" -ge 20 ] && fail "${LOOP}p2 never appeared"
+  sleep 0.5
+done
+# nodelalloc + commit=1: a crash seconds after switch_root once left a 0-byte log (data never flushed)
+mount -t ext4 -o rw,nodelalloc,commit=1 "${LOOP}p2" /taos || fail "mount ${LOOP}p2"
+log "taOS root mounted from ${LOOP}p2"
+# No pstore RAM backend on this kernel: keep the kernel log on taOS's root. The fds and the mapped
+# busybox survive switch_root, so this also records Arch systemd's early life (log_target=kmsg).
+# cat exits on the EPIPE of a ring overrun, so it is rerun on the same fd, which resumes at the oldest
+# record. ash's read cannot be the reader (one-byte reads of /dev/kmsg fail, measured). This loop keeps
+# the emptied ramdisk as its root after switch_root, so cat is taOS's static busybox (the plain one needs
+# musl's loader, which Arch lacks) found where taOS's root lives in turn: at /taos, at /newroot/mnt/taos
+# after the move, then through PID 1's root (Arch's) once systemd runs. Gives up rather than spin when
+# none resolves for a long run of passes.
+echo "=== guest boot $(cut -d' ' -f1 /proc/uptime)" >> /taos/var/lib/dualboot/guest-kmsg.log
+if [ -x /taos/bin/busybox.static ]; then
+  exec 3</dev/kmsg 4>>/taos/var/lib/dualboot/guest-kmsg.log
+  while :; do
+    n=0
+    for b in /taos/bin/busybox.static /newroot/mnt/taos/bin/busybox.static /proc/1/root/mnt/taos/bin/busybox.static; do
+      [ -x "$b" ] && { "$b" cat <&3 >&4; n=1; break; }
+    done
+    [ "$n" = 1 ] && miss=0 || miss=$((${miss:-0} + 1))
+    [ "${miss:-0}" -ge 100000 ] && break
+  done &
+  exec 3<&- 4>&-
+else
+  log "no busybox.static on taOS's root: no kernel log kept"
+fi
+
+# dualboot.guest= picks the image (the launcher sets it); ostree= marks an OSTree guest (Luma)
+GUEST=omarchy OST= MODS=
+for a in $(cat /proc/cmdline); do
+  case "$a" in
+    dualboot.guest=*) GUEST=${a#*=} ;;
+    ostree=*) OST=${a#*=} ;;
+    dualboot.modules=*) MODS=/${a#*=} ;;
+  esac
+done
+case "$GUEST" in
+  omarchy) IMG=/taos/var/lib/dualboot/arch-root.img ;;
+  luma) IMG=/taos/var/lib/dualboot/luma-root.img ;;
+  *) fail "unknown dualboot.guest=$GUEST" ;;
+esac
+[ -f "$IMG" ] || fail "no $IMG"
+GLOOP=$(losetup --show -f "$IMG") || fail "losetup $IMG"
+if [ -z "$OST" ]; then
+  mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
+  # Omarchy carries a copy of taOS's modules; a kernel under test (kexec-guest.sh --kernel) brings its own
+  [ -z "$MODS" ] || mount --bind "/taos$MODS" /newroot/usr/lib/modules || fail "bind test modules $MODS"
+else
+  # What ostree-prepare-root does, without composefs: the deployment becomes /, the physical root
+  # /sysroot, the stateroot's var /var, and /usr goes read-only
+  mkdir -p /sysroot
+  mount -t ext4 -o rw "$GLOOP" /sysroot || fail "mount $GLOOP"
+  DEP=$(readlink -f "/sysroot$OST") || fail "resolve ostree=$OST"
+  [ -d "$DEP/usr" ] || fail "ostree=$OST is not a deployment ($DEP)"
+  # A boot without SELinux marks a relabel; Fedora's then walks taOS's root at /mnt/taos and the
+  # /sysroot bind (a directory cycle), fails, and reboots. The deployment's files carry their labels.
+  rm -f "$DEP/.autorelabel"
+  mount --bind "$DEP" /newroot || fail "bind deployment"
+  mount --bind /sysroot /newroot/sysroot || fail "bind sysroot"
+  mount --bind "${DEP%/deploy/*}/var" /newroot/var || fail "bind stateroot var"
+  mount --bind /newroot/usr /newroot/usr && mount -o remount,bind,ro /newroot/usr || fail "usr read-only"
+  mount -t tmpfs -o mode=755 tmpfs /newroot/run || fail "tmpfs run"
+  touch /newroot/run/ostree-booted
+  # The guest ships another kernel's modules: taOS's match the kernel we kexec'd
+  mount --bind "/taos${MODS:-/lib/modules}" /newroot/usr/lib/modules || fail "bind modules"
+  mount --bind /taos/lib/firmware /newroot/usr/lib/firmware || fail "bind firmware"
+  log "ostree deployment $DEP"
+fi
+[ -x /newroot/usr/lib/systemd/systemd ] || fail "guest image has no systemd"
+mkdir -p /newroot/mnt/taos
+mount --move /taos /newroot/mnt/taos || fail "move taOS root"
+log "guest root on $GLOOP, switching"
+keep_log
+sleep 2
+
+exec switch_root /newroot /usr/lib/systemd/systemd
+fail "switch_root returned"
