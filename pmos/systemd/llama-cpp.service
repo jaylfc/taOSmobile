@@ -1,0 +1,47 @@
+[Unit]
+Description=taOS local LLM backend (llama.cpp router mode, built on the handset)
+# The unit name, port and models dir are taOS core's llama.cpp contract
+# (tinyagentos/installers/llamacpp_installer.py, app-catalog/services/llama-cpp):
+# core probes 127.0.0.1:@PORT@/health and auto-registers the backend. Core's own
+# scripts/install-llama-cpp.sh downloads a glibc release binary, which cannot
+# run on pmOS (musl), so install-llama-cpp.sh in this repo builds it instead.
+After=network.target
+
+[Service]
+Type=simple
+# The controller's user: the models dir lives inside its data dir, which is
+# taos:taos 0700, so no other user can reach it.
+User=@USER@
+# @PREFIX@, @MODELS_DIR@, @PORT@ and @THREADS@ are filled in by install-llama-cpp.sh.
+# Sampling sits on the server (LFM3 values from @Strata-dev's Pi runs). A
+# request's own sampling fields still beat these; read GET /slots to see what
+# a request actually used.
+ExecStart=@PREFIX@/bin/llama-server --models-dir @MODELS_DIR@ --models-max 1 \
+  --host 127.0.0.1 --port @PORT@ --jinja --ctx-size 8192 --parallel 1 \
+  --threads @THREADS@ --threads-batch @THREADS@ \
+  --temp 0.1 --top-k 50 --top-p 1.0 --min-p 0 --repeat-penalty 1.1
+Environment=LD_LIBRARY_PATH=@PREFIX@/lib
+Restart=on-failure
+RestartSec=3
+
+# The four big cores (4-7), shared with taos-sttd/taos-ttsd; the little cores
+# stay free for the shell.
+CPUAffinity=4-7
+Nice=5
+# If the phone runs short of memory, lose the model before the UI.
+OOMScoreAdjust=300
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
