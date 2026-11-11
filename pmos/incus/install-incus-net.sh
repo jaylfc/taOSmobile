@@ -14,13 +14,20 @@ set -eu
 SRC="$(dirname "$0")/52_incus.nft"
 DST=/etc/nftables.d/52_incus.nft
 MARK='incus containers'
+# A .bak left by an earlier run must never be restored over this run's file.
+rm -f "$DST.bak"
 [ -f "$DST" ] && cp -p "$DST" "$DST.bak"
 install -m 0644 "$SRC" "$DST"
-if ! nft -c 'flush ruleset; include "/etc/nftables.nft"'; then
-    echo "install-incus-net: ruleset check FAILED, restoring the previous file" >&2
+restore() {
+    echo "install-incus-net: $1 check FAILED, restoring the previous file" >&2
     if [ -f "$DST.bak" ]; then mv "$DST.bak" "$DST"; else rm -f "$DST"; fi
     exit 1
-fi
+}
+nft -c 'flush ruleset; include "/etc/nftables.nft"' || restore ruleset
+# Check the live load too, before any live rule is removed: a load that
+# failed after the delete loop would leave containers with no rules at all.
+nft -c -f "$DST" || restore live
+rm -f "$DST.bak"
 
 # Drop the live copies of this file's inet filter rules (a re-run would
 # otherwise stack duplicates), then load the file; it recreates its own table.
