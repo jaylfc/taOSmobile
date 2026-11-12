@@ -11,8 +11,15 @@
 set -eu
 ID=$(id -u taos)
 for f in /etc/subuid /etc/subgid; do
-    grep -qx "root:$ID:1" "$f" || echo "root:$ID:1" >> "$f"
+    if ! grep -qx "root:$ID:1" "$f"; then
+        # A file without a final newline would glue the entry onto its last
+        # line and break the existing root range.
+        [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ] && echo >> "$f"
+        echo "root:$ID:1" >> "$f"
+    fi
+    # Checked per file, before the restart: one grep over both files passes
+    # when only one of them has the line.
+    grep -qx "root:$ID:1" "$f" || { echo "install-incus-idmap: $f lacks root:$ID:1" >&2; exit 1; }
 done
 systemctl restart incus
-grep -x "root:$ID:1" /etc/subuid /etc/subgid
 echo "install-incus-idmap: ok"
