@@ -1,0 +1,45 @@
+#!/usr/sbin/nft -f
+# Let taOS agent containers on incusbr0 through the handset firewall, and no
+# further into the host than taOS deploys need.
+#
+# /etc/nftables.nft sets policy drop on input and forward. Incus adds its own
+# `inet incus` table with accept rules for the bridge, but under nftables every
+# base chain on a hook is evaluated and a drop in any of them wins: measured
+# 2026-11-10, a fresh container on incusbr0 got no IPv4 address and could not
+# ping its gateway. Same shape as pmos/waydroid/51_waydroid.nft for the accepts.
+#
+# 67: DHCP from incus's dnsmasq. 53: DNS from the same dnsmasq.
+# 6969: TAOS_BRIDGE_URL, how a deployed agent's bridge reaches taOS.
+# The LLM gateway needs no rule: it is an incus proxy device, connected from
+# the host side.
+table inet filter {
+	chain input {
+		iifname "incusbr0" udp dport 67 accept comment "accept DHCP from incus containers"
+		iifname "incusbr0" meta l4proto { tcp, udp } th dport 53 accept comment "accept DNS from incus containers"
+		iifname "incusbr0" tcp dport 6969 accept comment "accept taOS bridge from incus containers"
+	}
+	chain forward {
+		iifname "incusbr0" accept comment "allow outgoing traffic from incus containers"
+		oifname "incusbr0" ct state { established, related } accept comment "accept replies to incus containers"
+	}
+}
+
+# 50_sshd.nft accepts port 22 on every interface, and an accept cannot be
+# taken back inside the same chain, so the scoping lives in its own base chain
+# where a drop still wins: measured 2026-11-10, a container reached the host's
+# sshd before this table existed. Everything from incusbr0 to the host that is
+# not a reply or one of the ports above is dropped.
+table inet taos_incus_guard
+delete table inet taos_incus_guard
+table inet taos_incus_guard {
+	chain input {
+		type filter hook input priority filter - 1; policy accept;
+		iifname != "incusbr0" accept
+		ct state { established, related } accept
+		udp dport 67 accept
+		meta l4proto { tcp, udp } th dport 53 accept
+		tcp dport 6969 accept
+		meta l4proto { icmp, ipv6-icmp } accept
+		drop
+	}
+}
