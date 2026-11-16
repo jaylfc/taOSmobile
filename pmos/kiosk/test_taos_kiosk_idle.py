@@ -73,6 +73,23 @@ def test_a_bad_value_falls_back_to_30_and_says_so(tmp_path, text):
     assert "taos-kiosk-idle:" in err
 
 
+def test_a_malformed_file_means_30_not_the_launcher_value(tmp_path):
+    # The launcher value 0 would switch the timeout off; a broken file must not.
+    args, err = run(tmp_path, "garbage\n", env_secs="0")
+    assert timeout_of(args) == "30" and "using 30" in err
+    args, _ = run(tmp_path, "garbage\n", env_secs="45")
+    assert timeout_of(args) == "30"
+    # Control: with no file at all the launcher value does apply.
+    assert "timeout" not in run(tmp_path, None, env_secs="0")[0]
+
+
+def test_installer_validates_the_same_range_as_the_idle_script():
+    text = (HERE / "install-display.sh").read_text()
+    idle = SCRIPT.read_text()
+    for needle in ('-lt 5', '-gt 3600'):
+        assert needle in text and needle in idle
+
+
 def test_the_file_is_parsed_never_executed(tmp_path):
     marker = tmp_path / "ran"
     run(tmp_path, 'SCREEN_OFF_SECONDS=60\ntouch "%s"\n' % marker)

@@ -17,12 +17,17 @@ set -eu
 # TAOS_KIOSK_IDLE_SECS (exported by the launcher) is only the fallback for a
 # device with no display.conf.
 CONF="${TAOS_DISPLAY_CONF:-/etc/taos/display.conf}"
-IDLE_SECS=""
 if [ -r "$CONF" ]; then
+    # The file exists: it alone decides. A malformed one means 30, never the
+    # launcher's value, which could be 0 and switch the timeout off silently.
     IDLE_SECS="$(sed -n 's/^SCREEN_OFF_SECONDS=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONF" | tail -n 1)"
-    [ -n "$IDLE_SECS" ] || echo "taos-kiosk-idle: no valid SCREEN_OFF_SECONDS in $CONF, using the default" >&2
+    if [ -z "$IDLE_SECS" ]; then
+        echo "taos-kiosk-idle: no valid SCREEN_OFF_SECONDS in $CONF, using 30" >&2
+        IDLE_SECS=30
+    fi
+else
+    IDLE_SECS="${TAOS_KIOSK_IDLE_SECS:-30}"
 fi
-[ -n "$IDLE_SECS" ] || IDLE_SECS="${TAOS_KIOSK_IDLE_SECS:-30}"
 case "$IDLE_SECS" in
     ''|*[!0-9]*) IDLE_SECS=30 ;;
 esac
