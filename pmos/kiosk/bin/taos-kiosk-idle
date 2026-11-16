@@ -9,7 +9,29 @@
 # Keeping the whole thing in a file means sway only ever sees one bare word.
 set -eu
 
-IDLE_SECS="${TAOS_KIOSK_IDLE_SECS:-30}"
+# ONE VALUE drives the screen timeout: SCREEN_OFF_SECONDS in
+# /etc/taos/display.conf. A Settings screen writes that file; this reads it at
+# start, and `swaymsg exec /usr/local/bin/taos-kiosk-idle` applies a new value
+# without a restart. 0 means never. The file is PARSED, never sourced: it is
+# meant to be written by a settings UI, and a sourced file is code.
+# TAOS_KIOSK_IDLE_SECS (exported by the launcher) is only the fallback for a
+# device with no display.conf.
+CONF="${TAOS_DISPLAY_CONF:-/etc/taos/display.conf}"
+IDLE_SECS=""
+if [ -r "$CONF" ]; then
+    IDLE_SECS="$(sed -n 's/^SCREEN_OFF_SECONDS=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONF" | tail -n 1)"
+    [ -n "$IDLE_SECS" ] || echo "taos-kiosk-idle: no valid SCREEN_OFF_SECONDS in $CONF, using the default" >&2
+fi
+[ -n "$IDLE_SECS" ] || IDLE_SECS="${TAOS_KIOSK_IDLE_SECS:-30}"
+case "$IDLE_SECS" in
+    ''|*[!0-9]*) IDLE_SECS=30 ;;
+esac
+# A timeout under 5 s makes the phone unusable and locks its owner out of the
+# setting that would fix it; over an hour is "never" spelled badly.
+if [ "$IDLE_SECS" -ne 0 ] && { [ "$IDLE_SECS" -lt 5 ] || [ "$IDLE_SECS" -gt 3600 ]; }; then
+    echo "taos-kiosk-idle: SCREEN_OFF_SECONDS=$IDLE_SECS is outside 5..3600, using 30" >&2
+    IDLE_SECS=30
+fi
 
 # exec_always re-runs this on `swaymsg reload`, so drop a previous instance
 # first or each reload leaves another swayidle racing the last one. -x matches
@@ -38,6 +60,11 @@ pkill -x swayidle 2>/dev/null || true
 # on the lock screen. Jay reported exactly that. One script owns both halves so
 # the three callers -- this, the power key and the double-tap watcher -- cannot
 # drift apart again.
+if [ "$IDLE_SECS" -eq 0 ]; then
+    # Never: no idle timeout, but the panel still goes off before suspend.
+    exec swayidle -w \
+        before-sleep '/usr/local/bin/taos-kiosk-screen off'
+fi
 exec swayidle -w \
     timeout "$IDLE_SECS" '/usr/local/bin/taos-kiosk-screen off' \
     before-sleep         '/usr/local/bin/taos-kiosk-screen off'
