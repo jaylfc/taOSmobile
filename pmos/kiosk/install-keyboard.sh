@@ -2,7 +2,7 @@
 # Install the system on-screen keyboard on the handset. Run as root ON the
 # device, with the kiosk session running.
 #
-# The keyboard itself (wrapper, `taos-session`, theme packages, layouts) lives
+# The keyboard itself (wrapper, `taos-session`, theme packages) lives
 # in taOS's shared session/ layer and is taken from the taOS checkout on the
 # device, never copied into this repo. The handset still installs its OWN
 # sway-kiosk.conf and launcher from here (the power key, volume keys and
@@ -13,7 +13,7 @@ set -eu
 HERE="$(dirname "$0")"
 SRC="${TAOS_SESSION_SRC:-/root/tinyagentos/session}"
 [ "$(id -u)" = 0 ] || { echo "FAIL: must run as root"; exit 1; }
-for f in bin/taos-session bin/taos-kiosk-keyboard themes/taos-default/theme.json keyboard/layouts/us.yaml; do
+for f in bin/taos-session bin/taos-kiosk-keyboard themes/taos-default/theme.json; do
     [ -r "$SRC/$f" ] || { echo "FAIL: $SRC/$f missing (taOS checkout too old for the system keyboard?)"; exit 1; }
 done
 # Control for the grep below: an unreadable config would also "lack" the line.
@@ -29,10 +29,9 @@ install -m 755 "$SRC/bin/taos-kiosk-keyboard" /usr/local/bin/taos-kiosk-keyboard
 for s in taos-session taos-kiosk-keyboard; do
     sh -n "/usr/local/bin/$s" || { echo "FAIL: installed $s is not valid sh"; exit 1; }
 done
-install -d -m 755 /usr/share/taos/themes /usr/share/taos/keyboard/layouts /etc/taos/sway.d
+install -d -m 755 /usr/share/taos/themes /etc/taos/sway.d
 cp -R "$SRC/themes/." /usr/share/taos/themes/
-cp -R "$SRC/keyboard/layouts/." /usr/share/taos/keyboard/layouts/
-chmod -R a+rX /usr/share/taos/themes /usr/share/taos/keyboard
+chmod -R a+rX /usr/share/taos/themes
 [ -d /var/lib/taos ] || install -d -m 755 /var/lib/taos
 install -d -m 755 -o taos /var/lib/taos/session
 
