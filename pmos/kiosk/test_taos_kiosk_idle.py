@@ -62,6 +62,8 @@ def test_zero_means_never_but_still_blanks_before_sleep(tmp_path):
 @pytest.mark.parametrize("text", [
     "SCREEN_OFF_SECONDS=2\n",          # too short to reach the setting again
     "SCREEN_OFF_SECONDS=99999\n",
+    "SCREEN_OFF_SECONDS=99999999999999999999\n",   # too large for shell arithmetic
+    "SCREEN_OFF_SECONDS=00000000000000000060\n",   # long, though numerically in range: refused, not parsed
     "SCREEN_OFF_SECONDS=60; touch /tmp/x\n",
     "SCREEN_OFF_SECONDS=$(id)\n",
     "SCREEN_OFF_SECONDS=-5\n",
@@ -81,6 +83,27 @@ def test_a_malformed_file_means_30_not_the_launcher_value(tmp_path):
     assert timeout_of(args) == "30"
     # Control: with no file at all the launcher value does apply.
     assert "timeout" not in run(tmp_path, None, env_secs="0")[0]
+
+
+def test_installer_range_check_survives_a_number_too_large_for_the_shell(tmp_path):
+    """`[ "$V" -ne 0 ]` errors on an integer the shell cannot hold, and the error
+    used to skip the range test, so the installer reported the value as fine."""
+    text = (HERE / "install-display.sh").read_text()
+    start = text.index("# Length first")
+    end = text.index("fi\n", start) + 3
+    snippet = text[start:end]
+
+    def verdict(v):
+        r = subprocess.run(["sh", "-c", 'V="$1"; ' + snippet + "\necho ACCEPTED", "x", v],
+                           capture_output=True, text=True)
+        return r.returncode, r.stdout
+
+    for bad in ("99999999999999999999", "99999", "4", "3601"):
+        rc, out = verdict(bad)
+        assert rc == 1 and "FAIL" in out and "ACCEPTED" not in out, (bad, rc, out)
+    for good in ("0", "5", "60", "3600"):
+        rc, out = verdict(good)
+        assert rc == 0 and out.strip() == "ACCEPTED", (good, rc, out)
 
 
 def test_installer_validates_the_same_range_as_the_idle_script():

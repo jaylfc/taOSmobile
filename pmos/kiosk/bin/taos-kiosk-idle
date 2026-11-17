@@ -30,6 +30,12 @@ else
 fi
 case "$IDLE_SECS" in
     ''|*[!0-9]*) IDLE_SECS=30 ;;
+    ?????*)
+        # More digits than the range can have. Refused here, before any
+        # arithmetic: a number too large for the shell makes `[ -ne ]` fail
+        # with an error, which would skip the range test below.
+        echo "taos-kiosk-idle: SCREEN_OFF_SECONDS=$IDLE_SECS is outside 5..3600, using 30" >&2
+        IDLE_SECS=30 ;;
 esac
 # A timeout under 5 s makes the phone unusable and locks its owner out of the
 # setting that would fix it; over an hour is "never" spelled badly.

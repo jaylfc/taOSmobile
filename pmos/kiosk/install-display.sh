@@ -26,7 +26,10 @@ V="$(sed -n 's/^SCREEN_OFF_SECONDS=\([0-9][0-9]*\)[[:space:]]*$/\1/p' /etc/taos/
 [ -n "$V" ] || { echo "FAIL: /etc/taos/display.conf has no valid SCREEN_OFF_SECONDS"; exit 1; }
 # The same range taos-kiosk-idle accepts: reporting a value it would reject
 # (and replace with 30) would be a false "ok". The file is left as it is.
-if [ "$V" -ne 0 ] && { [ "$V" -lt 5 ] || [ "$V" -gt 3600 ]; }; then
+# Length first: a number too large for the shell makes `[ -ne ]` fail with an
+# error, which would skip the range test.
+case "$V" in ?????*) TOO_LONG=1 ;; *) TOO_LONG=0 ;; esac
+if [ "$TOO_LONG" = 1 ] || { [ "$V" -ne 0 ] && { [ "$V" -lt 5 ] || [ "$V" -gt 3600 ]; }; }; then
     echo "FAIL: SCREEN_OFF_SECONDS=$V in /etc/taos/display.conf is outside 5..3600 (0 = never); the phone will use 30 until it is corrected, or run $0 --reset"
     exit 1
 fi
