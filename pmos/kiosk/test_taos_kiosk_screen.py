@@ -1,0 +1,98 @@
+"""taos-kiosk-screen powers the panel off only once the glass is black.
+
+Nothing paints while the output is off, so the next wake shows whatever frame
+the panel held when the power went. A fixed sleep cut the page's closing
+animation short and that half-faded frame flashed on every wake.
+
+Run: python3 -m pytest -q pmos/kiosk/test_taos_kiosk_screen.py
+"""
+import os
+import pathlib
+import subprocess
+import time
+
+HERE = pathlib.Path(__file__).resolve().parent
+SCRIPT = HERE / "bin" / "taos-kiosk-screen"
+
+BRIGHT = b"P6\n8 4\n255\n" + b"\x80" * 96
+BLACK = b"P6\n8 4\n255\n" + b"\x00" * 96
+
+
+def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True):
+    """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
+    Returns (ordered log lines, stderr, seconds taken)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "log"
+    log.write_text("")
+    start = tmp_path / "start"
+    (tmp_path / "bright.ppm").write_bytes(BRIGHT)
+    (tmp_path / "black.ppm").write_bytes(BLACK)
+    if grim_ok:
+        (bindir / "grim").write_text(
+            '#!/bin/sh\n'
+            'now=$(date +%%s%%N); t0=$(cat "%s")\n'
+            'if [ $(( (now - t0) / 1000000 )) -lt %d ]; then echo "grim bright" >> "%s"; cat "%s/bright.ppm"\n'
+            'else echo "grim black" >> "%s"; cat "%s/black.ppm"; fi\n'
+            % (start, int(bright_for_s * 1000), log, tmp_path, log, tmp_path))
+    else:
+        (bindir / "grim").write_text('#!/bin/sh\necho "grim failed" >> "%s"\nexit 1\n' % log)
+    (bindir / "swaymsg").write_text('#!/bin/sh\necho "swaymsg $*" >> "%s"\n' % log)
+    (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
+    for n in ("grim", "swaymsg", "curl"):
+        os.chmod(bindir / n, 0o755)
+    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]))
+    if cap_ms is not None:
+        env["TAOS_BLACK_WAIT_MS"] = str(cap_ms)
+    start.write_text(str(time.time_ns()))
+    t0 = time.time()
+    r = subprocess.run(["sh", str(SCRIPT), "off"], env=env, capture_output=True, text=True, timeout=15)
+    took = time.time() - t0
+    assert r.returncode == 0, r.stderr
+    return log.read_text().splitlines(), r.stderr, took
+
+
+def power_off_index(lines):
+    hits = [i for i, l in enumerate(lines) if "power off" in l]
+    assert len(hits) == 1, lines
+    return hits[0]
+
+
+def test_power_goes_off_only_after_the_screen_is_black(tmp_path):
+    # Black arrives at 1.0 s: later than the old fixed 0.55 s sleep.
+    lines, err, took = run(tmp_path, bright_for_s=1.0)
+    i = power_off_index(lines)
+    before = lines[:i]
+    probes = [l for l in before if l.startswith("grim")]
+    assert probes[-1] == "grim black", before[-4:]
+    assert probes.count("grim black") == 1   # it stopped looking at the first black
+    assert "grim bright" in before          # it did look while the screen was lit
+    assert any(l.startswith("curl") and "lock-screen-off" in l for l in before)
+    assert took >= 1.0 and err == ""
+    # Touch is gated before the power goes, and after the wait.
+    gate = [k for k, l in enumerate(lines) if "events disabled" in l]
+    assert gate and before.index("grim black") < gate[0] < i
+
+
+def test_an_already_black_screen_does_not_wait_for_the_cap(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=0.0)
+    power_off_index(lines)
+    assert took < 1.0 and err == ""
+
+
+def test_a_screen_that_never_blackens_still_powers_off_and_says_so(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=60, cap_ms=600)
+    power_off_index(lines)
+    assert "grim black" not in lines
+    assert "not black" in err and "powering off anyway" in err
+    assert 0.6 <= took < 3.0
+    # Control: the same cap with a screen that does go black says nothing.
+    lines, err, took = run(tmp_path, bright_for_s=0.2, cap_ms=600)
+    power_off_index(lines)
+    assert err == ""
+
+
+def test_a_failing_probe_cannot_stop_the_screen_going_off(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=0, cap_ms=500, grim_ok=False)
+    power_off_index(lines)
+    assert "powering off anyway" in err and took < 3.0

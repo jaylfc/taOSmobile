@@ -56,6 +56,36 @@ page() {
         >/dev/null 2>&1 || true
 }
 
+# Is the screen black right now? Reads a 4 px wide strip down the middle of the
+# output: the closing animation ends on a thin line at the centre, so a strip
+# through the centre is black only once that line has gone too. Counts bytes
+# brighter than 16 in the raw image; the header is a couple of dozen of them.
+is_black() {
+    _n="$(grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - 2>/dev/null | tr -d '\000-\020' | wc -c)"
+    case "$_n" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_n" -gt 0 ] && [ "$_n" -lt 64 ]
+}
+
+# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s). The floor of 150 ms keeps
+# one frame's worth of time even if the first probe is black, and the cap
+# means a page that never blackens costs time, not the screen-off.
+wait_black() {
+    _cap="${TAOS_BLACK_WAIT_MS:-2000}"
+    case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
+    _t0="$(date +%s%N 2>/dev/null)"
+    case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
+    sleep 0.15
+    while :; do
+        is_black && return 0
+        _el=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
+        if [ "$_el" -ge "$_cap" ]; then
+            echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
+            return 0
+        fi
+        sleep 0.05
+    done
+}
+
 case "${1:-}" in
 off)
     page off
@@ -65,7 +95,15 @@ off)
     # frame on the panel must be the black it ends on. This was 0.12 s, which
     # only had to cover one black frame; 50 ms over the animation leaves room
     # for chromium to composite that frame on a busy phone.
-    sleep 0.55
+    #
+    # A fixed 0.55 s was not enough, measured 2026-11-17: the first frame after
+    # a wake was the lock face, half faded, with the PREVIOUS minute on its
+    # clock -- the frame the panel was holding when the power went, because the
+    # animation had not finished. The message has to reach the page first, and
+    # when the phone slept UNLOCKED the shell has to load the lock page before
+    # it can animate at all. So do not guess a time: look at the glass and
+    # power off when it is black, or after 2 s whatever it shows.
+    wait_black
     touch_events disabled
     exec swaymsg "output * power off"
     ;;
