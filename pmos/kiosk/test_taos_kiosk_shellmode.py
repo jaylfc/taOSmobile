@@ -104,3 +104,83 @@ def test_the_session_config_no_longer_starts_the_bar():
     live = [ln for ln in conf.splitlines() if not ln.lstrip().startswith("#")]
     assert not any("taos-kiosk-bar" in ln for ln in live)
     assert any("exec_always /usr/local/bin/taos-kiosk-shellmode" in ln for ln in live)
+
+
+# --- the bar can be alive and paint nothing --------------------------------
+# Measured 2026-11-17: waybar up 14 h, strip reserved, nothing drawn; the strip
+# showed stale lock-screen pixels and there was no back, home or recents.
+
+def _ppm(sample, w=4, h=4):
+    return b"P6\n%d %d\n255\n" % (w, h) + bytes([sample]) * (w * h * 3)
+
+
+def test_ppm_has_bright_reads_the_samples_not_the_header():
+    m = _load()
+    assert m.ppm_has_bright(_ppm(255)) is True
+    assert m.ppm_has_bright(_ppm(8)) is False        # the bar's own near-black
+    assert m.ppm_has_bright(_ppm(150)) is False       # at the threshold is not above it
+    assert m.ppm_has_bright(b"") is False
+    assert m.ppm_has_bright(b"not an image") is False
+    assert m.ppm_has_bright(b"P6\n4 4\n255\n") is False   # header only
+
+
+def test_bar_painted_looks_where_back_and_recents_are(monkeypatch):
+    m = _load()
+    seen = []
+    monkeypatch.setattr(m, "lit_output", lambda: (540, 1200))
+    monkeypatch.setattr(m, "region_bright", lambda x, y, w, h: seen.append((x, y, w, h)) or True)
+    assert m.bar_painted() is True
+    # 120 px either side of the centre, inside the bottom 44 px.
+    assert seen == [(138, 1163, 24, 30), (378, 1163, 24, 30)]
+    for x, y, w, h in seen:
+        assert y >= 1200 - 44 and y + h <= 1200
+
+
+@pytest.mark.parametrize("spots,expected", [
+    ([True, True], True),
+    ([False, False], False),     # nothing drawn in the strip
+    ([True, False], False),      # one glyph is not a bar
+    ([None, True], None),        # could not read: no answer
+])
+def test_bar_painted_needs_both_glyphs(monkeypatch, spots, expected):
+    m = _load()
+    it = iter(spots)
+    monkeypatch.setattr(m, "lit_output", lambda: (540, 1200))
+    monkeypatch.setattr(m, "region_bright", lambda *a: next(it))
+    assert m.bar_painted() is expected
+
+
+def test_bar_painted_gives_no_answer_on_a_dark_panel(monkeypatch):
+    m = _load()
+    monkeypatch.setattr(m, "lit_output", lambda: None)
+    monkeypatch.setattr(m, "region_bright", lambda *a: pytest.fail("grim must not run on a dark panel"))
+    assert m.bar_painted() is None
+
+
+def _guard(monkeypatch, running=True, wanted=True, looks=(False, False)):
+    m = _load()
+    restarts = []
+    it = iter(looks)
+    monkeypatch.setattr(m, "bar_running", lambda: running)
+    monkeypatch.setattr(m, "still_wants_bar", lambda: wanted)
+    monkeypatch.setattr(m, "bar_painted", lambda: next(it))
+    monkeypatch.setattr(m, "start_bar", lambda replace=False: restarts.append(replace))
+    return m.check_bar_painted(sleep=lambda s: None), restarts
+
+
+def test_a_running_bar_that_is_not_on_the_glass_is_restarted(monkeypatch):
+    did, restarts = _guard(monkeypatch)
+    assert did is True and restarts == [True]
+
+
+@pytest.mark.parametrize("kw", [
+    dict(looks=(True,)),              # it is painted: leave it alone
+    dict(looks=(False, True)),        # one bad frame, then fine: not broken
+    dict(looks=(None,)),              # could not read the glass
+    dict(looks=(False, None)),        # second look unreadable
+    dict(wanted=False),               # locked again: fullscreen covers the bar by design
+    dict(running=False),              # not started yet: start_bar's job, not this one's
+])
+def test_the_guard_does_not_restart_a_bar_it_cannot_fault(monkeypatch, kw):
+    did, restarts = _guard(monkeypatch, **kw)
+    assert did is False and restarts == []

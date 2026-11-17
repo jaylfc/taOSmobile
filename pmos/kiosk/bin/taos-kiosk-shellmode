@@ -34,6 +34,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 
 KIOSK_APP_ID = "chrome-127.0.0.1__-Default"   # the kiosk's app_id, measured
 # EXACT, not a prefix: a taOS app opened in the kiosk's profile is
@@ -75,6 +77,131 @@ def start_bar(replace=False):
     """Start the nav bar unless it is up. replace=True restarts it (a reload)."""
     if replace or not bar_running():
         subprocess.run([BAR])
+
+
+# --- THE BAR CAN BE ALIVE AND PAINT NOTHING -------------------------------
+#
+# Measured 2026-11-17: waybar had been up 14 hours, its process healthy, its
+# strip still reserved (workspace 1156 high), and nothing of it on the glass.
+# The strip showed stale lock-screen pixels and there was no back, home or
+# recents. bar_running() cannot see that, and sway does not report layer
+# surfaces. So look at the glass: a painted bar has bright glyphs where back
+# and recents sit, and neither the lock screen nor the wallpaper has anything
+# there. What stops it painting is not known; restarting it brings it back.
+
+#: Seconds after the desktop appears before looking, so the unlock animation
+#: and the un-fullscreen have finished.
+PAINT_CHECK_DELAY = 1.5
+#: Bar geometry, from /etc/taos/waybar: 44 px high, three 120 px boxes centred
+#: as a group, so back and recents sit 120 px either side of the centre.
+BAR_HEIGHT = 44
+GLYPH_OFFSET = 120
+GLYPH_BOX = (24, 30)       # probe box, logical px
+BRIGHT = 150               # a glyph is near white; the bar and wallpaper are not
+
+
+def ppm_has_bright(data, threshold=BRIGHT):
+    """True when a binary PPM (P6) holds any sample above `threshold`."""
+    if not data.startswith(b"P6"):
+        return False
+    pos = 0
+    for _ in range(3):                 # magic, "W H", maxval: three lines
+        pos = data.find(b"\n", pos) + 1
+        if pos <= 0:
+            return False
+    body = data[pos:]
+    return bool(body) and max(body) > threshold
+
+
+def lit_output():
+    """(width, height) of the powered output in logical px, or None when the
+    panel is off (grim cannot capture a dark output and would hang)."""
+    out = swaymsg("-t", "get_outputs", "-r").stdout
+    try:
+        for o in json.loads(out or "[]"):
+            if o.get("active") and o.get("power"):
+                r = o.get("rect") or {}
+                if r.get("width") and r.get("height"):
+                    return r["width"], r["height"]
+    except ValueError:
+        pass
+    return None
+
+
+def region_bright(x, y, w, h):
+    try:
+        r = subprocess.run(["grim", "-g", "%d,%d %dx%d" % (x, y, w, h), "-t", "ppm", "-"],
+                           capture_output=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout:
+        return None
+    return ppm_has_bright(r.stdout)
+
+
+def bar_painted():
+    """True/False when the glass could be read; None when it could not (panel
+    off, grim missing): no answer is never a reason to restart anything."""
+    size = lit_output()
+    if not size:
+        return None
+    width, height = size
+    bw, bh = GLYPH_BOX
+    y = height - BAR_HEIGHT // 2 - bh // 2
+    spots = [region_bright(width // 2 + dx - bw // 2, y, bw, bh)
+             for dx in (-GLYPH_OFFSET, GLYPH_OFFSET)]
+    if any(s is None for s in spots):
+        return None
+    return all(spots)
+
+
+def still_wants_bar():
+    """The check runs later: by then the phone may be locked again, and a
+    fullscreen lock screen covers the bar by design."""
+    out = swaymsg("-t", "get_tree", "-r").stdout
+    try:
+        tree = json.loads(out or "{}")
+    except ValueError:
+        return False
+    for con in walk(tree):
+        if (con.get("app_id") == KIOSK_APP_ID and con.get("visible")
+                and not con.get("fullscreen_mode") and not loading(con.get("name"))
+                and not wanted_fullscreen(con.get("name"))):
+            return True
+    return False
+
+
+def check_bar_painted(sleep=time.sleep):
+    """Restart the bar if it is up, wanted, and twice in a row not on the glass."""
+    if not bar_running() or not still_wants_bar():
+        return False
+    if bar_painted() is not False:
+        return False
+    sleep(0.7)                          # one bad frame is not a broken bar
+    if not still_wants_bar() or bar_painted() is not False:
+        return False
+    sys.stderr.write("taos-kiosk-shellmode: nav bar is running but not on the glass, restarting it\n")
+    sys.stderr.flush()
+    start_bar(replace=True)
+    return True
+
+
+_pending = threading.Lock()
+
+
+def schedule_paint_check():
+    """At most one check waiting at a time; events arrive in bursts."""
+    if not _pending.acquire(blocking=False):
+        return
+
+    def run():
+        try:
+            time.sleep(PAINT_CHECK_DELAY)
+            check_bar_painted()
+        finally:
+            _pending.release()
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 #: taOS apps opened in the kiosk's profile (taos-shelld /launch). The kiosk's
@@ -146,6 +273,7 @@ def main():
         if event.get("change") in ("new", "title", "focus", "fullscreen_mode"):
             if apply(event.get("container") or {}):
                 start_bar()
+                schedule_paint_check()
     return proc.wait()
 
 
