@@ -89,6 +89,7 @@ mkdir -p "$MNT/home/jay/.ssh"
 cp /home/jay/.ssh/authorized_keys "$MNT/home/jay/.ssh/authorized_keys"
 . "$(dirname "$0")/guest-units.sh"
 dualboot_guest_units "$MNT" /usr/local/bin Omarchy arch omarchy-mobile
+dualboot_return_entry "$MNT/usr/local/bin" /usr/local/bin "$MNT/usr/share/applications"
 mkdir -p "$MNT/mnt/taos"
 chroot "$MNT" /bin/bash /root/stage-a-config.sh
 chroot "$MNT" chown -R jay:jay /home/jay/.ssh

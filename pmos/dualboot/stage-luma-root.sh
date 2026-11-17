@@ -38,6 +38,9 @@ say "deployment $DEP"
 say units
 . "$HERE/guest-units.sh"
 dualboot_guest_units "$DEP" /etc/dualboot Luma luma luma-mobile
+# /usr is read-only on OSTree; /usr/local is /var/usrlocal in the stateroot, and its share/ is on
+# the default XDG_DATA_DIRS, so the launcher finds the entry there
+dualboot_return_entry "$DEP/etc/dualboot" /etc/dualboot "$SR/var/usrlocal/share/applications"
 mkdir -p "$DEP/mnt/taos"
 for u in dualboot-marker dualboot-heartbeat dualboot-return dualboot-usbnet; do
   t=$(sed -n 's/^WantedBy=//p' "$DEP/etc/systemd/system/$u.service")
