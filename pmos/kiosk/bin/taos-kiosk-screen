@@ -60,10 +60,21 @@ page() {
 # output: the closing animation ends on a thin line at the centre, so a strip
 # through the centre is black only once that line has gone too. Counts bytes
 # brighter than 16 in the raw image; the header is a couple of dozen of them.
+#
+# `timeout`, always: grim BLOCKS FOREVER on an output that is off (it has no
+# capture formats to offer). An off request for a panel that is already off
+# hung here, and the moment the panel next came on, the stuck request finished
+# its job and switched it straight off again: the phone could not be woken.
 is_black() {
-    _n="$(grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - 2>/dev/null | tr -d '\000-\020' | wc -c)"
+    _n="$(timeout 1 grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - 2>/dev/null | tr -d '\000-\020' | wc -c)"
     case "$_n" in ''|*[!0-9]*) return 1 ;; esac
     [ "$_n" -gt 0 ] && [ "$_n" -lt 64 ]
+}
+
+# Is any output powered? An off request often arrives for a panel that is
+# already off (the idle timer fires again, the power key after a timeout).
+panel_lit() {
+    swaymsg -t get_outputs -r 2>/dev/null | grep -q '"power": *true'
 }
 
 # Wait for black, at most TAOS_BLACK_WAIT_MS (2 s). The floor of 150 ms keeps
@@ -76,6 +87,8 @@ wait_black() {
     case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
     sleep 0.15
     while :; do
+        # Nothing to wait for, and nothing grim could read, on a dark panel.
+        panel_lit || return 0
         is_black && return 0
         _el=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
         if [ "$_el" -ge "$_cap" ]; then
@@ -88,7 +101,6 @@ wait_black() {
 
 case "${1:-}" in
 off)
-    page off
     # The page now closes the lock screen into the centre over 0.5 s (Jay:
     # "close into the centre ... a quick 0.5 second animation", ls-tv-off),
     # and nothing paints once the output is down, so wait it out: the last
@@ -103,7 +115,10 @@ off)
     # when the phone slept UNLOCKED the shell has to load the lock page before
     # it can animate at all. So do not guess a time: look at the glass and
     # power off when it is black, or after 2 s whatever it shows.
-    wait_black
+    if panel_lit; then
+        page off
+        wait_black
+    fi
     touch_events disabled
     exec swaymsg "output * power off"
     ;;
