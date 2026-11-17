@@ -61,7 +61,10 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         # What grim really does on a dark output: never returns.
         (bindir / "grim").write_text('#!/bin/sh\necho "grim hung" >> "%s"\nsleep 60\n' % log)
     (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
-    for n in ("grim", "swaymsg", "curl"):
+    # A sleep that is logged and still sleeps, so the order of looks and waits can be read.
+    real_sleep = subprocess.run(["sh", "-c", "command -v sleep"], capture_output=True, text=True).stdout.strip()
+    (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
+    for n in ("grim", "swaymsg", "curl", "sleep"):
         os.chmod(bindir / n, 0o755)
     env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
     if query_fails:
@@ -239,3 +242,18 @@ def test_two_wakes_in_the_same_second_leave_different_stamps(tmp_path):
         run_on(tmp_path)
         seen.add((tmp_path / "taos-screen.wake").read_text())
     assert len(seen) == 3, seen
+
+
+def test_an_already_black_screen_is_looked_at_before_any_wait(tmp_path):
+    """The wait used to sleep 150 ms before its first look, on every screen-off."""
+    lines, err, took = run(tmp_path, bright_for_s=0.0)
+    i = power_off_index(lines)
+    before = lines[:i]
+    assert "grim black" in before
+    assert not any(l.startswith("sleep") for l in before), before
+    # Control: a lit screen does wait between looks.
+    lines, err, took = run(tmp_path, bright_for_s=0.4)
+    i = power_off_index(lines)
+    first_look = next(n for n, l in enumerate(lines) if l.startswith("grim"))
+    assert any(l.startswith("sleep") for l in lines[first_look:i]), lines
+    assert not any(l.startswith("sleep") for l in lines[:first_look]), lines

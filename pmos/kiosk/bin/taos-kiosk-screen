@@ -99,15 +99,16 @@ panel_state() {
 WAKE_STAMP="${XDG_RUNTIME_DIR:-/tmp}/taos-screen.wake"
 wake_stamp() { cat "$WAKE_STAMP" 2>/dev/null || echo none; }
 
-# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s). The floor of 150 ms keeps
-# one frame's worth of time even if the first probe is black, and the cap
-# means a page that never blackens costs time, not the screen-off.
+# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s); the cap means a page that
+# never blackens costs time, not the screen-off. LOOK FIRST, then sleep: this
+# used to sleep 150 ms before the first look "to leave a frame's time", which
+# guaranteed nothing a look does not and cost 150 ms on every screen-off. With
+# the page already black the whole off path measured 337 to 515 ms.
 wait_black() {
     _cap="${TAOS_BLACK_WAIT_MS:-2000}"
     case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
     _t0="$(date +%s%N 2>/dev/null)"
     case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
-    sleep 0.15
     while :; do
         # Nothing to wait for, and nothing grim could read, on a dark panel.
         # An unknown state keeps looking: the looks are time-limited anyway.
@@ -121,7 +122,7 @@ wait_black() {
             echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
             return 0
         fi
-        sleep 0.05
+        sleep 0.03
     done
 }
 
