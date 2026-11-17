@@ -249,6 +249,9 @@
         img.loading = "lazy";
         img.src = "/photo/" + encodeURIComponent(p.name);
         img.alt = p.name;
+        // A locked phone shows only this session's shots and deletes nothing
+        // (the service refuses too; this just does not offer a dead button).
+        if (d.locked) { tile.appendChild(img); grid.appendChild(tile); return; }
         var del = document.createElement("button");
         del.textContent = "✕";
         del.title = "Delete";
