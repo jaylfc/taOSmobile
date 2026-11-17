@@ -23,7 +23,7 @@ ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 
 def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
-        query_fails=False, wake_at_s=None):
+        query_fails=False, wake_at_s=None, wake_in_gap=False):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -36,10 +36,11 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     if grim_ok:
         (bindir / "grim").write_text(
             '#!/bin/sh\n'
+            ': > "%s/probed"\n'
             'now=$(date +%%s%%N); t0=$(cat "%s")\n'
             'if [ $(( (now - t0) / 1000000 )) -lt %d ]; then echo "grim bright" >> "%s"; cat "%s/bright.ppm"\n'
             'else echo "grim black" >> "%s"; cat "%s/black.ppm"; fi\n'
-            % (start, int(bright_for_s * 1000), log, tmp_path, log, tmp_path))
+            % (tmp_path, start, int(bright_for_s * 1000), log, tmp_path, log, tmp_path))
     else:
         (bindir / "grim").write_text('#!/bin/sh\necho "grim failed" >> "%s"\nexit 1\n' % log)
     power = tmp_path / "power"
@@ -50,9 +51,12 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         '#!/bin/sh\n'
         'case "$*" in\n'
         '  *get_outputs*) printf \'[{"name":"DSI-1","power": %%s}]\\n\' "$(cat "%s")"; exit 0 ;;\n'
-        '  *"power off"*) echo false > "%s" ;;\n'
+        '  *"power off"*) echo false > "%s"\n'
+        # A wake that stamped just after the off's last check and lit the
+        # panel just before this power-off: the gap no check before it closes.
+        '     [ -e "%s/wake_in_gap" ] && echo gap-wake > "%s/taos-screen.wake" ;;\n'
         'esac\n'
-        'echo "swaymsg $*" >> "%s"\n' % (power, power, log))
+        'echo "swaymsg $*" >> "%s"\n' % (power, power, tmp_path, tmp_path, log))
     if grim_hangs:
         # What grim really does on a dark output: never returns.
         (bindir / "grim").write_text('#!/bin/sh\necho "grim hung" >> "%s"\nsleep 60\n' % log)
@@ -66,6 +70,8 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         os.chmod(bindir / "swaymsg", 0o755)
     if cap_ms is not None:
         env["TAOS_BLACK_WAIT_MS"] = str(cap_ms)
+    if wake_in_gap:
+        (tmp_path / "wake_in_gap").write_text("")
     start.write_text(str(time.time_ns()))
     t0 = time.time()
     if wake_at_s is None:
@@ -74,7 +80,12 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     else:
         p = subprocess.Popen(["sh", str(SCRIPT), "off"], env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)
-        time.sleep(wake_at_s)
+        # Not a sleep: the wake goes in only once the off is provably inside
+        # its wait (it has looked at the glass), however slowly it started.
+        deadline = time.time() + 10
+        while not (tmp_path / "probed").exists():
+            assert time.time() < deadline, "the off never probed the glass"
+            time.sleep(0.01)
         w = subprocess.run(["sh", str(SCRIPT), "on"], env=env, capture_output=True, text=True, timeout=15)
         assert w.returncode == 0, w.stderr
         _, err = p.communicate(timeout=15)
@@ -82,6 +93,20 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     took = time.time() - t0
     assert rc == 0, err
     return log.read_text().splitlines(), err, took
+
+
+def run_on(tmp_path):
+    """One wake, with a `date` that has no sub-second precision at all."""
+    bindir = tmp_path / "onbin"
+    bindir.mkdir(exist_ok=True)
+    for n in ("swaymsg", "curl"):
+        (bindir / n).write_text("#!/bin/sh\nexit 0\n")
+        os.chmod(bindir / n, 0o755)
+    (bindir / "date").write_text("#!/bin/sh\necho 1700000000\n")
+    os.chmod(bindir / "date", 0o755)
+    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
+    r = subprocess.run(["sh", str(SCRIPT), "on"], env=env, capture_output=True, text=True, timeout=15)
+    assert r.returncode == 0, r.stderr
 
 
 def power_off_index(lines):
@@ -170,7 +195,7 @@ def test_one_remaining_line_is_not_black(tmp_path):
 def test_a_wake_during_the_wait_is_not_undone(tmp_path):
     """A double tap just after the screen began to go off: the off was still
     waiting for black, then finished and switched the panel off under the wake."""
-    lines, err, took = run(tmp_path, bright_for_s=1.5, wake_at_s=0.5)
+    lines, err, took = run(tmp_path, bright_for_s=1.5, wake_at_s=True)
     assert not any("power off" in l for l in lines), lines
     assert any("power on" in l for l in lines)
     assert "a wake arrived" in err
@@ -190,3 +215,27 @@ def test_a_failed_status_query_is_not_taken_for_a_dark_panel(tmp_path):
     assert any(l.startswith("curl") and "lock-screen-off" in l for l in lines), lines
     probes = [l for l in lines if l.startswith("grim")]
     assert probes and probes[-1] == "grim black", lines
+
+
+def test_a_wake_between_the_last_check_and_the_power_off_is_put_back(tmp_path):
+    """The off has decided to go ahead; a wake stamps and lights the panel; the
+    off then powers it down. It must notice and restore the panel and touch."""
+    lines, err, took = run(tmp_path, bright_for_s=0.3, wake_in_gap=True)
+    i = power_off_index(lines)
+    after = lines[i + 1:]
+    assert any("power on" in l for l in after), lines
+    assert [l for l in lines if "events" in l][-1].endswith("enabled"), lines
+    assert "powering it back on" in err
+    # Control: no wake, and the panel stays off with touch disabled.
+    lines, err, took = run(tmp_path, bright_for_s=0.3)
+    i = power_off_index(lines)
+    assert not any("power on" in l for l in lines[i:]), lines
+    assert [l for l in lines if "events" in l][-1].endswith("disabled"), lines
+
+
+def test_two_wakes_in_the_same_second_leave_different_stamps(tmp_path):
+    seen = set()
+    for _ in range(3):
+        run_on(tmp_path)
+        seen.add((tmp_path / "taos-screen.wake").read_text())
+    assert len(seen) == 3, seen

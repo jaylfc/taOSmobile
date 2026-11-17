@@ -155,12 +155,27 @@ off)
         exit 0
     fi
     touch_events disabled
-    exec swaymsg "output * power off"
+    swaymsg "output * power off" || _rc=$?
+    # A wake can still land between the check above and the two lines after
+    # it, and another check before them would only move that gap. So look
+    # once more AFTER the panel is down. A wake stamps before it acts, so any
+    # wake whose power-on could have come before this power-off has stamped
+    # by now: put the panel and touch back. If the wake in fact acted after
+    # the power-off, repeating its two steps changes nothing.
+    if [ "$(wake_stamp)" != "$_stamp0" ]; then
+        echo "taos-kiosk-screen: a wake arrived as the panel went off, powering it back on" >&2
+        swaymsg "output * power on" >/dev/null 2>&1 || true
+        touch_events enabled
+        exit 0
+    fi
+    exit "${_rc:-0}"
     ;;
 on)
     # Stamp first, so an off that is still waiting sees it before it acts.
     _w="$WAKE_STAMP.$$"
-    { date +%s%N 2>/dev/null || date +%s; } > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
+    # The pid makes every wake's stamp different whatever precision `date` has
+    # here: two wakes in one second must not look like one.
+    echo "$$.$(date +%s%N 2>/dev/null || date +%s)" > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
     swaymsg "output * power on" >/dev/null 2>&1 || true
     touch_events enabled
     page on
