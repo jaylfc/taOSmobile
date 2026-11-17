@@ -18,7 +18,11 @@ BRIGHT = b"P6\n8 4\n255\n" + b"\x80" * 96
 BLACK = b"P6\n8 4\n255\n" + b"\x00" * 96
 
 
-def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False):
+# The strip with ONE white row left in it: the line the closing animation ends on.
+ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
+
+
+def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -26,7 +30,7 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     log = tmp_path / "log"
     log.write_text("")
     start = tmp_path / "start"
-    (tmp_path / "bright.ppm").write_bytes(BRIGHT)
+    (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
     if grim_ok:
         (bindir / "grim").write_text(
@@ -133,3 +137,16 @@ def test_a_probe_that_never_returns_is_cut_off(tmp_path):
     assert "grim hung" in lines
     assert "powering off anyway" in err
     assert took < 4.0
+
+
+def test_one_remaining_line_is_not_black(tmp_path):
+    """Counting the header with an allowance let a single white row through:
+    the screen went off with the animation's last line still on it."""
+    lines, err, took = run(tmp_path, bright_for_s=0.9, bright=ONE_ROW)
+    i = power_off_index(lines)
+    probes = [l for l in lines[:i] if l.startswith("grim")]
+    assert "grim bright" in probes and probes[-1] == "grim black", probes
+    assert took >= 0.9 and err == ""
+    # Control: the same run with a truly black strip from the start is quick.
+    lines, err, took = run(tmp_path, bright_for_s=0.0, bright=ONE_ROW)
+    assert took < 1.0

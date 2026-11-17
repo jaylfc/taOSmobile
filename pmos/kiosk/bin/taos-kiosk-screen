@@ -58,17 +58,26 @@ page() {
 
 # Is the screen black right now? Reads a 4 px wide strip down the middle of the
 # output: the closing animation ends on a thin line at the centre, so a strip
-# through the centre is black only once that line has gone too. Counts bytes
-# brighter than 16 in the raw image; the header is a couple of dozen of them.
+# through the centre is black only once that line has gone too.
 #
 # `timeout`, always: grim BLOCKS FOREVER on an output that is off (it has no
 # capture formats to offer). An off request for a panel that is already off
 # hung here, and the moment the panel next came on, the stuck request finished
 # its job and switched it straight off again: the phone could not be woken.
 is_black() {
-    _n="$(timeout 1 grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - 2>/dev/null | tr -d '\000-\020' | wc -c)"
-    case "$_n" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$_n" -gt 0 ] && [ "$_n" -lt 64 ]
+    _f="${XDG_RUNTIME_DIR:-/tmp}/taos-black-probe.$$"
+    timeout 1 grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - > "$_f" 2>/dev/null || { rm -f "$_f"; return 1; }
+    # The image is three header lines ("P6", "W H", "255") and then raw
+    # samples. Count ONLY the samples: with the header counted and a small
+    # allowance for it, one white row of the strip still passed as black, and
+    # the closing animation ends on exactly such a line.
+    _h="$(head -n 3 "$_f" | wc -c)"
+    _all="$(wc -c < "$_f")"
+    _n="$(tail -c +"$((_h + 1))" "$_f" | tr -d '\000-\020' | wc -c)"
+    rm -f "$_f"
+    case "$_h$_all$_n" in ''|*[!0-9]*) return 1 ;; esac
+    # Some samples must exist, and none may be brighter than 16.
+    [ "$_all" -gt "$_h" ] && [ "$_n" -eq 0 ]
 }
 
 # Is any output powered? An off request often arrives for a panel that is
