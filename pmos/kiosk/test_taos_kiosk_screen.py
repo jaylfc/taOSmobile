@@ -22,7 +22,8 @@ BLACK = b"P6\n8 4\n255\n" + b"\x00" * 96
 ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 
-def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT):
+def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
+        query_fails=False, wake_at_s=None):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -58,15 +59,29 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
     for n in ("grim", "swaymsg", "curl"):
         os.chmod(bindir / n, 0o755)
-    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]))
+    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
+    if query_fails:
+        (bindir / "swaymsg").write_text(
+            '#!/bin/sh\ncase "$*" in *get_outputs*) exit 1 ;; esac\necho "swaymsg $*" >> "%s"\n' % log)
+        os.chmod(bindir / "swaymsg", 0o755)
     if cap_ms is not None:
         env["TAOS_BLACK_WAIT_MS"] = str(cap_ms)
     start.write_text(str(time.time_ns()))
     t0 = time.time()
-    r = subprocess.run(["sh", str(SCRIPT), "off"], env=env, capture_output=True, text=True, timeout=15)
+    if wake_at_s is None:
+        r = subprocess.run(["sh", str(SCRIPT), "off"], env=env, capture_output=True, text=True, timeout=15)
+        rc, err = r.returncode, r.stderr
+    else:
+        p = subprocess.Popen(["sh", str(SCRIPT), "off"], env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        time.sleep(wake_at_s)
+        w = subprocess.run(["sh", str(SCRIPT), "on"], env=env, capture_output=True, text=True, timeout=15)
+        assert w.returncode == 0, w.stderr
+        _, err = p.communicate(timeout=15)
+        rc = p.returncode
     took = time.time() - t0
-    assert r.returncode == 0, r.stderr
-    return log.read_text().splitlines(), r.stderr, took
+    assert rc == 0, err
+    return log.read_text().splitlines(), err, took
 
 
 def power_off_index(lines):
@@ -150,3 +165,28 @@ def test_one_remaining_line_is_not_black(tmp_path):
     # Control: the same run with a truly black strip from the start is quick.
     lines, err, took = run(tmp_path, bright_for_s=0.0, bright=ONE_ROW)
     assert took < 1.0
+
+
+def test_a_wake_during_the_wait_is_not_undone(tmp_path):
+    """A double tap just after the screen began to go off: the off was still
+    waiting for black, then finished and switched the panel off under the wake."""
+    lines, err, took = run(tmp_path, bright_for_s=1.5, wake_at_s=0.5)
+    assert not any("power off" in l for l in lines), lines
+    assert any("power on" in l for l in lines)
+    assert "a wake arrived" in err
+    # Touch must not be left disabled by the abandoned off.
+    last_touch = [l for l in lines if "events" in l][-1]
+    assert "enabled" in last_touch, lines
+    # Control: with no wake the same off does power the panel down.
+    lines, err, took = run(tmp_path, bright_for_s=0.4)
+    power_off_index(lines)
+
+
+def test_a_failed_status_query_is_not_taken_for_a_dark_panel(tmp_path):
+    """If sway cannot be asked, the panel may well be lit: still tell the page
+    and still wait, as a lit panel would."""
+    lines, err, took = run(tmp_path, bright_for_s=0.5, query_fails=True)
+    power_off_index(lines)
+    assert any(l.startswith("curl") and "lock-screen-off" in l for l in lines), lines
+    probes = [l for l in lines if l.startswith("grim")]
+    assert probes and probes[-1] == "grim black", lines

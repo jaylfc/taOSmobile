@@ -82,9 +82,22 @@ is_black() {
 
 # Is any output powered? An off request often arrives for a panel that is
 # already off (the idle timer fires again, the power key after a timeout).
-panel_lit() {
-    swaymsg -t get_outputs -r 2>/dev/null | grep -q '"power": *true'
+# Three answers, because "could not ask" is not "dark": 0 lit, 1 dark, 2 unknown.
+# Only a successful answer that shows no powered output counts as dark.
+panel_state() {
+    _o="$(swaymsg -t get_outputs -r 2>/dev/null)" || return 2
+    case "$_o" in
+        *'"power": true'*|*'"power":true'*) return 0 ;;
+        *'"power"'*) return 1 ;;
+        *) return 2 ;;
+    esac
 }
+
+# A wake stamps this file. An off that was still waiting for black when the
+# wake arrived must not then switch the panel off under it: it compares the
+# stamp it saw at the start with the stamp at the end.
+WAKE_STAMP="${XDG_RUNTIME_DIR:-/tmp}/taos-screen.wake"
+wake_stamp() { cat "$WAKE_STAMP" 2>/dev/null || echo none; }
 
 # Wait for black, at most TAOS_BLACK_WAIT_MS (2 s). The floor of 150 ms keeps
 # one frame's worth of time even if the first probe is black, and the cap
@@ -97,7 +110,11 @@ wait_black() {
     sleep 0.15
     while :; do
         # Nothing to wait for, and nothing grim could read, on a dark panel.
-        panel_lit || return 0
+        # An unknown state keeps looking: the looks are time-limited anyway.
+        _ps=0; panel_state || _ps=$?
+        [ "$_ps" -eq 1 ] && return 0
+        # A wake arrived: stop waiting, the caller will stand down.
+        [ "$(wake_stamp)" = "${_stamp0:-none}" ] || return 0
         is_black && return 0
         _el=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
         if [ "$_el" -ge "$_cap" ]; then
@@ -124,14 +141,26 @@ off)
     # when the phone slept UNLOCKED the shell has to load the lock page before
     # it can animate at all. So do not guess a time: look at the glass and
     # power off when it is black, or after 2 s whatever it shows.
-    if panel_lit; then
+    _stamp0="$(wake_stamp)"
+    # `|| _ps=$?`: under set -e a bare non-zero return would end the script.
+    _ps=0; panel_state || _ps=$?
+    if [ "$_ps" -ne 1 ]; then
         page off
         wait_black
+    fi
+    # Woken while this was waiting (a double tap just after the screen began to
+    # go off): the wake has already lit the panel and told the page. Leave it.
+    if [ "$(wake_stamp)" != "$_stamp0" ]; then
+        echo "taos-kiosk-screen: a wake arrived during the wait, leaving the panel on" >&2
+        exit 0
     fi
     touch_events disabled
     exec swaymsg "output * power off"
     ;;
 on)
+    # Stamp first, so an off that is still waiting sees it before it acts.
+    _w="$WAKE_STAMP.$$"
+    { date +%s%N 2>/dev/null || date +%s; } > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
     swaymsg "output * power on" >/dev/null 2>&1 || true
     touch_events enabled
     page on
