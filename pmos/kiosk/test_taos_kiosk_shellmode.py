@@ -184,3 +184,32 @@ def test_a_running_bar_that_is_not_on_the_glass_is_restarted(monkeypatch):
 def test_the_guard_does_not_restart_a_bar_it_cannot_fault(monkeypatch, kw):
     did, restarts = _guard(monkeypatch, **kw)
     assert did is False and restarts == []
+
+
+def test_a_restart_and_an_ordinary_start_cannot_both_launch(monkeypatch):
+    """The guard's thread restarts the bar while a window event asks for it:
+    the second caller must see the bar the first one started, not the gap."""
+    import threading
+    import time as _time
+    m = _load()
+    state = {"running": True, "launches": 0}
+
+    def launcher(argv, **kw):
+        state["running"] = False          # the launcher kills the old bar first
+        _time.sleep(0.2)                  # ... and the new pid is written later
+        state["launches"] += 1
+        state["running"] = True
+
+    monkeypatch.setattr(m, "bar_running", lambda: state["running"])
+    monkeypatch.setattr(m.subprocess, "run", launcher)
+    t = threading.Thread(target=lambda: m.start_bar(replace=True))
+    t.start()
+    _time.sleep(0.05)                     # inside the gap
+    assert state["running"] is False
+    m.start_bar()                         # the main thread's ordinary start
+    t.join()
+    assert state["launches"] == 1
+    # Control: with no bar at all, an ordinary start does launch.
+    state.update(running=False, launches=0)
+    m.start_bar()
+    assert state["launches"] == 1

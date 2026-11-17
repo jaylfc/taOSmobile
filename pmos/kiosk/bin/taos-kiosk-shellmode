@@ -73,10 +73,22 @@ def bar_running():
         return False
 
 
+#: One start at a time. The paint guard restarts the bar from its own thread
+#: while window events start it from the main one: between the launcher
+#: killing the old bar and writing the new pid, the other thread saw "no bar"
+#: and ran a second launcher, leaving two bars and only one of them tracked.
+_BAR_LOCK = threading.Lock()
+
+
 def start_bar(replace=False):
-    """Start the nav bar unless it is up. replace=True restarts it (a reload)."""
-    if replace or not bar_running():
-        subprocess.run([BAR])
+    """Start the nav bar unless it is up. replace=True restarts it (a reload).
+
+    The check and the whole launcher run are under one lock; the launcher
+    returns only after it has written the new pid.
+    """
+    with _BAR_LOCK:
+        if replace or not bar_running():
+            subprocess.run([BAR])
 
 
 # --- THE BAR CAN BE ALIVE AND PAINT NOTHING -------------------------------
