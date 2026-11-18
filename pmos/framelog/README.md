@@ -5,10 +5,18 @@ screen timing (frame gaps, a panel going black, a transition appearing) can be
 measured against the compositor's own clock. It uses `zwlr_screencopy_manager_v1`
 (v3) with `capture_output_region` and `copy_with_damage`, and `wl_shm` buffers.
 
-**Status: capture against the live compositor is UNTESTED.** It was built and
-checked only for option handling, connection errors and the pixel statistics
-(`make test`). The first real run, on a lit panel, is the first test of the
-screencopy path.
+**Status:** unit tests cover the pixel statistics (`make test`) and option
+handling. Capture has run against the live compositor on one device (Nothing
+Phone (1), sway 1.12, 120 Hz) with `--every-frame --until-black`: one line per
+refresh, median gap 8.37 ms, and a page fading to black was followed frame by
+frame. That the timestamps are CLOCK_MONOTONIC is consistent with `--mark` on
+that device, not proven in general. `copy_with_damage` (the default mode) has
+not been run against the live compositor yet.
+
+Example, as the compositor's user, on the lock page: logging starts, the
+script asks the page to close, and the tool exits at the first black frame:
+
+    taos-framelog --mark --every-frame --until-black --duration 4 --out frames.csv
 
 ## Output
 
