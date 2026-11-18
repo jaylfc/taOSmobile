@@ -23,7 +23,7 @@ ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 
 def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
-        query_fails=False, wake_at_s=None, wake_in_gap=False):
+        query_fails=False, wake_at_s=None, wake_in_gap=False, bright_looks=None):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -33,7 +33,17 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     start = tmp_path / "start"
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
-    if grim_ok:
+    if grim_ok and bright_looks is not None:
+        # Bright for a fixed NUMBER of looks, then black: independent of how
+        # long the script takes to start on a slow machine.
+        (bindir / "grim").write_text(
+            '#!/bin/sh\n'
+            ': > "%s/probed"\n'
+            'n=$(( $(cat "%s/looks" 2>/dev/null || echo 0) + 1 )); echo $n > "%s/looks"\n'
+            'if [ $n -le %d ]; then echo "grim bright" >> "%s"; cat "%s/bright.ppm"\n'
+            'else echo "grim black" >> "%s"; cat "%s/black.ppm"; fi\n'
+            % (tmp_path, tmp_path, tmp_path, bright_looks, log, tmp_path, log, tmp_path))
+    elif grim_ok:
         (bindir / "grim").write_text(
             '#!/bin/sh\n'
             ': > "%s/probed"\n'
@@ -251,8 +261,10 @@ def test_an_already_black_screen_is_looked_at_before_any_wait(tmp_path):
     before = lines[:i]
     assert "grim black" in before
     assert not any(l.startswith("sleep") for l in before), before
-    # Control: a lit screen does wait between looks.
-    lines, err, took = run(tmp_path, bright_for_s=0.4)
+    # Control: a lit screen does wait between looks. Bright for two looks by
+    # count, not by time, so a slow start cannot turn it black early.
+    (tmp_path / "looks").unlink(missing_ok=True)
+    lines, err, took = run(tmp_path, bright_for_s=0, bright_looks=2)
     i = power_off_index(lines)
     first_look = next(n for n, l in enumerate(lines) if l.startswith("grim"))
     assert any(l.startswith("sleep") for l in lines[first_look:i]), lines
