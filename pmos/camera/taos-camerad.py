@@ -75,7 +75,12 @@ SHUTTER_TIMEOUT = 2.0
 # all locked. Never inferred from the kiosk window's title.
 LOCK_STATE_URL = os.environ.get("TAOS_LOCK_STATE_URL", "http://127.0.0.1:6969/auth/lock-state")
 LOCK_STATE_TIMEOUT = 1.0
+# _LOCKED_GEN counts locked sessions that have ended. A capture takes its lock
+# observation together with the generation (lock_observation) and note_shot
+# only registers the shot if no session ended since, so a shot observed in an
+# earlier session is never added to a later one.
 _LOCKED_SHOTS: set = set()
+_LOCKED_GEN = 0
 _LOCKED_SHOTS_LOCK = threading.Lock()
 
 
@@ -97,14 +102,23 @@ def phone_locked() -> bool:
     unlocked = isinstance(ans, dict) and ans.get("locked") is False
     if unlocked:
         # Seen unlocked: the locked session is over, forget its shots.
+        global _LOCKED_GEN
         with _LOCKED_SHOTS_LOCK:
             _LOCKED_SHOTS.clear()
+            _LOCKED_GEN += 1
     return not unlocked
 
 
-def note_shot(name: str, locked: bool) -> None:
-    if locked:
-        with _LOCKED_SHOTS_LOCK:
+def lock_observation():
+    """(locked, generation) for one observation of the lock state."""
+    locked = phone_locked()
+    with _LOCKED_SHOTS_LOCK:
+        return locked, _LOCKED_GEN
+
+
+def note_shot(name: str, locked: bool, gen: int) -> None:
+    with _LOCKED_SHOTS_LOCK:
+        if locked and gen == _LOCKED_GEN:
             _LOCKED_SHOTS.add(name)
 
 
@@ -605,8 +619,8 @@ class Handler(BaseHTTPRequestHandler):
                     # fault was a request queued to the wrong camera.
                     return self._json({"error": s.error or "no frame"}, 503)
                 name = datetime.now().strftime("IMG_%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
-                locked = phone_locked()   # before the file exists, so it is never listed unmarked
-                note_shot(name, locked)
+                locked, gen = lock_observation()   # before the file exists, so it is never listed unmarked
+                note_shot(name, locked, gen)
                 (PHOTOS / name).write_bytes(jpg)
                 return self._json({"ok": True, "name": name, "bytes": len(jpg), "cam": _WHICH})
             if u.path == "/back":

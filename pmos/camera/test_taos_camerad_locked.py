@@ -155,3 +155,26 @@ def test_a_shot_taken_unlocked_is_not_shown_once_locked(cam, monkeypatch):
     say(cam, monkeypatch, {"locked": True})
     assert names(cam) == (True, [])
     assert call(cam, "GET", "/photo/" + shot)[0] == 404
+
+
+def test_a_shot_observed_before_a_session_reset_is_not_added_to_the_next_session(cam, monkeypatch):
+    # The race, without threads: capture observes "locked", another request then
+    # sees the phone unlocked (session over), the phone locks again, and only
+    # then does the capture register its shot. That shot belongs to the old
+    # session and must not appear in the new one.
+    say(cam, monkeypatch, {"locked": True})
+    locked, gen = cam.lock_observation()
+    assert locked is True
+    say(cam, monkeypatch, {"locked": False})
+    assert cam.phone_locked() is False
+    say(cam, monkeypatch, {"locked": True})
+    cam.note_shot("x.jpg", locked, gen)
+    assert cam.visible_while_locked("x.jpg") is False
+
+
+def test_a_shot_with_no_reset_in_between_is_registered(cam, monkeypatch):
+    say(cam, monkeypatch, {"locked": True})
+    locked, gen = cam.lock_observation()
+    say(cam, monkeypatch, {"locked": True})
+    cam.note_shot("x.jpg", locked, gen)
+    assert cam.visible_while_locked("x.jpg") is True
