@@ -178,3 +178,23 @@ def test_a_shot_with_no_reset_in_between_is_registered(cam, monkeypatch):
     say(cam, monkeypatch, {"locked": True})
     cam.note_shot("x.jpg", locked, gen)
     assert cam.visible_while_locked("x.jpg") is True
+
+
+def test_a_reset_that_lands_inside_the_observation_is_not_missed(cam, monkeypatch):
+    """Another request resets the session and the phone locks again while this
+    capture is still asking: the shot must not join the new session."""
+    answers = iter([{"locked": True}])
+
+    def ask():
+        # This capture's own query: before it answers, another request sees
+        # the phone unlocked (a reset), and then the phone locks again.
+        monkeypatch.setattr(cam, "_ask_lock_state", lambda: {"locked": False})
+        cam.phone_locked()
+        monkeypatch.setattr(cam, "_ask_lock_state", lambda: {"locked": True})
+        return next(answers)
+
+    monkeypatch.setattr(cam, "_ask_lock_state", ask)
+    locked, gen = cam.lock_observation()
+    assert locked is True
+    cam.note_shot("y.jpg", locked, gen)
+    assert cam.visible_while_locked("y.jpg") is False

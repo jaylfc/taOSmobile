@@ -110,10 +110,16 @@ def phone_locked() -> bool:
 
 
 def lock_observation():
-    """(locked, generation) for one observation of the lock state."""
-    locked = phone_locked()
+    """(locked, generation) for one observation of the lock state.
+
+    The generation is read BEFORE asking: read after, another request could
+    reset the session and the phone lock again in between, and the old shot
+    would carry the new session's number. Read first, a reset anywhere after
+    it only makes the shot NOT show while locked, which is the safe side.
+    """
     with _LOCKED_SHOTS_LOCK:
-        return locked, _LOCKED_GEN
+        gen = _LOCKED_GEN
+    return phone_locked(), gen
 
 
 def note_shot(name: str, locked: bool, gen: int) -> None:
