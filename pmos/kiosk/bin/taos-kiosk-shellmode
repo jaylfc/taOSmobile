@@ -164,7 +164,24 @@ def bar_painted():
              for dx in (-GLYPH_OFFSET, GLYPH_OFFSET)]
     if any(s is None for s in spots):
         return None
-    return all(spots)
+    # Not painted only when BOTH spots are dark, which is what the blank bar
+    # looked like (measured). One dark spot can be something legitimately
+    # drawn over part of the strip; that is not worth a restart.
+    return any(spots)
+
+
+def keyboard_visible():
+    """The on-screen keyboard covers the strip by design while it is up.
+    True only when squeekboard says so; any failure to ask is False, so a
+    phone without the keyboard keeps its guard."""
+    try:
+        r = subprocess.run(
+            ["busctl", "--user", "get-property", "sm.puri.OSK0", "/sm/puri/OSK0",
+             "sm.puri.OSK0", "Visible"],
+            capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and r.stdout.strip() == "b true"
 
 
 def still_wants_bar():
@@ -176,8 +193,15 @@ def still_wants_bar():
     except ValueError:
         return False
     for con in walk(tree):
-        if (con.get("app_id") == KIOSK_APP_ID and con.get("visible")
-                and not con.get("fullscreen_mode") and not loading(con.get("name"))
+        if not con.get("visible") or con.get("fullscreen_mode"):
+            continue
+        app_id = con.get("app_id") or ""
+        # The same surfaces apply() asks the bar for: a taOS app window, or the
+        # signed-in desktop. Checks are scheduled for both, so both must be
+        # able to restart a blank bar.
+        if app_id.startswith(APP_WINDOW_PREFIX):
+            return True
+        if (app_id == KIOSK_APP_ID and not loading(con.get("name"))
                 and not wanted_fullscreen(con.get("name"))):
             return True
     return False
@@ -185,12 +209,16 @@ def still_wants_bar():
 
 def check_bar_painted(sleep=time.sleep):
     """Restart the bar if it is up, wanted, and twice in a row not on the glass."""
-    if not bar_running() or not still_wants_bar():
+    if not bar_running() or not still_wants_bar() or keyboard_visible():
         return False
     if bar_painted() is not False:
         return False
     sleep(0.7)                          # one bad frame is not a broken bar
-    if not still_wants_bar() or bar_painted() is not False:
+    if bar_painted() is not False:
+        return False
+    # Asked again AFTER the second look: the phone may have locked, or the
+    # keyboard come up, while it was being taken, and either makes dark spots.
+    if not bar_running() or not still_wants_bar() or keyboard_visible():
         return False
     sys.stderr.write("taos-kiosk-shellmode: nav bar is running but not on the glass, restarting it\n")
     sys.stderr.flush()
