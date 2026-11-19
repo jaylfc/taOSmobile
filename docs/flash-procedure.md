@@ -184,9 +184,29 @@ that the device was dead. A Droidian that booted perfectly would look identical 
 Use a **Linux** USB host for any RNDIS or SSH-over-USB diagnosis. macOS is fine for
 `fastboot` and `adb` and nothing else.
 
+### omarchy is the USB host (postmarketOS, from 2026-10)
+
+The Mac mini is retired (Jay 2026-10-19), so the phone's USB cable lives on omarchy. The
+pmOS handset's `usb0` holds `172.16.42.1` but runs **no DHCP**, so a bare Linux host only
+self-assigns a `169.254` address and the phone looks dead. Install the host side once, as
+root on omarchy:
+
+```
+sudo pmos/host/install-handset-usb-host.sh
+#  0 PROVEN   -- taosphone0 holds 172.16.42.2/24 and 172.16.42.1 answers
+#  2 NOT PROVEN -- installed, but no phone link is on this host right now
+#  1 FAIL
+```
+
+`pmos/host/70-taos-handset-usb.rules` names only the phone's link `taosphone0` (matched by
+its USB serial, so the taOSusb Pi's NCM gadget is never caught), and
+`pmos/host/taos-handset-usb.nmconnection` gives that name the static address with no
+default route and no DNS. `pmos/host/test_handset_usb_host.py` holds the rule, the profile
+and the presence check to one name and one subnet.
+
 ### Ask `scripts/check-device-presence.sh` — do not reassemble the check by hand
 
-Run it **on the Linux USB host** (the Pi) after any reboot or flash. It is one name that
+Run it **on the Linux USB host** (omarchy since 2026-10, the Pi before) after any reboot or flash. It is one name that
 replaces a pipeline that was being rewritten from memory every session, and it exits on a
 code a caller can branch on:
 

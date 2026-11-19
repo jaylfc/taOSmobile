@@ -45,7 +45,7 @@ set -uo pipefail
 
 # Exact interface names only. `ptusb0` is not in this list and must never
 # match one; that is the whole point of the file.
-RNDIS_NAMES="usb0 usb1 rndis0 rndis1"
+RNDIS_NAMES="usb0 usb1 rndis0 rndis1 taosphone0"
 # Droidian's RNDIS address on spacewar. docs/flash-procedure.md step 4.
 PHONE_IP="172.16.42.1"
 # Bound every invocation of a thing that can wait: a wedged USB device hangs

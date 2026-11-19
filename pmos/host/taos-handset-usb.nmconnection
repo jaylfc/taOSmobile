@@ -1,0 +1,19 @@
+# Host side of the handset's USB fallback link (phone usb0 = 172.16.42.1).
+# The phone runs no DHCP on usb0, so the address is static. never-default and
+# ignore-auto-dns keep the host's real uplink in charge while the phone is in.
+[connection]
+id=taos-handset-usb
+type=ethernet
+interface-name=taosphone0
+autoconnect=true
+
+[ethernet]
+
+[ipv4]
+method=manual
+address1=172.16.42.2/24
+never-default=true
+ignore-auto-dns=true
+
+[ipv6]
+method=disabled
