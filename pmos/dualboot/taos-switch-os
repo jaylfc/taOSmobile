@@ -46,6 +46,18 @@ why_not() {
     [ -f "$(image_of "$1")" ] || { echo "not installed"; return; }
     [ -f "$D/guest/kernel" ] && [ -f "$D/guest/ramdisk" ] || { echo "guest kernel not staged"; return; }
     [ -x "$LAUNCHER" ] || { echo "launcher missing"; return; }
+    # The guest kernel must be the build that is running, or kexec-guest.sh refuses it two seconds
+    # after `go` said ok. Same comparison it makes.
+    BI="$(dirname "$LAUNCHER")/build-identity.sh"
+    [ -f "$BI" ] || { echo "launcher missing"; return; }
+    if [ -f "$D/guest/kernel" ]; then
+        command -v zcat >/dev/null 2>&1 || { echo "cannot check the guest kernel: zcat missing"; return; }
+        command -v strings >/dev/null 2>&1 || { echo "cannot check the guest kernel: strings missing"; return; }
+        # shellcheck disable=SC1090
+        . "$BI"
+        zcat "$D/guest/kernel" 2>/dev/null | dualboot_stream_matches_running \
+            || { echo "guest kernel is stale: run refresh-guest-boot.sh"; return; }
+    fi
     echo ""
 }
 known() {

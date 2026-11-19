@@ -2,6 +2,7 @@
 
 It takes one word from a web request's far end, so the malformed words come first.
 """
+import gzip
 import json
 import os
 import subprocess
@@ -21,6 +22,13 @@ def box(tmp_path):
     launcher = tmp_path / "kexec-guest.sh"
     launcher.write_text('#!/bin/sh\necho "$#:$*" >> "%s"\n' % log)
     launcher.chmod(0o755)
+    identity = tmp_path / "build-identity.sh"
+
+    def kernel_is(matches):
+        identity.write_text("dualboot_stream_matches_running() { cat >/dev/null; return %d; }\n"
+                            % (0 if matches else 1))
+
+    kernel_is(True)
     env = dict(os.environ, TAOS_SWITCH_OS_TEST="1", TAOS_SWITCH_OS_DIR=str(d),
                TAOS_SWITCH_OS_LAUNCHER=str(launcher))
 
@@ -28,13 +36,13 @@ def box(tmp_path):
         return subprocess.run(["sh", str(TOOL), *args], env=env, capture_output=True, text=True, timeout=10)
 
     def install(*ids):
-        (d / "guest" / "kernel").write_bytes(b"k")
+        (d / "guest" / "kernel").write_bytes(gzip.compress(b"k"))
         (d / "guest" / "ramdisk").write_bytes(b"r")
         for i in ids:
             (d / {"omarchy": "arch-root.img", "luma": "luma-root.img"}[i]).write_bytes(b"i")
 
     return type("Box", (), dict(run=staticmethod(run), install=staticmethod(install), log=log, d=d,
-                                launcher=launcher))
+                                launcher=launcher, kernel_is=staticmethod(kernel_is)))
 
 
 @pytest.mark.parametrize("args", [
@@ -82,6 +90,29 @@ def test_list_says_what_is_installed_and_why_not(box):
                    {"id": "luma", "name": "Luma", "ready": False, "reason": "not installed"}]
     box.launcher.chmod(0o644)
     assert json.loads(box.run("list").stdout)[0]["reason"] == "launcher missing"
+
+
+def test_a_stale_guest_kernel_is_not_ready_and_not_launched(box):
+    box.install("omarchy", "luma")
+    box.kernel_is(False)
+    out = json.loads(box.run("list").stdout)
+    assert [(s["ready"], s["reason"]) for s in out] == [
+        (False, "guest kernel is stale: run refresh-guest-boot.sh")] * 2
+    r = box.run("go", "luma")
+    assert r.returncode == 3 and "stale" in r.stderr and r.stdout == ""
+    assert not box.log.exists()
+    box.kernel_is(True)
+    assert all(s["ready"] for s in json.loads(box.run("list").stdout))
+    assert box.run("go", "luma").returncode == 0
+    assert box.log.read_text() == "3:--guest luma --go\n"
+
+
+def test_a_missing_build_identity_is_launcher_missing(box):
+    box.install("omarchy")
+    (box.launcher.parent / "build-identity.sh").unlink()
+    assert json.loads(box.run("list").stdout)[0]["reason"] == "launcher missing"
+    assert box.run("go", "omarchy").returncode == 3
+    assert not box.log.exists()
 
 
 def test_a_system_that_is_not_ready_is_not_launched(box):
