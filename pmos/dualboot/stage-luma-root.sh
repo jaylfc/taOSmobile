@@ -17,7 +17,10 @@ say() { echo "=== $(date -u +%H:%M:%S) $*"; }
 if [ ! -f "$IMG" ]; then
   [ -f "$IMG.zst" ] || { echo "no $IMG.zst"; exit 1; }
   say unpack
-  zstd -dq --sparse "$IMG.zst" -o "$IMG"
+  # Into a partial file first: an interrupted run must not leave a half image that the next run mounts
+  rm -f "$IMG.partial"
+  zstd -dq --sparse "$IMG.zst" -o "$IMG.partial"
+  mv -f "$IMG.partial" "$IMG"
 fi
 mkdir -p "$MNT"
 L=$(losetup --show -f "$IMG")
