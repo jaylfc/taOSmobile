@@ -628,6 +628,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/capture":
                 s = _session(q.get("cam", [None])[0])
+                # The lock state is observed BEFORE the frame boundary: only
+                # frames that arrive after a locked observation count as taken
+                # while locked. Observed after the frame, a phone that locked in
+                # between would file an unlocked-era frame under the new locked
+                # session and show it on the lock screen.
+                locked, session = lock_state()
                 _, seq = s.frame()
                 jpg = s.frame_after(seq, SHUTTER_TIMEOUT)
                 if not jpg:
@@ -635,8 +641,7 @@ class Handler(BaseHTTPRequestHandler):
                     # fault was a request queued to the wrong camera.
                     return self._json({"error": s.error or "no frame"}, 503)
                 name = datetime.now().strftime("IMG_%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
-                locked, session = lock_state()   # before the file exists, so it is never listed unmarked
-                note_shot(name, locked, session)
+                note_shot(name, locked, session)   # before the file exists, so it is never listed unmarked
                 (PHOTOS / name).write_bytes(jpg)
                 return self._json({"ok": True, "name": name, "bytes": len(jpg), "cam": _WHICH})
             if u.path == "/back":

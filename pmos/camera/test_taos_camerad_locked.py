@@ -234,3 +234,24 @@ def test_a_shot_taken_on_a_malformed_answer_is_never_shown_while_locked(cam, mon
         say(cam, monkeypatch, later)
         assert names(cam) == (True, [])
         assert call(cam, "GET", "/photo/" + shot)[0] == 404
+
+
+def test_a_frame_taken_before_the_phone_locked_is_not_filed_as_a_locked_shot(cam, monkeypatch):
+    """The phone locks while the shutter frame is being taken: the answer the
+    capture acts on must be the one from BEFORE the frame, which was unlocked."""
+    state = {"answer": {"locked": False, "session": 7}}
+    monkeypatch.setattr(cam, "_ask_lock_state", lambda: state["answer"])
+
+    def frame_after(seq, timeout):
+        state["answer"] = {"locked": True, "session": 8}   # locks during the capture
+        return JPG
+
+    s = types.SimpleNamespace(frame=lambda: (JPG, 1), frame_after=frame_after, error=None)
+    monkeypatch.setattr(cam, "_session", lambda which=None: s)
+    status, body = call(cam, "POST", "/capture")
+    assert status == 200, body
+    shot = json.loads(body)["name"]
+    locked, listed = names(cam)
+    assert locked is True
+    assert shot not in listed
+    assert call(cam, "GET", "/photo/" + shot)[0] == 404
