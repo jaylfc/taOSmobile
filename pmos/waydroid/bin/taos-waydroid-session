@@ -14,7 +14,7 @@
 # which the package's dbus policy opens to every user.
 set -eu
 RUNDIR=/run/user/$(id -u taos)
-WD="$(cd "$RUNDIR" && ls | grep -m1 '^wayland-[0-9]*$')"
+WD="$(ls "$RUNDIR" 2>/dev/null | grep -m1 '^wayland-[0-9]*$' || true)"
 [ -n "$WD" ] || { echo "FAIL: no wayland socket in $RUNDIR (kiosk session not running?)"; exit 1; }
 ENV="XDG_RUNTIME_DIR=$RUNDIR WAYLAND_DISPLAY=$WD HOME=/home/taos"
 as_taos() {
