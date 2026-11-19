@@ -1,0 +1,64 @@
+#!/bin/sh
+# taos-llm-idle: stop llama-cpp.service after TAOS_LLM_IDLE_MIN minutes (default
+# 10) in which no slot was processing. Run by taos-llm-idle.service (bound to
+# the model service). Every TAOS_LLM_IDLE_POLL s (default 60) it reads
+# llama-server's GET /slots; any slot with "is_processing": true restarts the
+# clock. If /slots cannot be read or has no is_processing field, the model is
+# treated as BUSY (logged once): a wrong guess must not cut off an answer.
+#
+#   taos-llm-idle          loop forever
+#   taos-llm-idle --once   one poll, for tests
+# Test knobs: TAOS_LLM_IDLE_STATE, TAOS_LLM_NOW (epoch seconds).
+set -u
+STATE="${TAOS_LLM_IDLE_STATE:-/run/taos-llm-idle}"
+PORT="${TAOS_LLAMACPP_PORT:-7835}"
+MODEL="${TAOS_LLM_MODEL:-LFM3-1.7B-QAD-Q4_0}"
+POLL="${TAOS_LLM_IDLE_POLL:-60}"
+IDLE_MIN="${TAOS_LLM_IDLE_MIN:-10}"
+case $IDLE_MIN in ''|*[!0-9]*|0) echo "taos-llm-idle: bad TAOS_LLM_IDLE_MIN '$IDLE_MIN', using 10" >&2; IDLE_MIN=10 ;; esac
+SVC=llama-cpp.service
+
+log() { echo "taos-llm-idle: $*" >&2; }
+
+# busy: 0 if a slot is processing or the state is unknown, 1 if all are idle.
+busy() {
+  _read=0
+  for _u in "/slots" "/slots?model=$MODEL"; do
+    _b=$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT$_u" 2>/dev/null) || continue
+    case $_b in
+      *'"is_processing":true'*|*'"is_processing": true'*) return 0 ;;
+      *'"is_processing"'*) _read=1 ;;
+    esac
+  done
+  if [ "$_read" -eq 0 ]; then
+    if [ ! -e "$STATE/unreadable" ]; then
+      : > "$STATE/unreadable"
+      log "cannot read slot state from /slots, treating the model as busy"
+    fi
+    return 0
+  fi
+  rm -f "$STATE/unreadable"
+  return 1
+}
+
+step() {
+  mkdir -p "$STATE"
+  now="${TAOS_LLM_NOW:-$(date +%s)}"
+  [ -e "$STATE/last_busy" ] || echo "$now" > "$STATE/last_busy"
+  if busy; then
+    echo "$now" > "$STATE/last_busy"
+    return 0
+  fi
+  last=$(cat "$STATE/last_busy")
+  if [ $((now - last)) -ge $((IDLE_MIN * 60)) ]; then
+    log "idle for $((now - last)) s (limit $((IDLE_MIN * 60)) s): stopping $SVC"
+    systemctl stop "$SVC"
+  fi
+}
+
+if [ "${1:-}" = --once ]; then step; exit 0; fi
+rm -rf "$STATE"
+while :; do
+  step
+  sleep "$POLL"
+done
