@@ -100,6 +100,8 @@ def test_a_locked_phone_lists_views_and_deletes_nothing_old(cam, monkeypatch, tm
     {"locked": None},
     [False],
     "unlocked",
+    {"locked": False, "unexpected": True},   # anything beyond the one key
+    {"locked": False, "user": "x"},
     OSError("connection refused"),
     ValueError("not json"),
 ])

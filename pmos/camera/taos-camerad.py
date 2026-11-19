@@ -99,7 +99,8 @@ def phone_locked() -> bool:
         ans = _ask_lock_state()
     except Exception:  # noqa: BLE001 -- every failure means the same thing here
         ans = None
-    unlocked = isinstance(ans, dict) and ans.get("locked") is False
+    # Exactly {"locked": false}: no other key, and False itself (not 0).
+    unlocked = isinstance(ans, dict) and set(ans) == {"locked"} and ans["locked"] is False
     if unlocked:
         # Seen unlocked: the locked session is over, forget its shots.
         global _LOCKED_GEN
