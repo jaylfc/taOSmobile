@@ -187,6 +187,9 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
     # Bytes, decoded as file names: text mode would translate a CR in a name
     # to LF, and two different files could then match one configured path.
     names = [os.fsdecode(b) for b in result.stdout.split(b"\0") if b]
+    # --cached still lists a tracked file deleted in the worktree but not staged;
+    # only files that exist are checked, as the old filesystem walk did.
+    names = [n for n in names if (Path(repo_root) / n).is_file()]
     for doc_rel in sorted(names):
         if any(part == ".git" for part in Path(doc_rel).parts):
             continue
