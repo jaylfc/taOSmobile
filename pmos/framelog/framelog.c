@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -483,6 +484,9 @@ static int next_timeout_ms(void)
 
 int main(int argc, char **argv)
 {
+	/* A reader that closes stdout must give a write error (EPIPE, exit 1 via
+	 * out_fail), not kill the process with SIGPIPE before it can say so. */
+	signal(SIGPIPE, SIG_IGN);
 	parse_args(argc, argv);
 
 	A.display = wl_display_connect(NULL);

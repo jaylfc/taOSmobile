@@ -9,6 +9,8 @@
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fails++; printf("FAIL line %d: %s\n", __LINE__, #c); } } while (0)
+/* Setup that the rest of the test depends on: stop instead of using a NULL stream. */
+#define REQUIRE(c) do { if (!(c)) { printf("FAIL line %d: %s (setup, stopping)\n", __LINE__, #c); return 1; } } while (0)
 
 int main(void)
 {
@@ -31,14 +33,14 @@ int main(void)
 
 	/* regular file: success and exact bytes */
 	fd = mkstemp(path);
-	CHECK(fd >= 0);
+	REQUIRE(fd >= 0);
 	f = fdopen(fd, "w");
-	CHECK(f != NULL);
+	REQUIRE(f != NULL);
 	CHECK(fl_out_line(f, "MARK %llu\n", 42ull) == 0);
 	CHECK(fl_out_line(f, "%d,%d,%u\n", 1, 2, 3u) == 0);
 	CHECK(fl_out_finish(f, 1) == 0);
 	f = fopen(path, "r");
-	CHECK(f != NULL);
+	REQUIRE(f != NULL);
 	memset(buf, 0, sizeof buf);
 	CHECK(fread(buf, 1, sizeof buf - 1, f) > 0);
 	CHECK(strcmp(buf, "MARK 42\n1,2,3\n") == 0);
@@ -46,7 +48,7 @@ int main(void)
 
 	/* read-only stream: the write must fail */
 	f = fopen(path, "r");
-	CHECK(f != NULL);
+	REQUIRE(f != NULL);
 	CHECK(fl_out_line(f, "x\n") == -1);
 	CHECK(fl_out_finish(f, 1) == -1);
 
