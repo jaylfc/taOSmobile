@@ -8,10 +8,18 @@ set -euo pipefail
 LOG=/var/log/dualboot-stage2.log
 exec >>"$LOG" 2>&1
 say() { echo "=== $(date -u +%H:%M:%S) $*"; }
-list() { grep -v -E '^\s*(#|$)' "$1" | awk '{print $1}'; }
+list() {
+  [ -r "$1" ] || { echo "ABORT: cannot read $1" >&2; exit 1; }
+  { grep -v -E '^\s*(#|$)' "$1" || true; } | awk '{print $1}'
+}
 available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
 
 say start
+# Both lists must exist and have content before any package step; a failure inside a process
+# substitution would not stop this script, so they are read with plain command substitution
+for f in /root/omarchy-src/packages.base /root/omarchy-src/packages.omarchy-skip; do
+  [ -s "$f" ] || { echo "ABORT: $f is missing or empty"; exit 1; }
+done
 if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
   # [omarchy] ahead of [core], as in their pacman.conf
   sed -i '0,/^\[core\]/s//[omarchy]\nServer = https:\/\/pkgs.omarchy.org\/stable\/$arch\n\n[core]/' /etc/pacman.conf
@@ -37,16 +45,21 @@ pacman -Syu --noconfirm
 
 say base
 # linux-firmware-other would collide with the pmOS firmware copied into /lib/firmware
-mapfile -t base < <(list /root/omarchy-src/packages.base | grep -v -x -E 'vulkan-panfrost|linux-firmware-other')
+base_all=$(list /root/omarchy-src/packages.base)
+mapfile -t base < <(printf '%s\n' "$base_all" | grep -v -x -E 'vulkan-panfrost|linux-firmware-other' || true)
+[ "${#base[@]}" -gt 0 ] || { echo "ABORT: packages.base lists no packages"; exit 1; }
 pacman -S --noconfirm --needed "${base[@]}" hyprland mesa vulkan-freedreno
 
 say "omarchy-base.packages"
-mapfile -t skip < <(list /root/omarchy-src/packages.omarchy-skip)
+skip_all=$(list /root/omarchy-src/packages.omarchy-skip)
+mapfile -t skip <<<"$skip_all"
+all=$(list /usr/share/omarchy/install/omarchy-base.packages)
+[ -n "$all" ] || { echo "ABORT: omarchy-base.packages lists no packages"; exit 1; }
 want=() unavailable=()
 while read -r p; do
   [[ " ${skip[*]} " == *" $p "* ]] && continue
   if available "$p"; then want+=("$p"); else unavailable+=("$p"); fi
-done < <(list /usr/share/omarchy/install/omarchy-base.packages)
+done <<<"$all"
 echo "want ${#want[@]}, not built for aarch64: ${unavailable[*]}"
 pacman -S --noconfirm --needed "${want[@]}"
 
