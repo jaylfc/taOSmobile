@@ -53,7 +53,7 @@ ensure_session() {
 # the installer. Read back, or "set" is a claim.
 multi_windows() {
     [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ] && return
-    as_taos 'waydroid prop set persist.waydroid.multi_windows true'
+    as_taos 'waydroid prop set persist.waydroid.multi_windows true' || true
     if [ "$(as_taos 'waydroid prop get persist.waydroid.multi_windows' 2>/dev/null)" = true ]; then
         echo "PASS: persist.waydroid.multi_windows=true (takes effect for windows opened from now)"
     else
