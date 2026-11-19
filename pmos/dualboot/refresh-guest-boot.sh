@@ -6,12 +6,14 @@
 set -eu
 D=/var/lib/dualboot
 G=$D/guest
+HERE=$(dirname "$0")
+. "$HERE/build-identity.sh"
 slot=$(sed -n 's/.*androidboot\.slot_suffix=\(_[ab]\).*/\1/p' /proc/cmdline)
 [ -n "$slot" ] || { echo "no slot_suffix on the command line"; exit 1; }
 PART=/dev/disk/by-partlabel/boot$slot
 [ -b "$PART" ] || { echo "no $PART"; exit 1; }
 mkdir -p "$G"
-for f in kernel ramdisk; do [ -f "$G/$f" ] && cp -a "$G/$f" "$G/$f.prev"; done
+rm -f "$G/kernel.new" "$G/ramdisk.new"
 # Android boot image header (v0..v2): kernel_size, kernel_addr, ramdisk_size, ramdisk_addr at
 # byte 8; page_size at 36; kernel starts at page 1, ramdisk on the next page boundary
 python3 - "$PART" "$G" <<'EOF'
@@ -30,11 +32,15 @@ if len(kernel) != ks or len(ramdisk) != rs:
     sys.exit("short read from %s" % part)
 if kernel[:2] != b"\x1f\x8b":
     sys.exit("kernel is not gzip; kexec-guest.sh expects zcat to work on it")
-open(g + "/kernel", "wb").write(kernel)
-open(g + "/ramdisk", "wb").write(ramdisk)
+open(g + "/kernel.new", "wb").write(kernel)
+open(g + "/ramdisk.new", "wb").write(ramdisk)
 print("kernel %d ramdisk %d page %d" % (ks, rs, ps))
 EOF
-want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
-zcat "$G/kernel" | strings | grep -m1 '^Linux version' | grep -q "^Linux version $want" \
-  || { echo "unpacked kernel build != running kernel; is $PART the slot you booted?"; exit 1; }
+# Validate the candidate before it touches the published pair: a rejected one must not become
+# kernel/ramdisk, nor push the good pair out to .prev on the next try
+zcat "$G/kernel.new" | dualboot_stream_matches_running \
+  || { rm -f "$G/kernel.new" "$G/ramdisk.new"; echo "unpacked kernel build != running kernel; is $PART the slot you booted?"; exit 1; }
+for f in kernel ramdisk; do [ -f "$G/$f" ] && cp -a "$G/$f" "$G/$f.prev"; done
+mv -f "$G/kernel.new" "$G/kernel"
+mv -f "$G/ramdisk.new" "$G/ramdisk"
 echo "guest boot refreshed from $PART"

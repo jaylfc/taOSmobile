@@ -10,6 +10,8 @@ HERE=$(dirname "$0")
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 install -d -m 0755 /usr/lib/taos/dualboot
 install -m 0755 "$HERE/kexec-guest.sh" "$HERE/guest-init" /usr/lib/taos/dualboot/
+# kexec-guest.sh sources this from its own directory
+install -m 0644 "$HERE/build-identity.sh" /usr/lib/taos/dualboot/
 install -m 0755 "$HERE/taos-switch-os" /usr/local/sbin/taos-switch-os
 T=$(mktemp)
 cat > "$T" <<'SUDO'

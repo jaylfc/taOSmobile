@@ -14,6 +14,7 @@ set -eu
 D=/var/lib/dualboot
 G=$D/guest
 HERE=$(dirname "$0")
+. "$HERE/build-identity.sh"
 GUEST=omarchy GO= KAPK= RA=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,8 +58,7 @@ if [ -n "$KAPK" ]; then
 else
   zcat "$G/kernel" > "$G/Image"
   # Same build as the running kernel, or the modules on taOS's root will not load
-  want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
-  strings "$G/Image" | grep -m1 '^Linux version' | grep -q "^Linux version $want" || { echo "kernel build != running"; exit 1; }
+  dualboot_stream_matches_running < "$G/Image" || { echo "kernel build != running"; exit 1; }
 fi
 
 rm -rf "$G/rd"; mkdir -p "$G/rd"
@@ -94,7 +94,9 @@ kexec -l "$G/Image" --initrd="$G/initramfs.gz" --dtb="$G/live.dtb" --command-lin
 echo "kexec loaded"
 if [ -z "$GO" ]; then
   # a dry run must not leave an image armed for the next systemctl kexec
-  kexec -u && echo "unloaded (dry run)"
+  kexec -u || { echo "kexec -u failed: kexec image may still be loaded"; exit 1; }
+  [ "$(cat /sys/kernel/kexec_loaded 2>/dev/null)" = 0 ] || { echo "kexec_loaded is not 0: kexec image may still be loaded"; exit 1; }
+  echo "unloaded (dry run)"
   exit 0
 fi
 if [ -n "$GO" ]; then
@@ -104,6 +106,17 @@ if [ -n "$GO" ]; then
   # The q6v5 remoteprocs have no shutdown hook, so kexec leaves them running and the guest kernel's
   # attempt to boot them again hard-reset the phone (guest died at 5.6s as wpss/cdsp/adsp powered up;
   # with their driver blacklisted the guest lived). Stop them first; wifi and ssh drop here.
+  # From here a failure would leave taOS up without wifi, modem or touch: on any error unload the image
+  # and reboot normally, which brings every device back. The handler is cleared just before the handover.
+  go_failed() {
+    trap - EXIT
+    echo "$(date -u +%H:%M:%S) --go failed with status $1 after teardown began; unloading and rebooting" >> "$D/go.log"
+    if [ "$(cat /sys/kernel/kexec_loaded 2>/dev/null)" = 1 ]; then kexec -u >> "$D/go.log" 2>&1 || true; fi
+    systemctl reboot >> "$D/go.log" 2>&1 || reboot -f
+    exit "$1"
+  }
+  trap 'go_failed $?' EXIT
+  trap 'exit 1' HUP INT TERM
   for r in /sys/class/remoteproc/remoteproc*; do
     [ "$(cat "$r/state")" = running ] && echo stop > "$r/state"
     echo "$(cat "$r/name") $(cat "$r/state")" >> "$D/rproc-stop.log"
@@ -113,6 +126,7 @@ if [ -n "$GO" ]; then
   for d in /sys/bus/platform/drivers/geni_spi/*.spi; do
     [ -e "$d" ] && echo "${d##*/}" > /sys/bus/platform/drivers/geni_spi/unbind
   done
-  systemctl kexec
+  trap - EXIT HUP INT TERM
+  systemctl kexec || go_failed $?
 fi
 exit 0

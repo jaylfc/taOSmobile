@@ -84,7 +84,13 @@ GLOOP=$(losetup --show -f "$IMG") || fail "losetup $IMG"
 if [ -z "$OST" ]; then
   mount -t ext4 -o rw "$GLOOP" /newroot || fail "mount $GLOOP"
   # Omarchy carries a copy of taOS's modules; a kernel under test (kexec-guest.sh --kernel) brings its own
-  [ -z "$MODS" ] || mount --bind "/taos$MODS" /newroot/usr/lib/modules || fail "bind test modules $MODS"
+  if [ -n "$MODS" ]; then
+    mount --bind "/taos$MODS" /newroot/usr/lib/modules || fail "bind test modules $MODS"
+  elif [ -d "/taos/lib/modules/$(uname -r)" ]; then
+    # Normal boot: the copy in the image goes stale when taOS's kernel is updated, so use taOS's own
+    # modules for the running kernel (the same path the ostree branch binds below)
+    mount --bind /taos/lib/modules /newroot/usr/lib/modules || fail "bind taOS modules"
+  fi
 else
   # What ostree-prepare-root does, without composefs: the deployment becomes /, the physical root
   # /sysroot, the stateroot's var /var, and /usr goes read-only

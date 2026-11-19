@@ -99,15 +99,61 @@ panel_state() {
 WAKE_STAMP="${XDG_RUNTIME_DIR:-/tmp}/taos-screen.wake"
 wake_stamp() { cat "$WAKE_STAMP" 2>/dev/null || echo none; }
 
-# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s). The floor of 150 ms keeps
-# one frame's worth of time even if the first probe is black, and the cap
-# means a page that never blackens costs time, not the screen-off.
+# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s); the cap means a page that
+# never blackens costs time, not the screen-off. LOOK FIRST, then sleep: this
+# used to sleep 150 ms before the first look "to leave a frame's time", which
+# guaranteed nothing a look does not and cost 150 ms on every screen-off. With
+# the page already black the whole off path measured 337 to 515 ms.
+# The frame logger, when installed, watches EVERY frame of the strip and exits
+# on the first black one. A grim look takes 40 to 220 ms on this phone, so the
+# grim loop below learns about black up to that late; measured, the page was
+# black about 180 ms after it was asked while the whole off path took 440 to
+# 690 ms. Returns 0 when the wait is over (black, capped, panel dark, or a
+# wake), 1 when the logger could not answer and the grim loop should.
+FRAMELOG="${TAOS_FRAMELOG:-/usr/local/bin/taos-framelog}"
+wait_black_framelog() {
+    [ -x "$FRAMELOG" ] || return 1
+    _r="$(printf '%s' "${TAOS_BLACK_PROBE:-268,0 4x1200}" | tr ' ' ',')"
+    _d="$(awk -v c="$_cap" 'BEGIN { printf "%.3f", c / 1000 }')"
+    _f0="$(date +%s%N)"
+    "$FRAMELOG" --every-frame --until-black --duration "$_d" --first-timeout 400 \
+        --region "$_r" >/dev/null 2>&1 &
+    _fp=$!
+    while kill -0 "$_fp" 2>/dev/null; do
+        if [ "$(wake_stamp)" != "${_stamp0:-none}" ]; then
+            kill "$_fp" 2>/dev/null || true
+            wait "$_fp" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.02
+    done
+    _flrc=0; wait "$_fp" || _flrc=$?
+    _el=$(( ( $(date +%s%N) - _f0 ) / 1000000 ))
+    # (_flrc, not _rc: the off path ends with `exit "${_rc:-0}"`, and shell
+    # variables are global.)
+    case "$_flrc" in
+        0) return 0 ;;          # a black frame
+        3) return 0 ;;          # no frame at all: the output is off
+        1)
+            # 1 is both "ran out of time" and "could not connect": tell them
+            # apart by how long it ran, so a broken logger does not cost the cap
+            # twice. Only a run that lasted the whole cap counts as out of time:
+            # with a small cap a slack would make an instant failure look like one.
+            if [ "$_el" -ge "$_cap" ]; then
+                echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
+                return 0
+            fi
+            return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
 wait_black() {
     _cap="${TAOS_BLACK_WAIT_MS:-2000}"
     case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
     _t0="$(date +%s%N 2>/dev/null)"
     case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
-    sleep 0.15
+    wait_black_framelog && return 0
     while :; do
         # Nothing to wait for, and nothing grim could read, on a dark panel.
         # An unknown state keeps looking: the looks are time-limited anyway.
@@ -121,7 +167,7 @@ wait_black() {
             echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
             return 0
         fi
-        sleep 0.05
+        sleep 0.03
     done
 }
 

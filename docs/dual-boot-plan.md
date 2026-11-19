@@ -8,7 +8,10 @@ work on this handset, so every flash needs his hands anyway).
 
 Jay added Luma Mobile as a second guest on 2026-10-30 (section below).
 
-Status: **stage 0 done 2026-10-30 (read-only).** Nothing has been written to the handset.
+Status: **stage 0 done 2026-10-30 (read-only).** Stage 0 itself was read-only.
+
+Write status as of 2026-11-19: image files and logs under `/var/lib/dualboot` on taOS's own root;
+no partition, slot or GPT has been written.
 
 ## What Omarchy Mobile is (read 2026-10-30)
 
