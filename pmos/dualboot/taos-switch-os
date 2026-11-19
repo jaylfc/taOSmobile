@@ -1,0 +1,101 @@
+#!/bin/sh
+# taos-switch-os: the one door between the taOS shell and the other systems on this phone.
+#
+#   taos-switch-os list      which systems are installed, as JSON. Needs no root.
+#   taos-switch-os go <id>   switch to one of them. Root only.
+#
+# The shell's page never runs root commands. The controller calls `list` as itself and
+# `sudo -n taos-switch-os go <id>` through a sudoers line that allows exactly the two forms
+# below and nothing else (install-switch-os.sh). So this script is the whole attack surface:
+# it takes one word, compares it with a fixed list, and passes nothing else on.
+#
+# `go` returns at once and the switch happens two seconds later, so the caller can answer its
+# request before the screen goes. The switch is a kexec from RAM (kexec-guest.sh): no partition
+# and no boot slot is written, so any reboot of the other system comes back to taOS.
+set -eu
+# Runs as root under sudo: never trust the caller's PATH for id, systemd-run and the rest.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+
+IDS="omarchy luma"
+D=/var/lib/dualboot
+LAUNCHER=/usr/lib/taos/dualboot/kexec-guest.sh
+DELAY=2
+# Test hooks, honoured ONLY when not root: a root caller (sudo) can never be steered by them.
+if [ "$(id -u)" != 0 ] && [ -n "${TAOS_SWITCH_OS_TEST:-}" ]; then
+    D=${TAOS_SWITCH_OS_DIR:-$D}
+    LAUNCHER=${TAOS_SWITCH_OS_LAUNCHER:-$LAUNCHER}
+    TESTING=1
+else
+    TESTING=
+fi
+
+name_of() {
+    case "$1" in
+        omarchy) echo "Omarchy" ;;
+        luma) echo "Luma" ;;
+    esac
+}
+image_of() {
+    case "$1" in
+        omarchy) echo "$D/arch-root.img" ;;
+        luma) echo "$D/luma-root.img" ;;
+    esac
+}
+# Empty when the system can be started, otherwise the reason it cannot.
+why_not() {
+    [ -f "$(image_of "$1")" ] || { echo "not installed"; return; }
+    [ -f "$D/guest/kernel" ] && [ -f "$D/guest/ramdisk" ] || { echo "guest kernel not staged"; return; }
+    [ -x "$LAUNCHER" ] || { echo "launcher missing"; return; }
+    # The guest kernel must be the build that is running, or kexec-guest.sh refuses it two seconds
+    # after `go` said ok. Same comparison it makes.
+    BI="$(dirname "$LAUNCHER")/build-identity.sh"
+    [ -f "$BI" ] || { echo "launcher missing"; return; }
+    if [ -f "$D/guest/kernel" ]; then
+        command -v zcat >/dev/null 2>&1 || { echo "cannot check the guest kernel: zcat missing"; return; }
+        command -v strings >/dev/null 2>&1 || { echo "cannot check the guest kernel: strings missing"; return; }
+        # shellcheck disable=SC1090
+        . "$BI"
+        zcat "$D/guest/kernel" 2>/dev/null | dualboot_stream_matches_running \
+            || { echo "guest kernel is stale: run refresh-guest-boot.sh"; return; }
+    fi
+    echo ""
+}
+known() {
+    for i in $IDS; do [ "$i" = "$1" ] && return 0; done
+    return 1
+}
+
+case "${1:-}" in
+list)
+    [ "$#" -eq 1 ] || { echo "usage: taos-switch-os list" >&2; exit 2; }
+    out="["; sep=""
+    for i in $IDS; do
+        r="$(why_not "$i")"
+        if [ -z "$r" ]; then ready=true; else ready=false; fi
+        out="$out$sep{\"id\":\"$i\",\"name\":\"$(name_of "$i")\",\"ready\":$ready,\"reason\":\"$r\"}"
+        sep=","
+    done
+    echo "$out]"
+    ;;
+go)
+    # Exactly two words. Anything more is refused rather than ignored.
+    [ "$#" -eq 2 ] || { echo "usage: taos-switch-os go <id>" >&2; exit 2; }
+    known "$2" || { echo "taos-switch-os: unknown system" >&2; exit 2; }
+    id=$2
+    [ -n "$TESTING" ] || [ "$(id -u)" = 0 ] || { echo "taos-switch-os: go needs root" >&2; exit 1; }
+    r="$(why_not "$id")"
+    [ -z "$r" ] || { echo "taos-switch-os: $id cannot start: $r" >&2; exit 3; }
+    if [ -n "$TESTING" ]; then
+        "$LAUNCHER" --guest "$id" --go
+    else
+        # Its own transient unit: it must outlive the caller's request and this shell.
+        systemd-run --quiet --collect --unit "taos-switch-os-$id" --on-active="$DELAY" \
+            "$LAUNCHER" --guest "$id" --go
+    fi
+    echo "{\"ok\":true,\"id\":\"$id\",\"in_seconds\":$DELAY}"
+    ;;
+*)
+    echo "usage: taos-switch-os list | go <id>" >&2
+    exit 2
+    ;;
+esac
