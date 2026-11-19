@@ -12,6 +12,8 @@ install -d -m 0755 /usr/lib/taos/dualboot
 install -m 0755 "$HERE/kexec-guest.sh" "$HERE/guest-init" /usr/lib/taos/dualboot/
 # kexec-guest.sh sources this from its own directory
 install -m 0644 "$HERE/build-identity.sh" /usr/lib/taos/dualboot/
+# /usr/local/sbin does not exist on a fresh postmarketOS install (measured on the handset).
+install -d -m 0755 /usr/local/sbin
 install -m 0755 "$HERE/taos-switch-os" /usr/local/sbin/taos-switch-os
 T=$(mktemp)
 cat > "$T" <<'SUDO'
