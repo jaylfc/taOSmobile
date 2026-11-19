@@ -59,7 +59,8 @@ stderr.
 
 Exit codes: 0 ok, 1 other error (cannot connect, unsupported buffer format,
 unknown output, `--until-black` ran out of time without a black frame,
-unexpected protocol error), 2 usage, 3 no frame or output off, 4 protocol
+unexpected protocol error, could not write the output such as a full disk or a
+closed stdout, including at the final flush), 2 usage, 3 no frame or output off, 4 protocol
 missing.
 
 ## Behaviour notes

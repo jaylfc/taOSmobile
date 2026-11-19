@@ -26,8 +26,8 @@ $(BUILD)/xdg-output-unstable-v1-client-protocol.h: $(XDGO_XML) | $(BUILD)
 $(BUILD)/xdg-output-unstable-v1-protocol.c: $(XDGO_XML) | $(BUILD)
 	wayland-scanner private-code $< $@
 
-taos-framelog: framelog.c stats.c stats.h $(GEN)
-	$(CC) $(CFLAGS) -I$(BUILD) -o $@ framelog.c stats.c \
+taos-framelog: framelog.c stats.c stats.h out.c out.h $(GEN)
+	$(CC) $(CFLAGS) -I$(BUILD) -o $@ framelog.c stats.c out.c \
 	    $(BUILD)/wlr-screencopy-unstable-v1-protocol.c \
 	    $(BUILD)/xdg-output-unstable-v1-protocol.c \
 	    $(shell pkg-config --cflags --libs wayland-client)
@@ -35,10 +35,14 @@ taos-framelog: framelog.c stats.c stats.h $(GEN)
 test_stats: test_stats.c stats.c stats.h
 	$(CC) $(CFLAGS) -o $@ test_stats.c stats.c
 
-test: test_stats
+test_out: test_out.c out.c out.h
+	$(CC) $(CFLAGS) -o $@ test_out.c out.c
+
+test: test_stats test_out
 	./test_stats
+	./test_out
 
 clean:
-	rm -rf $(BUILD) taos-framelog test_stats
+	rm -rf $(BUILD) taos-framelog test_stats test_out
 
 .PHONY: all test clean

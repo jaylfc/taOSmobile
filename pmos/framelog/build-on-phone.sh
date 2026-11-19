@@ -13,7 +13,7 @@ HOST="${1:-${FRAMELOG_HOST:-}}"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 DEST=/tmp/framelog-build
-SRC="framelog.c stats.c stats.h test_stats.c Makefile"
+SRC="framelog.c stats.c stats.h out.c out.h test_out.c test_stats.c Makefile"
 
 ssh "$HOST" "mkdir -p $DEST/src"
 for f in $SRC; do scp -q "$HERE/$f" "$HOST:$DEST/src/$f"; done

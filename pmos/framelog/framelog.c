@@ -17,6 +17,7 @@
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 #include "stats.h"
+#include "out.h"
 
 #define EXIT_OK 0
 #define EXIT_ERR 1
@@ -80,6 +81,7 @@ static struct {
 	unsigned long frames;
 	int fails;
 	bool done;
+	bool out_failed;
 	int exit_code;
 } A = {
 	.duration = 5.0, .threshold = 16, .first_timeout_ms = 1500,
@@ -98,6 +100,17 @@ static void finish(int code)
 		A.done = true;
 		A.exit_code = code;
 	}
+}
+
+/* Record an output failure once: message, then stop. The failure beats any
+ * other exit code at shutdown, so a later success cannot hide it. */
+static void out_fail(void)
+{
+	if (!A.out_failed) {
+		A.out_failed = true;
+		fprintf(stderr, "taos-framelog: cannot write output: %s\n", strerror(errno));
+	}
+	finish(EXIT_ERR);
 }
 
 /* ---- wl_output / xdg_output ---- */
@@ -324,15 +337,20 @@ static void f_ready(void *d, struct zwlr_screencopy_frame_v1 *f, uint32_t hi, ui
 	uint64_t dt_us = A.frames ? (t - A.prev_t) / 1000 : 0;
 	A.prev_t = t;
 	A.frames++;
-	fprintf(A.out, "%llu,%llu,%u,%llu,%llu\n", (unsigned long long)t, (unsigned long long)dt_us,
-		s.max, (unsigned long long)s.bright, (unsigned long long)s.samples);
+	if (fl_out_line(A.out, "%llu,%llu,%u,%llu,%llu\n", (unsigned long long)t,
+			(unsigned long long)dt_us, s.max, (unsigned long long)s.bright,
+			(unsigned long long)s.samples) < 0) {
+		out_fail();
+		return;
+	}
 	if (A.until_black && s.bright == 0) {
-		fprintf(A.out, "BLACK %llu\n", (unsigned long long)t);
-		fflush(A.out);
+		if (fl_out_line(A.out, "BLACK %llu\n", (unsigned long long)t) < 0) {
+			out_fail();
+			return;
+		}
 		finish(EXIT_OK);
 		return;
 	}
-	fflush(A.out);
 	if (!A.done)
 		start_capture();
 }
@@ -556,11 +574,12 @@ int main(int argc, char **argv)
 	A.deadline = A.t_start + (uint64_t)(A.duration * 1e9);
 	A.first_deadline = A.t_start + (uint64_t)A.first_timeout_ms * 1000000ull;
 	if (A.mark) {
-		fprintf(A.out, "MARK %llu\n", (unsigned long long)A.t_start);
-		fflush(A.out);
+		if (fl_out_line(A.out, "MARK %llu\n", (unsigned long long)A.t_start) < 0)
+			out_fail();
 	}
 
-	start_capture();
+	if (!A.done)
+		start_capture();
 
 	while (!A.done) {
 		while (wl_display_prepare_read(A.display) != 0)
@@ -615,7 +634,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (A.out)
-		fflush(A.out);
-	_exit(A.exit_code);
+	if (A.out && fl_out_finish(A.out, A.out != stdout) < 0)
+		out_fail();
+	_exit(A.out_failed ? EXIT_ERR : A.exit_code);
 }

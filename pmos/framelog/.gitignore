@@ -1,3 +1,4 @@
 build/
 taos-framelog
 test_stats
+test_out
