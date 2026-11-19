@@ -1,0 +1,441 @@
+"""Tests for the opt-in on-device LLM (llama.cpp + LFM3-1.7B), no root, no device.
+
+The scripts take their paths from environment knobs, so they run unmodified
+against a fake thermal directory and a state dir; systemctl, curl and logger are
+stubs on PATH that log their arguments. Each stub's effect is asserted (a call
+log that is empty because the stub never ran would pass every "did nothing"
+case).
+
+Run: python3 -m pytest -q -p no:cacheprovider pmos/llm/
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+HERE = Path(__file__).resolve().parent
+BIN = HERE / "bin"
+UNITS = HERE.parent / "systemd"
+SERVICE = UNITS / "llama-cpp.service"
+INSTALLER = HERE / "install-llama-cpp.sh"
+
+
+def active_lines(path: Path) -> list[str]:
+    """The file's lines with comments stripped, so a comment cannot satisfy or trip a check."""
+    out = []
+    for ln in path.read_text().splitlines():
+        s = ln.strip()
+        if s and not s.startswith("#"):
+            out.append(s)
+    return out
+
+
+def exec_start(path: Path) -> str:
+    lines = active_lines(path)
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("ExecStart="))
+    cmd = lines[i]
+    while cmd.endswith("\\"):
+        i += 1
+        cmd = cmd[:-1] + " " + lines[i]
+    return cmd
+
+
+# ---- the service unit -------------------------------------------------------
+
+def test_service_pins_two_big_cores_and_two_threads():
+    lines = active_lines(SERVICE)
+    assert "CPUAffinity=5 6" in lines
+    cmd = exec_start(SERVICE)
+    assert re.search(r"(^| )-t 2( |$)", cmd), cmd
+    assert re.search(r"(^| )-tb 2( |$)", cmd), cmd
+    assert "@THREADS@" not in SERVICE.read_text()
+
+
+def test_service_context_is_16384():
+    cmd = exec_start(SERVICE)
+    assert re.search(r"--ctx-size 16384( |$)", cmd), cmd
+
+
+def test_service_is_cpu_only_and_sandboxed_from_devices():
+    lines = active_lines(SERVICE)
+    assert "PrivateDevices=yes" in lines
+    body = "\n".join(lines).lower()
+    for bad in ("vulkan", "-ngl", "--n-gpu-layers", "--device", "gpu", "i8mm"):
+        assert bad not in body, bad
+    # the comments too: the wrong i8mm claim must be gone from the file
+    assert "i8mm" not in SERVICE.read_text().lower()
+
+
+def test_service_is_not_installable_and_pulls_its_guards():
+    lines = active_lines(SERVICE)
+    assert not any(ln == "[Install]" or ln.startswith("WantedBy=") for ln in lines)
+    wants = " ".join(ln for ln in lines if ln.startswith("Wants="))
+    assert "taos-llm-thermal.service" in wants and "taos-llm-idle.service" in wants
+
+
+@pytest.mark.parametrize("name", ["taos-llm-thermal.service", "taos-llm-idle.service"])
+def test_guard_units_die_with_the_model(name):
+    lines = active_lines(UNITS / name)
+    assert "BindsTo=llama-cpp.service" in lines
+    assert "After=llama-cpp.service" in lines
+    assert not any(ln.startswith("WantedBy=") for ln in lines)
+
+
+def test_thermal_unit_resumes_the_model_if_the_guard_dies():
+    lines = active_lines(UNITS / "taos-llm-thermal.service")
+    assert any(ln.startswith("ExecStopPost=") and "SIGCONT" in ln and "llama-cpp.service" in ln
+               for ln in lines)
+
+
+# ---- the installer ----------------------------------------------------------
+
+def test_installer_never_enables_or_starts_the_service():
+    body = "\n".join(active_lines(INSTALLER))
+    assert not re.search(r"systemctl[ \t]+([^\n]* )?(enable|start|restart|reload-or-restart|try-restart)\b", body), body
+    assert "--now" not in body
+    assert "WantedBy" not in body
+
+
+def test_installer_uses_the_alpine_package_not_a_source_build():
+    body = "\n".join(active_lines(INSTALLER))
+    assert re.search(r"apk add .*llama-server", body)
+    for gone in ("cmake", "git clone", "ninja", "GGML_NATIVE", "VULKAN", "vulkan"):
+        assert gone not in body, gone
+
+
+def test_installer_keeps_the_model_pins():
+    body = INSTALLER.read_text()
+    assert "43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452" in body
+    assert "8f6b24182258205e9e01e21f1f24a1f208c1e8115578825d202ce39976af20b6" in body
+
+
+def test_installer_installs_helper_guards_units_and_licence():
+    body = INSTALLER.read_text()
+    for needle in ("/usr/local/bin/taos-llm", "taos-llm-thermal", "taos-llm-idle",
+                   "/usr/share/taos/models/lfm3-1.7b.json"):
+        assert needle in body, needle
+
+
+def test_licence_json_matches_the_model_card():
+    j = json.loads((HERE / "lfm3-1.7b.json").read_text())
+    assert j == {
+        "id": "lfm3-1.7b",
+        "name": "LFM3 1.7B",
+        "licence": "LFM Open License v1.0",
+        "licence_note": "Commercial use allowed only below USD 10 million annual revenue",
+        "source": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
+        "offline": True,
+    }
+
+
+# ---- stubs ------------------------------------------------------------------
+
+@pytest.fixture
+def rig(tmp_path: Path):
+    bindir = tmp_path / "stubs"
+    bindir.mkdir()
+    calls = tmp_path / "calls"
+    (bindir / "systemctl").write_text(
+        '#!/bin/sh\n'
+        f'echo "systemctl $*" >> "{calls}"\n'
+        'if [ "$1" = is-active ]; then [ -e "$STUB_ACTIVE" ]; exit $?; fi\n'
+        'exit "${STUB_SYSTEMCTL_RC:-0}"\n')
+    (bindir / "curl").write_text(
+        '#!/bin/sh\n'
+        f'echo "curl $*" >> "{calls}"\n'
+        # the last argument is the URL; serve the body file named for its path
+        'for a; do u=$a; done\n'
+        'f="$STUB_CURL_DIR/$(printf %s "$u" | sed "s|^http://127.0.0.1:[0-9]*||" | tr "/?=" "___")"\n'
+        '[ -r "$f" ] || exit 22\n'
+        'cat "$f"\n')
+    (bindir / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for p in bindir.iterdir():
+        p.chmod(0o755)
+    curl_dir = tmp_path / "curl"
+    curl_dir.mkdir()
+    active = tmp_path / "active"
+
+    def run(script: str, *args: str, env: dict | None = None, active_on: bool = False):
+        if active_on:
+            active.write_text("")
+        elif active.exists():
+            active.unlink()
+        e = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
+                 STUB_ACTIVE=str(active), STUB_CURL_DIR=str(curl_dir),
+                 TAOS_LLM_ENV=str(tmp_path / "absent.env"))
+        e.update(env or {})
+        p = subprocess.run(["sh", str(BIN / script), *args], env=e,
+                           capture_output=True, text=True, timeout=30)
+        got = calls.read_text().splitlines() if calls.exists() else []
+        return p, got
+
+    def reset():
+        if calls.exists():
+            calls.unlink()
+
+    run.reset = reset
+    run.curl_dir = curl_dir
+    run.tmp = tmp_path
+    return run
+
+
+# ---- taos-llm ---------------------------------------------------------------
+
+def test_status_running_json(rig):
+    p, calls = rig("taos-llm", "status", active_on=True)
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout) == {"running": True, "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
+    assert calls == ["systemctl is-active --quiet llama-cpp.service"]
+
+
+def test_status_stopped_json(rig):
+    p, calls = rig("taos-llm", "status", active_on=False)
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout) == {"running": False, "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
+    assert calls == ["systemctl is-active --quiet llama-cpp.service"]
+
+
+def test_status_reads_port_and_model_from_the_env_file(rig):
+    envf = rig.tmp / "llm.env"
+    envf.write_text("TAOS_LLAMACPP_PORT=7900\nTAOS_LLM_MODEL=LFM3-1.7B-Q8_0\n")
+    p, _ = rig("taos-llm", "status", env={"TAOS_LLM_ENV": str(envf)}, active_on=True)
+    assert json.loads(p.stdout) == {"running": True, "model": "LFM3-1.7B-Q8_0", "port": 7900}
+
+
+@pytest.mark.parametrize("args", [(), ("restart",), ("enable",), ("--help",), ("",)])
+def test_helper_refuses_unknown_subcommands(rig, args):
+    p, calls = rig("taos-llm", *args)
+    assert p.returncode == 2
+    assert "usage" in p.stderr
+    assert calls == [], "an unknown subcommand must not reach systemctl"
+    assert p.stdout == ""
+
+
+def test_start_starts_waits_for_health_then_reports_running(rig):
+    (rig.curl_dir / "_health").write_text('{"status":"ok"}')
+    p, calls = rig("taos-llm", "start", active_on=True)
+    assert p.returncode == 0, p.stderr
+    assert calls[0] == "systemctl start llama-cpp.service"
+    assert any("http://127.0.0.1:7835/health" in c for c in calls)
+    assert json.loads(p.stdout)["running"] is True
+
+
+def test_start_fails_when_health_never_answers(rig):
+    p, calls = rig("taos-llm", "start", env={"TAOS_LLM_START_WAIT": "2"}, active_on=True)
+    assert p.returncode == 1
+    assert "health" in p.stderr
+
+
+def test_stop_stops_and_reports_not_running(rig):
+    p, calls = rig("taos-llm", "stop", active_on=False)
+    assert p.returncode == 0
+    assert calls[0] == "systemctl stop llama-cpp.service"
+    assert json.loads(p.stdout)["running"] is False
+
+
+# ---- taos-llm-thermal -------------------------------------------------------
+
+class Thermal:
+    """A fake /sys/class/thermal. set() writes millidegrees like the kernel."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        root.mkdir(exist_ok=True)
+
+    def zone(self, n: int, typ: str, temp: str | None):
+        d = self.root / f"thermal_zone{n}"
+        d.mkdir(exist_ok=True)
+        (d / "type").write_text(typ + "\n")
+        if temp is None:
+            (d / "temp").unlink(missing_ok=True)
+        else:
+            (d / "temp").write_text(temp + "\n")
+
+
+@pytest.fixture
+def thermal(rig):
+    t = Thermal(rig.tmp / "thermal")
+    state = rig.tmp / "tstate"
+
+    def tick(deg: float | None, **kw):
+        """Set the hottest cpu zone, run one guard decision, return (proc, signal calls)."""
+        if deg is not None:
+            t.zone(1, "cpu-1-0-thermal", str(int(deg * 1000)))
+        rig.reset()
+        p, calls = rig("taos-llm-thermal", "--once", env={
+            "TAOS_LLM_THERMAL_DIR": str(t.root), "TAOS_LLM_THERMAL_STATE": str(state)})
+        assert p.returncode == 0, p.stderr
+        return p, [c for c in calls if c.startswith("systemctl")]
+
+    tick.fake = t
+    tick.state = state
+    t.zone(0, "cpu-0-0-thermal", "40000")
+    t.zone(2, "gpuss-0", "99000")        # not a cpu zone: must never count
+    t.zone(3, "pm7325", "99000")
+    return tick
+
+
+STOP = "systemctl kill --signal=SIGSTOP llama-cpp.service"
+CONT = "systemctl kill --signal=SIGCONT llama-cpp.service"
+HALT = "systemctl stop llama-cpp.service"
+
+
+def test_thermal_below_cap_does_nothing(thermal):
+    p, calls = thermal(79.9)
+    assert calls == []
+    assert p.stderr == ""
+
+
+def test_thermal_pauses_at_80_and_logs(thermal):
+    p, calls = thermal(80)
+    assert calls == [STOP]
+    assert "pausing" in p.stderr and "80 C" in p.stderr
+
+
+def test_thermal_hysteresis_then_resumes_at_75(thermal):
+    assert thermal(81)[1] == [STOP]
+    assert thermal(78)[1] == [], "between 75 and 80 a paused model stays paused"
+    assert thermal(75.1)[1] == []
+    p, calls = thermal(75)
+    assert calls == [CONT]
+    assert "resuming" in p.stderr
+    # and it does not resume twice, nor pause again below 80
+    assert thermal(74)[1] == []
+    assert thermal(79)[1] == []
+
+
+def test_thermal_does_not_signal_twice_while_hot(thermal):
+    assert thermal(82)[1] == [STOP]
+    assert thermal(85)[1] == []
+
+
+def test_thermal_aborts_at_88(thermal):
+    p, calls = thermal(88)
+    assert calls == [HALT]
+    assert "stopping" in p.stderr
+
+
+def test_thermal_aborts_from_paused(thermal):
+    assert thermal(81)[1] == [STOP]
+    assert thermal(89)[1] == [HALT]
+    # a model started again afterwards is not treated as still paused
+    assert thermal(60)[1] == []
+    assert thermal(80)[1] == [STOP]
+
+
+def test_thermal_uses_the_hottest_cpu_zone_and_ignores_other_types(thermal):
+    thermal.fake.zone(4, "cpu-5-1-thermal", "81000")
+    thermal.fake.zone(5, "cpuss-0", "50000")
+    p, calls = thermal(60)
+    assert calls == [STOP], "the hottest of several cpu zones decides"
+    assert "81 C" in p.stderr
+
+
+def test_thermal_skips_an_unreadable_zone(thermal):
+    thermal.fake.zone(4, "cpu-5-1-thermal", None)          # no temp file
+    thermal.fake.zone(5, "cpu-6-0-thermal", "garbage")      # not a number
+    thermal.fake.zone(6, "cpu-7-0-thermal", "-274000")      # not usable
+    assert thermal(80)[1] == [STOP], "a bad zone must not hide the readable hot one"
+
+
+def test_thermal_no_readable_zone_logs_once_and_does_nothing(thermal):
+    thermal.fake.zone(0, "cpu-0-0-thermal", None)
+    p, calls = thermal(None)
+    assert calls == []
+    assert p.stderr.count("no readable cpu thermal zone") == 1
+    p, calls = thermal(None)
+    assert calls == []
+    assert p.stderr == "", "logged once, not on every poll"
+
+
+def test_thermal_no_zone_directory_at_all(rig):
+    p, calls = rig("taos-llm-thermal", "--once", env={
+        "TAOS_LLM_THERMAL_DIR": str(rig.tmp / "nothing"),
+        "TAOS_LLM_THERMAL_STATE": str(rig.tmp / "ts")})
+    assert p.returncode == 0
+    assert calls == []
+    assert "no readable cpu thermal zone" in p.stderr
+
+
+def test_thermal_never_pauses_forever_when_zones_vanish(thermal):
+    assert thermal(82)[1] == [STOP]
+    thermal.fake.zone(0, "cpu-0-0-thermal", None)
+    thermal.fake.zone(1, "cpu-1-0-thermal", None)
+    p, calls = thermal(None)
+    assert calls == [CONT]
+    assert "resuming" in p.stderr
+
+
+# ---- taos-llm-idle ----------------------------------------------------------
+
+BUSY = '[{"id":0,"is_processing":true}]'
+IDLE = '[{"id":0,"is_processing":false}]'
+
+
+@pytest.fixture
+def idle(rig):
+    state = rig.tmp / "istate"
+
+    def tick(now: int, body: str | None, minutes: str = "10"):
+        for f in rig.curl_dir.iterdir():
+            f.unlink()
+        if body is not None:
+            (rig.curl_dir / "_slots").write_text(body)
+        rig.reset()
+        p, calls = rig("taos-llm-idle", "--once", env={
+            "TAOS_LLM_IDLE_STATE": str(state), "TAOS_LLM_NOW": str(now),
+            "TAOS_LLM_IDLE_MIN": minutes})
+        assert p.returncode == 0, p.stderr
+        assert any(c.startswith("curl") for c in calls), "the poll must actually read /slots"
+        return p, [c for c in calls if c.startswith("systemctl")]
+
+    return tick
+
+
+def test_idle_stops_after_ten_idle_minutes(idle):
+    assert idle(1000, IDLE)[1] == []
+    assert idle(1000 + 599, IDLE)[1] == []
+    p, calls = idle(1000 + 600, IDLE)
+    assert calls == [HALT]
+    assert "stopping" in p.stderr
+
+
+def test_idle_busy_slot_restarts_the_clock(idle):
+    idle(1000, IDLE)
+    assert idle(1500, BUSY)[1] == []
+    assert idle(1500 + 599, IDLE)[1] == []
+    assert idle(1500 + 600, IDLE)[1] == [HALT]
+
+
+def test_idle_honours_the_configured_minutes(idle):
+    idle(0, IDLE, minutes="2")
+    assert idle(119, IDLE, minutes="2")[1] == []
+    assert idle(120, IDLE, minutes="2")[1] == [HALT]
+
+
+def test_idle_bad_minutes_fall_back_to_ten(idle):
+    idle(0, IDLE, minutes="soon")
+    assert idle(599, IDLE, minutes="soon")[1] == []
+    assert idle(600, IDLE, minutes="soon")[1] == [HALT]
+
+
+def test_idle_unreadable_slots_means_busy_and_never_stops(idle):
+    idle(0, None)
+    p, calls = idle(100000, None)
+    assert calls == []
+
+
+def test_idle_slots_without_the_field_means_busy(idle):
+    idle(0, '{"error":"model not loaded"}')
+    assert idle(100000, '{"error":"model not loaded"}')[1] == []
+
+
+def test_idle_one_busy_slot_among_idle_ones_is_busy(idle):
+    both = '[{"id":0,"is_processing":false},{"id":1,"is_processing": true}]'
+    idle(0, both)
+    assert idle(100000, both)[1] == []
