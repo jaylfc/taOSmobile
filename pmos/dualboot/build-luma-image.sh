@@ -24,7 +24,9 @@ say "extract p2"
 rm -f luma-root.img
 dd if="${L}p2" of=luma-root.img bs=4M conv=sparse status=none
 say "grow to $SIZE"
-e2fsck -fy luma-root.img
+# e2fsck exits 1 after a successful repair; 2 and above (reboot needed, uncorrected, error) abort
+rc=0; e2fsck -fy luma-root.img || rc=$?
+if [ "$rc" -gt 1 ]; then echo "e2fsck failed with status $rc"; exit 1; fi
 truncate -s "$SIZE" luma-root.img
 resize2fs luma-root.img
 e2label luma-root.img luma-root
