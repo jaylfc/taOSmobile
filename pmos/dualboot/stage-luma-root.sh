@@ -78,8 +78,10 @@ echo luma-mobile > "$DEP/etc/hostname"
 # label stay as they are
 if [ -n "${LUMA_PIN:-}" ]; then
   h=$(printf '%s\n' "$LUMA_PIN" | openssl passwd -6 -stdin)
-  H="$h" awk -F: -v OFS=: '$1 == "luma" { $2 = ENVIRON["H"]; n++ } { print } END { exit n != 1 }' \
-    "$DEP/etc/shadow" > "$MNT/.shadow.new" || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
+  # the temp copy holds every hash: private from creation (the final file keeps its own mode below)
+  rm -f "$MNT/.shadow.new"
+  ( umask 077; H="$h" awk -F: -v OFS=: '$1 == "luma" { $2 = ENVIRON["H"]; n++ } { print } END { exit n != 1 }' \
+    "$DEP/etc/shadow" > "$MNT/.shadow.new" ) || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
   cat "$MNT/.shadow.new" > "$DEP/etc/shadow"
   rm -f "$MNT/.shadow.new"
   echo "luma PIN set"
