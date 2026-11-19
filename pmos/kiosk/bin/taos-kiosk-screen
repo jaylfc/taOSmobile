@@ -56,20 +56,172 @@ page() {
         >/dev/null 2>&1 || true
 }
 
+# Is the screen black right now? Reads a 4 px wide strip down the middle of the
+# output: the closing animation ends on a thin line at the centre, so a strip
+# through the centre is black only once that line has gone too.
+#
+# `timeout`, always: grim BLOCKS FOREVER on an output that is off (it has no
+# capture formats to offer). An off request for a panel that is already off
+# hung here, and the moment the panel next came on, the stuck request finished
+# its job and switched it straight off again: the phone could not be woken.
+is_black() {
+    _f="${XDG_RUNTIME_DIR:-/tmp}/taos-black-probe.$$"
+    timeout 1 grim -g "${TAOS_BLACK_PROBE:-268,0 4x1200}" -t ppm - > "$_f" 2>/dev/null || { rm -f "$_f"; return 1; }
+    # The image is three header lines ("P6", "W H", "255") and then raw
+    # samples. Count ONLY the samples: with the header counted and a small
+    # allowance for it, one white row of the strip still passed as black, and
+    # the closing animation ends on exactly such a line.
+    _h="$(head -n 3 "$_f" | wc -c)"
+    _all="$(wc -c < "$_f")"
+    _n="$(tail -c +"$((_h + 1))" "$_f" | tr -d '\000-\020' | wc -c)"
+    rm -f "$_f"
+    case "$_h$_all$_n" in ''|*[!0-9]*) return 1 ;; esac
+    # Some samples must exist, and none may be brighter than 16.
+    [ "$_all" -gt "$_h" ] && [ "$_n" -eq 0 ]
+}
+
+# Is any output powered? An off request often arrives for a panel that is
+# already off (the idle timer fires again, the power key after a timeout).
+# Three answers, because "could not ask" is not "dark": 0 lit, 1 dark, 2 unknown.
+# Only a successful answer that shows no powered output counts as dark.
+panel_state() {
+    _o="$(swaymsg -t get_outputs -r 2>/dev/null)" || return 2
+    case "$_o" in
+        *'"power": true'*|*'"power":true'*) return 0 ;;
+        *'"power"'*) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+# A wake stamps this file. An off that was still waiting for black when the
+# wake arrived must not then switch the panel off under it: it compares the
+# stamp it saw at the start with the stamp at the end.
+WAKE_STAMP="${XDG_RUNTIME_DIR:-/tmp}/taos-screen.wake"
+wake_stamp() { cat "$WAKE_STAMP" 2>/dev/null || echo none; }
+
+# Wait for black, at most TAOS_BLACK_WAIT_MS (2 s); the cap means a page that
+# never blackens costs time, not the screen-off. LOOK FIRST, then sleep: this
+# used to sleep 150 ms before the first look "to leave a frame's time", which
+# guaranteed nothing a look does not and cost 150 ms on every screen-off. With
+# the page already black the whole off path measured 337 to 515 ms.
+# The frame logger, when installed, watches EVERY frame of the strip and exits
+# on the first black one. A grim look takes 40 to 220 ms on this phone, so the
+# grim loop below learns about black up to that late; measured, the page was
+# black about 180 ms after it was asked while the whole off path took 440 to
+# 690 ms. Returns 0 when the wait is over (black, capped, panel dark, or a
+# wake), 1 when the logger could not answer and the grim loop should.
+FRAMELOG="${TAOS_FRAMELOG:-/usr/local/bin/taos-framelog}"
+wait_black_framelog() {
+    [ -x "$FRAMELOG" ] || return 1
+    _r="$(printf '%s' "${TAOS_BLACK_PROBE:-268,0 4x1200}" | tr ' ' ',')"
+    _d="$(awk -v c="$_cap" 'BEGIN { printf "%.3f", c / 1000 }')"
+    _f0="$(date +%s%N)"
+    "$FRAMELOG" --every-frame --until-black --duration "$_d" --first-timeout 400 \
+        --region "$_r" >/dev/null 2>&1 &
+    _fp=$!
+    while kill -0 "$_fp" 2>/dev/null; do
+        if [ "$(wake_stamp)" != "${_stamp0:-none}" ]; then
+            kill "$_fp" 2>/dev/null || true
+            wait "$_fp" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.02
+    done
+    _flrc=0; wait "$_fp" || _flrc=$?
+    _el=$(( ( $(date +%s%N) - _f0 ) / 1000000 ))
+    # (_flrc, not _rc: the off path ends with `exit "${_rc:-0}"`, and shell
+    # variables are global.)
+    case "$_flrc" in
+        0) return 0 ;;          # a black frame
+        3) return 0 ;;          # no frame at all: the output is off
+        1)
+            # 1 is both "ran out of time" and "could not connect": tell them
+            # apart by how long it ran, so a broken logger does not cost the cap
+            # twice. Only a run that lasted the whole cap counts as out of time:
+            # with a small cap a slack would make an instant failure look like one.
+            if [ "$_el" -ge "$_cap" ]; then
+                echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
+                return 0
+            fi
+            return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+wait_black() {
+    _cap="${TAOS_BLACK_WAIT_MS:-2000}"
+    case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
+    _t0="$(date +%s%N 2>/dev/null)"
+    case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
+    wait_black_framelog && return 0
+    while :; do
+        # Nothing to wait for, and nothing grim could read, on a dark panel.
+        # An unknown state keeps looking: the looks are time-limited anyway.
+        _ps=0; panel_state || _ps=$?
+        [ "$_ps" -eq 1 ] && return 0
+        # A wake arrived: stop waiting, the caller will stand down.
+        [ "$(wake_stamp)" = "${_stamp0:-none}" ] || return 0
+        is_black && return 0
+        _el=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
+        if [ "$_el" -ge "$_cap" ]; then
+            echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
+            return 0
+        fi
+        sleep 0.03
+    done
+}
+
 case "${1:-}" in
 off)
-    page off
     # The page now closes the lock screen into the centre over 0.5 s (Jay:
     # "close into the centre ... a quick 0.5 second animation", ls-tv-off),
     # and nothing paints once the output is down, so wait it out: the last
     # frame on the panel must be the black it ends on. This was 0.12 s, which
     # only had to cover one black frame; 50 ms over the animation leaves room
     # for chromium to composite that frame on a busy phone.
-    sleep 0.55
+    #
+    # A fixed 0.55 s was not enough, measured 2026-11-17: the first frame after
+    # a wake was the lock face, half faded, with the PREVIOUS minute on its
+    # clock -- the frame the panel was holding when the power went, because the
+    # animation had not finished. The message has to reach the page first, and
+    # when the phone slept UNLOCKED the shell has to load the lock page before
+    # it can animate at all. So do not guess a time: look at the glass and
+    # power off when it is black, or after 2 s whatever it shows.
+    _stamp0="$(wake_stamp)"
+    # `|| _ps=$?`: under set -e a bare non-zero return would end the script.
+    _ps=0; panel_state || _ps=$?
+    if [ "$_ps" -ne 1 ]; then
+        page off
+        wait_black
+    fi
+    # Woken while this was waiting (a double tap just after the screen began to
+    # go off): the wake has already lit the panel and told the page. Leave it.
+    if [ "$(wake_stamp)" != "$_stamp0" ]; then
+        echo "taos-kiosk-screen: a wake arrived during the wait, leaving the panel on" >&2
+        exit 0
+    fi
     touch_events disabled
-    exec swaymsg "output * power off"
+    swaymsg "output * power off" || _rc=$?
+    # A wake can still land between the check above and the two lines after
+    # it, and another check before them would only move that gap. So look
+    # once more AFTER the panel is down. A wake stamps before it acts, so any
+    # wake whose power-on could have come before this power-off has stamped
+    # by now: put the panel and touch back. If the wake in fact acted after
+    # the power-off, repeating its two steps changes nothing.
+    if [ "$(wake_stamp)" != "$_stamp0" ]; then
+        echo "taos-kiosk-screen: a wake arrived as the panel went off, powering it back on" >&2
+        swaymsg "output * power on" >/dev/null 2>&1 || true
+        touch_events enabled
+        exit 0
+    fi
+    exit "${_rc:-0}"
     ;;
 on)
+    # Stamp first, so an off that is still waiting sees it before it acts.
+    _w="$WAKE_STAMP.$$"
+    # The pid makes every wake's stamp different whatever precision `date` has
+    # here: two wakes in one second must not look like one.
+    echo "$$.$(date +%s%N 2>/dev/null || date +%s)" > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
     swaymsg "output * power on" >/dev/null 2>&1 || true
     touch_events enabled
     page on
