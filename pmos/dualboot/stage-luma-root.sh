@@ -78,7 +78,7 @@ echo luma-mobile > "$DEP/etc/hostname"
 # label stay as they are
 if [ -n "${LUMA_PIN:-}" ]; then
   h=$(printf '%s\n' "$LUMA_PIN" | openssl passwd -6 -stdin)
-  awk -F: -v OFS=: -v h="$h" '$1 == "luma" { $2 = h; n++ } { print } END { exit n != 1 }' \
+  H="$h" awk -F: -v OFS=: '$1 == "luma" { $2 = ENVIRON["H"]; n++ } { print } END { exit n != 1 }' \
     "$DEP/etc/shadow" > "$MNT/.shadow.new" || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
   cat "$MNT/.shadow.new" > "$DEP/etc/shadow"
   rm -f "$MNT/.shadow.new"
