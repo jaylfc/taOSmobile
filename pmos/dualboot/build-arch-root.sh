@@ -12,6 +12,7 @@ step() { echo "=== $(date -u +%H:%M:%S) $*"; }
 
 step start
 apk add --no-progress libarchive-tools arch-install-scripts 2>/dev/null || apk add --no-progress libarchive-tools
+apk add --no-progress gnupg gnupg-dirmngr ca-certificates
 
 if [ ! -e "$IMG" ]; then
   step image
@@ -23,12 +24,32 @@ mountpoint -q "$MNT" || mount -o loop "$IMG" "$MNT"
 if [ ! -x "$MNT/usr/bin/pacman" ]; then
   step fetch
   cd "$D"
-  wget -q -O alarm.tar.gz http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
-  wget -q -O alarm.tar.gz.md5 http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz.md5
-  [ "$(md5sum alarm.tar.gz | cut -d' ' -f1)" = "$(cut -d' ' -f1 alarm.tar.gz.md5)" ] || { echo "MD5 MISMATCH"; exit 1; }
+  # The tarball is checked against the detached GPG signature of the Arch Linux ARM build system key,
+  # whose fingerprint is pinned here. Source: the "Package signing" page, archlinuxarm.org/about/package-signing
+  # (entry "Arch Linux ARM Build System"). os.archlinuxarm.org serves a certificate for another name,
+  # so the download comes from a mirror over HTTPS; the signature, not the transport, is the trust.
+  ALARM_KEY_FPR=68B3537F39A313B3E574D06777193F152BDBE6A6
+  ALARM_URL=https://de3.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+  rm -f alarm.tar.gz alarm.tar.gz.sig
+  wget -q -O alarm.tar.gz "$ALARM_URL"
+  wget -q -O alarm.tar.gz.sig "$ALARM_URL.sig"
+  GH=$D/alarm-gnupg
+  rm -rf "$GH"; mkdir -m 700 "$GH"
+  if [ -n "${ALARM_KEYFILE:-}" ]; then
+    gpg --homedir "$GH" --batch --import "$ALARM_KEYFILE"
+  else
+    gpg --homedir "$GH" --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "$ALARM_KEY_FPR"
+  fi
+  [ "$(gpg --homedir "$GH" --batch --with-colons --fingerprint "$ALARM_KEY_FPR" | awk -F: '$1=="fpr"{print $10; exit}')" = "$ALARM_KEY_FPR" ] \
+    || { echo "SIGNING KEY FINGERPRINT MISMATCH"; rm -f alarm.tar.gz alarm.tar.gz.sig; exit 1; }
+  VST=$(gpg --homedir "$GH" --batch --status-fd 1 --verify alarm.tar.gz.sig alarm.tar.gz 2>/dev/null) || VST=
+  # GOODSIG (not EXPKEYSIG or REVKEYSIG) and a VALIDSIG whose primary key is the pinned one
+  echo "$VST" | grep -q '^\[GNUPG:\] GOODSIG ' \
+    && [ "$(echo "$VST" | awk '$1=="[GNUPG:]" && $2=="VALIDSIG"{print $NF}')" = "$ALARM_KEY_FPR" ] \
+    || { echo "SIGNATURE CHECK FAILED"; rm -f alarm.tar.gz alarm.tar.gz.sig; exit 1; }
   step extract
   bsdtar -xpf alarm.tar.gz -C "$MNT"
-  rm -f alarm.tar.gz
+  rm -f alarm.tar.gz alarm.tar.gz.sig
 fi
 
 step chroot-mounts
