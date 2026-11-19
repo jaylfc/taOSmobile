@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import os
 import subprocess
 import sys
 import tomllib
@@ -175,7 +176,6 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"],
             cwd=repo_root,
             capture_output=True,
-            text=True,
             check=True,
         )
     except subprocess.CalledProcessError:
@@ -184,7 +184,10 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
         return failures
     # -z: NUL-separated and unquoted, so a path with unusual characters is the
     # literal path, not git's escaped form.
-    for doc_rel in sorted(p for p in result.stdout.split("\0") if p):
+    # Bytes, decoded as file names: text mode would translate a CR in a name
+    # to LF, and two different files could then match one configured path.
+    names = [os.fsdecode(b) for b in result.stdout.split(b"\0") if b]
+    for doc_rel in sorted(names):
         if any(part == ".git" for part in Path(doc_rel).parts):
             continue
         rel = doc_rel
