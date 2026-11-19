@@ -1,0 +1,41 @@
+#!/bin/sh
+# taos-llm: opt-in switch for the handset's on-device model.
+#
+#   taos-llm start    start llama-cpp.service (and, through it, the thermal
+#                     guard and the idle auto-stop), wait for /health, print status
+#   taos-llm stop     stop it
+#   taos-llm status   print {"running":bool,"model":"...","port":N}
+#
+# The service is never enabled: phone agents use the taOS host's models by
+# default, and this model is for offline use and quick replies. It stops itself
+# after TAOS_LLM_IDLE_MIN idle minutes (taos-llm-idle.service). Run as root.
+set -u
+ENV_FILE="${TAOS_LLM_ENV:-/etc/taos-llm.env}"
+# shellcheck disable=SC1090
+[ -r "$ENV_FILE" ] && . "$ENV_FILE"
+SVC=llama-cpp.service
+PORT="${TAOS_LLAMACPP_PORT:-7835}"
+MODEL="${TAOS_LLM_MODEL:-LFM3-1.7B-QAD-Q4_0}"
+WAIT="${TAOS_LLM_START_WAIT:-60}"
+
+status() {
+  if systemctl is-active --quiet "$SVC"; then running=true; else running=false; fi
+  printf '{"running":%s,"model":"%s","port":%s}\n' "$running" "$MODEL" "$PORT"
+}
+
+case "${1:-}" in
+  start)
+    systemctl start "$SVC" || { echo "taos-llm: $SVC failed to start" >&2; exit 1; }
+    i=0
+    until curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+      i=$((i + 1))
+      [ "$i" -le "$WAIT" ] || { echo "taos-llm: /health did not answer in $WAIT s" >&2; exit 1; }
+      sleep 1
+    done
+    status ;;
+  stop)
+    systemctl stop "$SVC" || exit 1
+    status ;;
+  status) status ;;
+  *) echo "usage: taos-llm start|stop|status" >&2; exit 2 ;;
+esac

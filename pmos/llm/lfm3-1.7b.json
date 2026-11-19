@@ -1,0 +1,8 @@
+{
+  "id": "lfm3-1.7b",
+  "name": "LFM3 1.7B",
+  "licence": "LFM Open License v1.0",
+  "licence_note": "Commercial use allowed only below USD 10 million annual revenue",
+  "source": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
+  "offline": true
+}
