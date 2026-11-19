@@ -23,7 +23,7 @@ ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 
 def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
-        query_fails=False, wake_at_s=None, wake_in_gap=False):
+        query_fails=False, wake_at_s=None, wake_in_gap=False, bright_looks=None, framelog=None):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -33,7 +33,17 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     start = tmp_path / "start"
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
-    if grim_ok:
+    if grim_ok and bright_looks is not None:
+        # Bright for a fixed NUMBER of looks, then black: independent of how
+        # long the script takes to start on a slow machine.
+        (bindir / "grim").write_text(
+            '#!/bin/sh\n'
+            ': > "%s/probed"\n'
+            'n=$(( $(cat "%s/looks" 2>/dev/null || echo 0) + 1 )); echo $n > "%s/looks"\n'
+            'if [ $n -le %d ]; then echo "grim bright" >> "%s"; cat "%s/bright.ppm"\n'
+            'else echo "grim black" >> "%s"; cat "%s/black.ppm"; fi\n'
+            % (tmp_path, tmp_path, tmp_path, bright_looks, log, tmp_path, log, tmp_path))
+    elif grim_ok:
         (bindir / "grim").write_text(
             '#!/bin/sh\n'
             ': > "%s/probed"\n'
@@ -61,9 +71,36 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         # What grim really does on a dark output: never returns.
         (bindir / "grim").write_text('#!/bin/sh\necho "grim hung" >> "%s"\nsleep 60\n' % log)
     (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
-    for n in ("grim", "swaymsg", "curl"):
+    # A sleep that is logged and still sleeps, so the order of looks and waits can be read.
+    real_sleep = subprocess.run(["sh", "-c", "command -v sleep"], capture_output=True, text=True).stdout.strip()
+    (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
+    for n in ("grim", "swaymsg", "curl", "sleep"):
         os.chmod(bindir / n, 0o755)
     env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
+    # No frame logger unless a test asks for one: the grim path stays what the
+    # older tests measure, whatever is installed on the machine running them.
+    env["TAOS_FRAMELOG"] = str(tmp_path / "no-framelog")
+    if framelog is not None:
+        fl = bindir / "taos-framelog"
+        if framelog == "ok":
+            # Watches every frame: exits 0 the moment the stub screen is black,
+            # 1 when its --duration runs out first.
+            body = ('dur=$(echo "$*" | sed -n "s/.*--duration \\([0-9.]*\\).*/\\1/p")\n'
+                    'echo "framelog $*" >> "%s"\n'
+                    ': > "%s/probed"\n'
+                    'end=$(awk -v d="$dur" -v n="$(date +%%s%%N)" \'BEGIN{printf "%%.0f", n + d*1e9}\')\n'
+                    'while :; do now=$(date +%%s%%N); t0=$(cat "%s")\n'
+                    '  [ $(( (now - t0) / 1000000 )) -ge %d ] && { echo "framelog black" >> "%s"; exit 0; }\n'
+                    '  [ "$now" -ge "$end" ] && { echo "framelog timeout" >> "%s"; exit 1; }\n'
+                    '  sleep 0.008; done\n'
+                    % (log, tmp_path, start, int(bright_for_s * 1000), log, log))
+        elif framelog == "broken":
+            body = 'echo "framelog broken" >> "%s"\nexit 1\n' % log
+        elif framelog == "dark":
+            body = 'echo "framelog no frame" >> "%s"\nexit 3\n' % log
+        fl.write_text("#!/bin/sh\n" + body)
+        os.chmod(fl, 0o755)
+        env["TAOS_FRAMELOG"] = str(fl)
     if query_fails:
         (bindir / "swaymsg").write_text(
             '#!/bin/sh\ncase "$*" in *get_outputs*) exit 1 ;; esac\necho "swaymsg $*" >> "%s"\n' % log)
@@ -239,3 +276,75 @@ def test_two_wakes_in_the_same_second_leave_different_stamps(tmp_path):
         run_on(tmp_path)
         seen.add((tmp_path / "taos-screen.wake").read_text())
     assert len(seen) == 3, seen
+
+
+def test_an_already_black_screen_is_looked_at_before_any_wait(tmp_path):
+    """The wait used to sleep 150 ms before its first look, on every screen-off."""
+    lines, err, took = run(tmp_path, bright_for_s=0.0)
+    i = power_off_index(lines)
+    before = lines[:i]
+    assert "grim black" in before
+    assert not any(l.startswith("sleep") for l in before), before
+    # Control: a lit screen does wait between looks. Bright for two looks by
+    # count, not by time, so a slow start cannot turn it black early.
+    (tmp_path / "looks").unlink(missing_ok=True)
+    lines, err, took = run(tmp_path, bright_for_s=0, bright_looks=2)
+    i = power_off_index(lines)
+    first_look = next(n for n, l in enumerate(lines) if l.startswith("grim"))
+    assert any(l.startswith("sleep") for l in lines[first_look:i]), lines
+    assert not any(l.startswith("sleep") for l in lines[:first_look]), lines
+
+
+def test_with_the_frame_logger_black_is_seen_on_the_frame_it_happens(tmp_path):
+    """No grim look at all: the logger watches every frame and exits on the first black one."""
+    lines, err, took = run(tmp_path, bright_for_s=0.5, framelog="ok")
+    i = power_off_index(lines)
+    before = lines[:i]
+    assert "framelog black" in before, lines
+    assert not any(l.startswith("grim") for l in lines), lines
+    assert 0.5 <= took < 1.0, took
+    assert err == ""
+    flags = next(l for l in lines if l.startswith("framelog --"))
+    assert "--until-black" in flags and "--region 268,0,4x1200" in flags and "--duration 2.000" in flags
+
+
+def test_a_frame_logger_that_cannot_answer_hands_over_to_grim(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=0.3, framelog="broken")
+    i = power_off_index(lines)
+    assert "framelog broken" in lines
+    assert "grim black" in lines[:i], lines
+    assert took < 1.5
+
+
+def test_a_frame_logger_that_sees_no_frame_means_the_panel_is_dark(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=5, framelog="dark")
+    power_off_index(lines)
+    assert not any(l.startswith("grim") for l in lines), lines
+    assert took < 1.0
+
+
+def test_the_frame_logger_wait_is_capped_once(tmp_path):
+    """Out of time is the cap, not a failure: no second wait with grim after it."""
+    lines, err, took = run(tmp_path, bright_for_s=10, cap_ms=600, framelog="ok")
+    power_off_index(lines)
+    assert "framelog timeout" in lines
+    assert not any(l.startswith("grim") for l in lines), lines
+    assert "powering off anyway" in err
+    assert took < 1.6, took
+
+
+def test_a_wake_during_the_frame_logger_wait_is_not_undone(tmp_path):
+    lines, err, took = run(tmp_path, bright_for_s=3, wake_at_s=True, framelog="ok")
+    assert not any("power off" in l for l in lines), lines
+    assert "a wake arrived" in err
+    # The wake ends the wait at once, not when the 2 s cap runs out.
+    assert took < 1.2, took
+
+
+def test_a_logger_that_fails_at_once_is_not_taken_for_the_cap_even_with_a_small_cap(tmp_path):
+    """With a 100 ms cap a slack of 100 ms read an instant failure as 'ran out
+    of time' and powered off a lit screen without looking at it."""
+    lines, err, took = run(tmp_path, bright_for_s=0.05, cap_ms=100, framelog="broken")
+    i = power_off_index(lines)
+    assert "framelog broken" in lines
+    assert any(l.startswith("grim") for l in lines[:i]), lines
