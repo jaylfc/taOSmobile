@@ -106,12 +106,16 @@ systemctl enable sshd NetworkManager tailscaled dualboot-marker.service dualboot
 systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
 for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $u"; done
 EOF
-mkdir -p "$MNT/home/jay/.ssh"
-cp /home/jay/.ssh/authorized_keys "$MNT/home/jay/.ssh/authorized_keys"
-. "$(dirname "$0")/guest-units.sh"
+. "$HERE/guest-units.sh"
 dualboot_guest_units "$MNT" /usr/local/bin Omarchy arch omarchy-mobile
 mkdir -p "$MNT/mnt/taos"
 chroot "$MNT" /bin/bash /root/stage-a-config.sh
+# useradd -m creates the home as jay; it is only seeded here, after the user exists. The chown
+# also repairs a home that an earlier run of this script left owned by root.
+chroot "$MNT" chown jay:jay /home/jay
+mkdir -p "$MNT/home/jay/.ssh"
+cp /home/jay/.ssh/authorized_keys "$MNT/home/jay/.ssh/authorized_keys"
+chmod 700 "$MNT/home/jay/.ssh"; chmod 600 "$MNT/home/jay/.ssh/authorized_keys"
 chroot "$MNT" chown -R jay:jay /home/jay/.ssh
 # jay's password = taOS's hash, so sudo on the guest uses the same password
 H=$(awk -F: '$1=="jay"{print $2}' /etc/shadow); chroot "$MNT" usermod -p "$H" jay
