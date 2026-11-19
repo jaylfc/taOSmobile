@@ -155,9 +155,14 @@ def save(mode: str) -> None:
 
 
 def switch(mode: str) -> None:
-    sig = MODES[mode][0]
-    subprocess.run(BUS + ["set_mode", "s", sig], check=True,
-                   capture_output=True, text=True, timeout=30)
+    sig, gadget = MODES[mode]
+    # Already bound: do not ask. usb-signaller labels its own developer gadget
+    # "Tethering", so set_mode developer_mode while it is bound removes that
+    # gadget and then fails to enable the same one, leaving the port unbound
+    # (measured 2026-10-16). The ncm helper restart below still runs.
+    if gadget is None or bound_gadget() != gadget:
+        subprocess.run(BUS + ["set_mode", "s", sig], check=True,
+                       capture_output=True, text=True, timeout=30)
     if mode == "ncm":
         subprocess.run(["systemctl", "restart", DEV_HELPER], check=True,
                        capture_output=True, text=True, timeout=60)
