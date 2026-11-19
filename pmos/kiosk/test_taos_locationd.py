@@ -178,7 +178,7 @@ exit 1
     # Run the script
     result = subprocess.run(
         [sys.executable, "-c", """
-import importlib.util, pathlib, sys
+import importlib.machinery, importlib.util, pathlib, sys
 loader = importlib.machinery.SourceFileLoader('taos_locationd', r'%s')
 spec = importlib.util.spec_from_loader(loader.name, loader)
 mod = importlib.util.module_from_spec(spec)
@@ -192,7 +192,7 @@ sys.exit(0 if not hasattr(mod, 'main') else mod.main())
 
     # Check that the output file has the correct location
     out_path = tmp_path / "location.json"
-    assert out_path.exists()
+    assert out_path.exists(), result.stdout + result.stderr
     with open(out_path, "r", encoding="utf-8") as f:
         content = json.load(f)
     assert content["lat"] == 51.5
