@@ -13,6 +13,8 @@
 # request before the screen goes. The switch is a kexec from RAM (kexec-guest.sh): no partition
 # and no boot slot is written, so any reboot of the other system comes back to taOS.
 set -eu
+# Runs as root under sudo: never trust the caller's PATH for id, systemd-run and the rest.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 
 IDS="omarchy luma"
 D=/var/lib/dualboot

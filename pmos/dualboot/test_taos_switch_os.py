@@ -118,6 +118,32 @@ def test_sudoers_allows_exactly_the_two_go_forms():
     assert rules == ["taos ALL=(root) NOPASSWD: /usr/local/sbin/taos-switch-os go omarchy, "
                      "/usr/local/sbin/taos-switch-os go luma"]
     assert "*" not in rules[0] and "ALL" not in rules[0].split("NOPASSWD:")[1]
+    defaults = [l for l in src.splitlines() if l.startswith("Defaults")]
+    assert defaults == ["Defaults!/usr/local/sbin/taos-switch-os secure_path=/usr/sbin:/usr/bin:/sbin:/bin"]
+
+
+def test_the_tool_fixes_its_own_path_before_any_command():
+    src = TOOL.read_text().splitlines()
+    code = [l for l in src if l.strip() and not l.lstrip().startswith("#")]
+    assert code[0] == "set -eu"
+    assert code[1] == "PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH"
+
+
+def test_a_planted_id_and_systemd_run_on_the_callers_path_are_never_run(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("needs a non-root user")
+    bin_ = tmp_path / "evil"
+    bin_.mkdir()
+    marker = tmp_path / "marker"
+    (bin_ / "id").write_text("#!/bin/sh\necho 0\n")
+    (bin_ / "systemd-run").write_text('#!/bin/sh\necho ran > "%s"\n' % marker)
+    for f in bin_.iterdir():
+        f.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TAOS_SWITCH_OS")}
+    env["PATH"] = "%s:%s" % (bin_, env["PATH"])
+    r = subprocess.run(["sh", str(TOOL), "go", "omarchy"], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 1 and "needs root" in r.stderr
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("bad", ["abc", "5", "123456", "-30", "30s", ""])

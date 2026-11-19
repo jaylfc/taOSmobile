@@ -16,6 +16,8 @@ install -m 0755 "$HERE/taos-switch-os" /usr/local/sbin/taos-switch-os
 T=$(mktemp)
 cat > "$T" <<'SUDO'
 # taOS shell -> other systems. Exactly these two commands, with exactly these arguments.
+# The tool runs as root: sudo gives it a fixed PATH whatever the caller had.
+Defaults!/usr/local/sbin/taos-switch-os secure_path=/usr/sbin:/usr/bin:/sbin:/bin
 taos ALL=(root) NOPASSWD: /usr/local/sbin/taos-switch-os go omarchy, /usr/local/sbin/taos-switch-os go luma
 SUDO
 install -m 0440 -o root -g root "$T" /etc/sudoers.d/50-taos-switch-os
