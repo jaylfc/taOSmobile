@@ -7,7 +7,7 @@ the full-screen surface.
 ## Where things stand
 
 **The current port is postmarketOS** (`pmos/`, from 2026-09-15). This is the
-state last measured on the handset (2026-10-03). The phone has been offline since
+state last measured on the handset (2026-10-03; the dual-boot item below, 2026-10-30). The phone has been offline since
 about 2026-10-05, so read it as last known, not live:
 
 - It boots straight into taOS full screen: sway runs Chromium as a kiosk
@@ -30,6 +30,10 @@ about 2026-10-05, so read it as last known, not live:
   `/run/taos-location/location.json` for the controller's `GET /api/system/location`
   (unit `pmos/kiosk/systemd/taos-locationd.service`, installer
   `pmos/kiosk/install-locationd.sh`, tests `pmos/kiosk/test_taos_locationd.py`).
+- Quick OS switching (in progress, PR #23, `docs/dual-boot-plan.md`): taOS kexecs into
+  Omarchy Mobile from a loop image on its own root, and a reboot comes back. Measured
+  2026-10-30: Omarchy's stock desktop on the panel with wifi, GPU and the touchscreen. Luma
+  Mobile is next.
 
 **History:** Ubuntu Touch ran the controller natively but could not give a web
 shell an exclusive full screen (`docs/android-kiosk-scope.md`). The Droidian port
@@ -124,6 +128,9 @@ actually covers, how to take one, how to restore) are in
 The plan for pairing the taOSusb board (a Pi Zero 2W agent) over Bluetooth into
 the Cluster app, with Bluetooth kept as its fallback link, is
 `docs/taosusb-pairing-plan.md`.
+
+The plan for dual booting taOS and Omarchy Mobile, one OS per A/B boot slot
+sharing userdata, is `docs/dual-boot-plan.md`.
 
 ## Licence
 

@@ -61,6 +61,85 @@ PREVIEW = (1280, 960)
 #: How long a still may wait for a frame newer than the shutter press. A still
 #: must not be the frame that was already on screen when the finger landed.
 SHUTTER_TIMEOUT = 2.0
+
+# --- the gallery while the phone is locked ----------------------------------
+# The camera opens from the lock screen without signing in, and this service
+# answers on loopback with no authentication of its own. Until 2026-11-17 that
+# meant whoever held the locked phone could open the gallery, see every photo
+# and delete them. While the phone is locked the gallery is now only the shots
+# taken under the current lock session, and nothing can be deleted.
+#
+# The controller is the only thing that knows whether the phone is locked.
+# THE CONTRACT: GET /auth/lock-state answers 200 with exactly
+# {"locked": <bool>, "session": <int>}. `session` changes on every transition
+# into locked and stays the same for one locked period (it does not change on
+# unlock). Why a number and not just the flag: if the phone is unlocked and
+# locked again with no camerad request in between, camerad never sees the
+# unlock, so a "forget on unlock" rule never fires and the previous locked
+# session's shots would show in the next one. Each shot is stored with the
+# session it was taken under and shown only while that same session is current,
+# so an old session's shots simply never match.
+#
+# FAIL CLOSED: anything but that exact shape (no answer, an error, a non-200,
+# an old controller without the route or without `session`, extra or missing
+# keys, a session that is not a plain int, a `locked` that is not exactly a
+# bool) is locked with no session. A shot taken with no session is never shown
+# while locked. Never inferred from the kiosk window's title.
+LOCK_STATE_URL = os.environ.get("TAOS_LOCK_STATE_URL", "http://127.0.0.1:6969/auth/lock-state")
+LOCK_STATE_TIMEOUT = 1.0
+# photo name -> the lock session it was taken under.
+_LOCKED_SHOTS: dict[str, int] = {}
+_LOCKED_SHOTS_LOCK = threading.Lock()
+
+
+def _ask_lock_state():
+    """The controller's raw answer, parsed, or None. Split out to be stubbed."""
+    import urllib.request
+    req = urllib.request.Request(LOCK_STATE_URL, headers={"X-taOS-Console": "1"})
+    with urllib.request.urlopen(req, timeout=LOCK_STATE_TIMEOUT) as r:
+        if r.status != 200:
+            return None
+        return json.loads(r.read(4096).decode())
+
+
+def lock_state() -> tuple:
+    """(locked, session). Fail closed: (True, None) unless the answer is exact."""
+    try:
+        ans = _ask_lock_state()
+    except Exception:  # noqa: BLE001 -- every failure means the same thing here
+        return True, None
+    if not (isinstance(ans, dict) and set(ans) == {"locked", "session"}):
+        return True, None
+    session, locked = ans["session"], ans["locked"]
+    if type(session) is not int:   # not a bool, not a float, not a string
+        return True, None
+    if locked is False:
+        return False, session
+    if locked is True:
+        return True, session
+    return True, None
+
+
+def phone_locked() -> bool:
+    return lock_state()[0]
+
+
+def note_shot(name: str, locked: bool, session) -> None:
+    """Remember a shot taken under `session`. The caller takes (locked, session)
+    from lock_state() BEFORE the file is written, so a session change after it
+    only hides the shot."""
+    if locked is True and session is not None:
+        with _LOCKED_SHOTS_LOCK:
+            _LOCKED_SHOTS[name] = session
+
+
+def visible_while_locked(name: str, session) -> bool:
+    if session is None:
+        return False
+    with _LOCKED_SHOTS_LOCK:
+        return _LOCKED_SHOTS.get(name) == session
+
+
 #: A cold open costs about a second before the first frame lands.
 FIRST_FRAME_TIMEOUT = 5.0
 
@@ -519,13 +598,22 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/preview.mjpg":
                 return self._stream(q.get("cam", [None])[0])
             if u.path == "/photos":
+                locked, session = lock_state()
                 shots = sorted(PHOTOS.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
-                return self._json({"photos": [
+                if locked:
+                    shots = [p for p in shots if visible_while_locked(p.name, session)]
+                return self._json({"locked": locked, "photos": [
                     {"name": p.name, "at": int(p.stat().st_mtime), "bytes": p.stat().st_size}
                     for p in shots
                 ]})
             if u.path.startswith("/photo/"):
-                return self._serve_photo(u.path[len("/photo/"):])
+                name = u.path[len("/photo/"):]
+                # The same 404 as a photo that does not exist: a locked phone
+                # does not confirm which names are real.
+                locked, session = lock_state()
+                if locked and not visible_while_locked(name, session):
+                    return self._json({"error": "not found"}, 404)
+                return self._serve_photo(name)
             return self._json({"error": "not found"}, 404)
         except KeyError as exc:
             return self._json({"error": "no such camera: %s" % exc.args[0]}, 400)
@@ -540,6 +628,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/capture":
                 s = _session(q.get("cam", [None])[0])
+                # The lock state is observed BEFORE the frame boundary: only
+                # frames that arrive after a locked observation count as taken
+                # while locked. Observed after the frame, a phone that locked in
+                # between would file an unlocked-era frame under the new locked
+                # session and show it on the lock screen.
+                locked, session = lock_state()
                 _, seq = s.frame()
                 jpg = s.frame_after(seq, SHUTTER_TIMEOUT)
                 if not jpg:
@@ -547,6 +641,7 @@ class Handler(BaseHTTPRequestHandler):
                     # fault was a request queued to the wrong camera.
                     return self._json({"error": s.error or "no frame"}, 503)
                 name = datetime.now().strftime("IMG_%Y%m%d_%H%M%S_%f")[:-3] + ".jpg"
+                note_shot(name, locked, session)   # before the file exists, so it is never listed unmarked
                 (PHOTOS / name).write_bytes(jpg)
                 return self._json({"ok": True, "name": name, "bytes": len(jpg), "cam": _WHICH})
             if u.path == "/back":
@@ -579,6 +674,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if not u.path.startswith("/photo/"):
             return self._json({"error": "not found"}, 404)
+        # Nothing is deleted from a locked phone, not even this session's shots.
+        if phone_locked():
+            return self._json({"error": "the phone is locked"}, 403)
         target = self._resolve(u.path[len("/photo/"):])
         if target is None:
             return self._json({"error": "not found"}, 404)
