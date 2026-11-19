@@ -39,15 +39,15 @@ TOUCH='type:touch'
 # nanosecond-precision timestamps (same format as date +%s%N).
 clock() {
     if [ -n "${TAOS_CLOCK_SOURCE:-}" ]; then
-        $TAOS_CLOCK_SOURCE
+        "$TAOS_CLOCK_SOURCE"
     else
         date +%s%N
     fi
 }
 
-# Fallback to seconds-only if nanosecond clock fails (e.g., in test mocks)
+# Fallback to nanosecond precision if clock fails (e.g., in test mocks)
 clock_fallback() {
-    clock 2>/dev/null || date +%s
+    clock 2>/dev/null || date +%s%N
 }
 
 touch_events() {
@@ -168,7 +168,7 @@ wait_black() {
     _cap="${TAOS_BLACK_WAIT_MS:-2000}"
     case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
     _t0="$(clock 2>/dev/null)"
-    case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
+    case "$_t0" in ''|*[!0-9]*) _t0="$(clock_fallback)";; esac
     wait_black_framelog && return 0
     while :; do
         # Nothing to wait for, and nothing grim could read, on a dark panel.
