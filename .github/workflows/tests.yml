@@ -1,8 +1,8 @@
 name: Test suite
 
 on:
+  # Every pull request, whatever it targets (stacked PRs target other branches).
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
