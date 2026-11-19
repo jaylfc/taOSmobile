@@ -2,6 +2,7 @@
 # Build the Omarchy guest root as a sparse loop image on taOS's root (runs on the handset as root).
 # Stage A: Arch Linux ARM base that boots, joins wifi + tailnet, and leaves a marker. Desktop later.
 set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
 D=/var/lib/dualboot
 IMG=$D/arch-root.img
 MNT=/mnt/arch
@@ -119,7 +120,7 @@ chmod 700 "$MNT/home/jay/.ssh"; chmod 600 "$MNT/home/jay/.ssh/authorized_keys"
 chroot "$MNT" chown -R jay:jay /home/jay/.ssh
 # jay's password = taOS's hash, so sudo on the guest uses the same password
 H=$(awk -F: '$1=="jay"{print $2}' /etc/shadow); chroot "$MNT" usermod -p "$H" jay
-. "$(dirname "$0")/guest-agent.sh"
+. "$HERE/guest-agent.sh"
 dualboot_agent_account "$MNT" "$MNT/home/taos-agent" /home/taos-agent /home/jay/.ssh/authorized_keys
 
 step umount
