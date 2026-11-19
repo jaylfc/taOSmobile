@@ -42,8 +42,11 @@ in the taOS sway session. A full-Android boot slot is a separate plan
 
 ```sh
 sudo sh pmos/waydroid/install-waydroid.sh          # VANILLA image (default)
-WAYDROID_SYSTEM_TYPE=GAPPS sudo sh pmos/waydroid/install-waydroid.sh
+sudo env WAYDROID_SYSTEM_TYPE=GAPPS sh pmos/waydroid/install-waydroid.sh
 ```
+
+An existing image is not re-initialised: if it differs from the requested type the
+script prints a WARN, and switching is `waydroid init -f -s GAPPS` by hand.
 
 Idempotent and resumable. The image download (~1 GB, to
 `/var/lib/waydroid/cache_http`, on disk, not the tmpfs `/tmp`) runs in a

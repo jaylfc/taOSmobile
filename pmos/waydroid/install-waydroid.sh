@@ -135,6 +135,12 @@ initialised() {
 }
 if initialised; then
     echo "PASS: already initialised ($(du -sh "$WORK/images" | cut -f1) of images)"
+    # An existing image is never re-initialised here. The system type is part
+    # of the OTA channel url init wrote to the config, so say so when the
+    # request differs rather than silently keeping the other image.
+    if grep -q '^system_ota' "$WORK/waydroid.cfg" && ! grep '^system_ota' "$WORK/waydroid.cfg" | grep -q "/$SYSTEM_TYPE\\.json"; then
+        echo "WARN: the existing image is not $SYSTEM_TYPE; to switch run: waydroid init -f -s $SYSTEM_TYPE"
+    fi
 else
     if systemctl is-active --quiet waydroid-init.service; then
         echo "waydroid-init already running, waiting for it"
