@@ -1,38 +1,41 @@
 #!/bin/sh
-# Install the handset's local LLM backend. Run as root ON THE DEVICE:
+# Install the handset's OPT-IN on-device model. Run as root ON THE DEVICE:
 #
 #     sudo sh pmos/llm/install-llama-cpp.sh
 #
-# Builds llama.cpp FROM SCRATCH at a pinned commit, downloads LFM3-1.7B and
-# VERIFIES it against a pinned sha256, installs llama-server as taOS core's
-# `llama-cpp` service (router mode, port 7835, models dir inside the
-# controller's data dir), starts it, and proves it with a real tool-call turn.
+# Phone agents use the taOS host's models over the network by default. LFM3-1.7B
+# is the one supported on-device model, for offline use and quick replies, so
+# this installer INSTALLS but never enables or starts anything. Start it with
+# `taos-llm start`; it stops itself after TAOS_LLM_IDLE_MIN idle minutes.
+#
+# It installs:
+#   - Alpine's llama-server + libggml-cpu packages (llama.cpp 1.0.0 on edge,
+#     which has LFM3 support; CPU only, no GPU backend),
+#   - LFM3-1.7B, downloaded and VERIFIED against a pinned sha256, into the
+#     controller's models dir,
+#   - llama-cpp.service (taOS core's name; router mode, port 7835, ctx 16384,
+#     2 threads on cpu5,6), never enabled,
+#   - taos-llm (start|stop|status), taos-llm-thermal (SIGSTOP at 80 C, SIGCONT
+#     at 75 C, stop at 88 C) and taos-llm-idle (idle auto-stop) with their units,
+#   - /usr/share/taos/models/lfm3-1.7b.json, the licence the controller shows
+#     in Settings.
+#
 # A FILE in this repo, not a hand-edit: a reflash wipes anything typed in.
 #
-# Why build: Alpine's llama.cpp 0.6.0 (2026-10-06) knows lfm2 and lfm2moe but
-# not lfm3, and core's scripts/install-llama-cpp.sh fetches a glibc release
-# binary, which does not run on musl. LFM3 landed upstream in #31252; the pin
-# below is at or past v0.8.0 (8642541b2), which also carries LFM3-Omni/Audio
-# and the realtime tool calls, so voice or vision later needs no rebuild.
-#
-# Idempotent: a re-run with everything present skips the rebuild and the
-# download, but re-verifies the model hash and only restarts the service if
-# something it runs from changed.
+# Idempotent. A re-run never starts the service; if it is running while its unit
+# or binary changed, the script says so and leaves the restart to you.
 #
 # Options (environment):
 #   TAOS_LLAMA_MODEL=q4_0|q8_0   which LFM3-1.7B quant (default q4_0, the QAD build)
-#   TAOS_LLAMA_VULKAN=1          also build the Vulkan backend (default: CPU only)
-#   TAOS_LLAMA_THREADS=N         llama-server threads (default 4, the big cores)
-#   TAOS_LLAMA_PREFIX            install prefix (default /opt/taos-llm/llama.cpp)
+#   TAOS_LLM_IDLE_MIN=N          idle minutes before the auto-stop (default 10)
+#   TAOS_LLM_SMOKE=1             after installing, start the model, run one
+#                                tool-call turn, and stop it again (default: off)
 #   TAOS_LLAMACPP_PORT, TAOS_LLAMACPP_MODELS_DIR   core's names, same defaults
 #
 # Fails loudly: set -eu, and no `|| true` on anything that matters.
 set -eu
 
 # ---- pins ----------------------------------------------------------------
-LLAMA_URL=https://github.com/ggml-org/llama.cpp.git
-LLAMA_TAG=b12020
-LLAMA_COMMIT=0ec4027a2a0183de87c007069adddc06e665f7de
 HF=https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main
 case "${TAOS_LLAMA_MODEL:-q4_0}" in
   q4_0) MODEL_FILE=LFM3-1.7B-QAD-Q4_0.gguf
@@ -43,10 +46,9 @@ case "${TAOS_LLAMA_MODEL:-q4_0}" in
 esac
 MODEL_NAME=${MODEL_FILE%.gguf}
 
-PREFIX="${TAOS_LLAMA_PREFIX:-/opt/taos-llm/llama.cpp}"
 CACHE=/var/cache/taos-llm
 SVC=llama-cpp
-THREADS="${TAOS_LLAMA_THREADS:-4}"
+IDLE_MIN="${TAOS_LLM_IDLE_MIN:-10}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 die() { echo "install-llama-cpp: FAIL: $*" >&2; exit 1; }
@@ -73,7 +75,7 @@ verify_sha256() {
 if [ "${INSTALL_LLAMA_SOURCE_ONLY:-0}" = 1 ]; then return 0; fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
-case $THREADS in ''|*[!0-9]*) die "TAOS_LLAMA_THREADS must be a number" ;; esac
+case $IDLE_MIN in ''|*[!0-9]*|0) die "TAOS_LLM_IDLE_MIN must be a positive number of minutes" ;; esac
 START=$(date +%s)
 CHANGED=0
 
@@ -98,69 +100,24 @@ MODELS_DIR=${MODELS_DIR:-$DATA_DIR/llama-cpp/models}
 say "controller: user $CTL_USER, data dir $DATA_DIR"
 say "core llama.cpp contract: port $PORT, models dir $MODELS_DIR"
 
-# ---- 1. build dependencies (never touches the kernel) -----------------------
-FEATURES=cpu
-deps="build-base cmake samurai git linux-headers openssl-dev curl python3"
-if [ "${TAOS_LLAMA_VULKAN:-0}" = 1 ]; then
-  FEATURES=cpu+vulkan
-  deps="$deps vulkan-loader-dev vulkan-headers glslang shaderc spirv-headers"
+# ---- 1. llama.cpp: Alpine's package (never touches the kernel) --------------------
+# Alpine edge ships llama.cpp 1.0.0, which knows LFM3; the old pinned source
+# build is gone. The CPU backend is a separate package. The Vulkan backend is
+# deliberately not installed: this service is CPU only.
+if ! apk info -e llama-server >/dev/null 2>&1 || ! apk info -e libggml-cpu >/dev/null 2>&1; then
+  say "apk add llama-server libggml-cpu"
+  apk add --no-interactive llama-server libggml-cpu ||
+    die "apk could not install llama-server (it is in Alpine edge community; is that repository enabled?)"
+  CHANGED=1
 fi
-need=""
-for p in $deps; do apk info -e "$p" >/dev/null 2>&1 || need="$need $p"; done
-if [ -n "$need" ]; then
-  say "apk add$need"
-  # shellcheck disable=SC2086
-  apk add --no-progress $need
-fi
+[ -x /usr/bin/llama-server ] || die "/usr/bin/llama-server is missing after apk add"
+say "$(/usr/bin/llama-server --version 2>&1 | head -n 2 | tr '\n' ' ')"
 
 # The models dir sits inside the controller's 0700 data dir and is the controller's.
-mkdir -p "$PREFIX" "$CACHE/build" "$CACHE/dl"
+mkdir -p "$CACHE/dl"
 install -d -o "$CTL_USER" -g "$(id -gn "$CTL_USER")" -m 0755 "$(dirname "$MODELS_DIR")" "$MODELS_DIR"
 
-# ---- 2. llama.cpp, from source at the pinned commit ----------------------------
-# `.features` is part of the skip check: a CPU build must be rebuilt, not
-# skipped, when Vulkan is asked for (and the other way round).
-if [ -x "$PREFIX/bin/llama-server" ] &&
-   [ "$(cat "$PREFIX/.commit" 2>/dev/null || true)" = "$LLAMA_COMMIT" ] &&
-   [ "$(cat "$PREFIX/.features" 2>/dev/null || true)" = "$FEATURES" ]; then
-  say "llama.cpp $LLAMA_TAG ($FEATURES) already built, skipping the build"
-else
-  say "building llama.cpp $LLAMA_TAG ($LLAMA_COMMIT, $FEATURES) in $CACHE/build"
-  B0=$(date +%s)
-  src="$CACHE/build/llama.cpp"
-  rm -rf "$src"
-  git clone -q --depth 1 --branch "$LLAMA_TAG" "$LLAMA_URL" "$src"
-  got=$(git -C "$src" rev-parse HEAD)
-  [ "$got" = "$LLAMA_COMMIT" ] || die "tag $LLAMA_TAG is $got, pinned $LLAMA_COMMIT"
-  vk=OFF; [ "$FEATURES" = cpu ] || vk=ON
-  # GGML_NATIVE: build for this CPU (A78 dotprod/i8mm, which Q4_0 uses).
-  cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX" -DGGML_NATIVE=ON -DGGML_VULKAN=$vk \
-    -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON \
-    -DLLAMA_OPENSSL=ON
-  # niced so the UI stays responsive while the cores compile
-  nice -n 15 ninja -C "$src/build" -j6 llama-server llama-bench
-  rm -f "$PREFIX/.commit" "$PREFIX/.features"
-  rm -rf "$PREFIX/bin" "$PREFIX/lib"
-  mkdir -p "$PREFIX/bin" "$PREFIX/lib"
-  install -m 0755 "$src/build/bin/llama-server" "$src/build/bin/llama-bench" "$PREFIX/bin/"
-  find "$src/build/bin" -maxdepth 1 -name '*.so*' -exec cp -a {} "$PREFIX/lib/" \;
-  find "$src/build" -name 'lib*.so*' ! -path "$src/build/bin/*" -exec cp -a {} "$PREFIX/lib/" \;
-  install -m 0644 "$src/LICENSE" "$PREFIX/LICENSE"
-  printf '%s\n' "$LLAMA_COMMIT" > "$PREFIX/.commit"
-  printf '%s\n' "$FEATURES" > "$PREFIX/.features"
-  CHANGED=1
-  say "build took $(( $(date +%s) - B0 )) s"
-fi
-# every dependency must resolve, or the service dies at start
-if LD_LIBRARY_PATH="$PREFIX/lib" ldd "$PREFIX/bin/llama-server" 2>&1 | grep -q 'not found'; then
-  LD_LIBRARY_PATH="$PREFIX/lib" ldd "$PREFIX/bin/llama-server" >&2
-  die "llama-server has unresolved dependencies"
-fi
-LD_LIBRARY_PATH="$PREFIX/lib" "$PREFIX/bin/llama-server" --version 2>&1 | grep -q "commit $(printf %.7s "$LLAMA_COMMIT")" ||
-  die "llama-server --version does not report the pinned commit"
-
-# ---- 3. the model: verify, fetch only if needed, verify again -----------------
+# ---- 2. the model: verify, fetch only if needed, verify again -----------------
 MODEL="$MODELS_DIR/$MODEL_FILE"
 if verify_sha256 "$MODEL" "$MODEL_SHA256" 2>/dev/null; then
   say "$MODEL_FILE present with the pinned hash, skipping the download"
@@ -176,39 +133,45 @@ fi
 verify_sha256 "$MODEL" "$MODEL_SHA256" || die "$MODEL failed verification"
 say "model hash verified: $MODEL_NAME"
 
-# ---- 4. the unit (a template, filled in here) --------------------------------
-sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@MODELS_DIR@|$MODELS_DIR|g" -e "s|@PORT@|$PORT|g" \
-    -e "s|@THREADS@|$THREADS|g" -e "s|@USER@|$CTL_USER|g" \
+# ---- 3. helper, guards, settings file, licence ---------------------------------
+install -d /usr/local/bin /usr/share/taos/models
+for f in taos-llm taos-llm-thermal taos-llm-idle; do
+  install -m 0755 "$HERE/bin/$f" "/usr/local/bin/$f"
+done
+install -m 0644 "$HERE/lfm3-1.7b.json" /usr/share/taos/models/lfm3-1.7b.json
+# Read by taos-llm (port, model) and, as EnvironmentFile, by taos-llm-idle.
+printf 'TAOS_LLAMACPP_PORT=%s\nTAOS_LLM_MODEL=%s\nTAOS_LLM_IDLE_MIN=%s\n' \
+  "$PORT" "$MODEL_NAME" "$IDLE_MIN" > "$CACHE/taos-llm.env.rendered"
+install -m 0644 "$CACHE/taos-llm.env.rendered" /etc/taos-llm.env
+
+# ---- 4. the units (a template, filled in here) -------------------------------
+sed -e "s|@MODELS_DIR@|$MODELS_DIR|g" -e "s|@PORT@|$PORT|g" -e "s|@USER@|$CTL_USER|g" \
   "$HERE/../systemd/llama-cpp.service" > "$CACHE/llama-cpp.service.rendered"
 ! grep -q '@[A-Z_]*@' "$CACHE/llama-cpp.service.rendered" || die "unit has an unfilled placeholder"
 if ! cmp -s "$CACHE/llama-cpp.service.rendered" /etc/systemd/system/llama-cpp.service 2>/dev/null; then
   install -m 0644 "$CACHE/llama-cpp.service.rendered" /etc/systemd/system/llama-cpp.service
   CHANGED=1
 fi
-
-# ---- 5. start ------------------------------------------------------------------
-systemctl daemon-reload
-systemctl enable "$SVC.service"
-if [ "$CHANGED" -eq 1 ] || ! systemctl is-active --quiet "$SVC.service"; then
-  say "(re)starting $SVC"
-  systemctl restart "$SVC.service" || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "$SVC failed to start"; }
-else
-  say "nothing changed and $SVC is active, not restarting"
-fi
-# core's own probe: GET /health answers 200 in router mode (llamacpp_is_running)
-i=0
-until curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
-  i=$((i + 1))
-  [ "$i" -le 60 ] || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "/health did not answer 200 in 60 s"; }
-  sleep 1
+for u in taos-llm-thermal taos-llm-idle; do
+  install -m 0644 "$HERE/../systemd/$u.service" "/etc/systemd/system/$u.service"
 done
-curl -fsS --max-time 5 "http://127.0.0.1:$PORT/v1/models" | grep -q "\"$MODEL_NAME\"" ||
-  die "router does not list $MODEL_NAME in /v1/models"
+systemctl daemon-reload
+# NOT enabled and NOT started: opt-in. `taos-llm start` brings it up.
+if systemctl is-active --quiet "$SVC.service" && [ "$CHANGED" -eq 1 ]; then
+  say "$SVC is running and something it runs from changed; restart it with: taos-llm stop && taos-llm start"
+fi
 
-# ---- 6. smoke: one tool-call turn through the model's own chat template ---------
+# ---- 5. optional smoke: one tool-call turn, then stopped again ------------------
 # A tool call must come back STRUCTURED (message.tool_calls), not as <tool_call>
 # text: that is the template + --jinja path the agent harnesses depend on.
-PORT=$PORT MODEL_NAME=$MODEL_NAME python3 - <<'PYEOF' || die "smoke tool-call turn failed"
+if [ "${TAOS_LLM_SMOKE:-0}" = 1 ]; then
+  was_active=0; systemctl is-active --quiet "$SVC.service" && was_active=1
+  say "smoke: taos-llm start"
+  /usr/local/bin/taos-llm start >/dev/null || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "$SVC failed to start"; }
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/v1/models" | grep -q "\"$MODEL_NAME\"" ||
+    { [ "$was_active" -eq 1 ] || /usr/local/bin/taos-llm stop >/dev/null; die "router does not list $MODEL_NAME in /v1/models"; }
+  rc=0
+  PORT=$PORT MODEL_NAME=$MODEL_NAME python3 - <<'PYEOF' || rc=$?
 import http.client, json, os, time
 body = {
     "model": os.environ["MODEL_NAME"],
@@ -234,5 +197,8 @@ args = json.loads(fn["arguments"])
 assert "paris" in str(args.get("city", "")).lower(), "arguments %r" % args
 print("install-llama-cpp: smoke tool call: %s(%s) in %.1f s" % (fn["name"], fn["arguments"], time.time() - t0))
 PYEOF
+  [ "$was_active" -eq 1 ] || /usr/local/bin/taos-llm stop >/dev/null
+  [ "$rc" -eq 0 ] || die "smoke tool-call turn failed"
+fi
 
-say "done in $(( $(date +%s) - START )) s: $SVC on 127.0.0.1:$PORT serving $MODEL_NAME"
+say "done in $(( $(date +%s) - START )) s: $SVC installed, NOT enabled or started; run: taos-llm start"
