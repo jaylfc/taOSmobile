@@ -7,7 +7,7 @@ the full-screen surface.
 ## Where things stand
 
 **The current port is postmarketOS** (`pmos/`, from 2026-09-15). This is the
-state last measured on the handset (2026-10-03). The phone has been offline since
+state last measured on the handset (2026-10-03; the dual-boot item below, 2026-10-30). The phone has been offline since
 about 2026-10-05, so read it as last known, not live:
 
 - It boots straight into taOS full screen: sway runs Chromium as a kiosk
