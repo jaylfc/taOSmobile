@@ -6,7 +6,7 @@
 # Phone agents use the taOS host's models over the network by default. LFM3-1.7B
 # is the one supported on-device model, for offline use and quick replies, so
 # this installer INSTALLS but never enables or starts anything. Start it with
-# `taos-llm start`; it stops itself after TAOS_LLM_IDLE_MIN idle minutes.
+# `sudo taos-llm start`; it stops itself after TAOS_LLM_IDLE_MIN idle minutes.
 #
 # It installs:
 #   - Alpine's llama-server + libggml-cpu packages (llama.cpp 1.0.0 on edge,
@@ -15,7 +15,9 @@
 #     controller's models dir,
 #   - llama-cpp.service (taOS core's name; router mode, port 7835, ctx 16384,
 #     2 threads on cpu5,6), never enabled,
-#   - taos-llm (start|stop|status), taos-llm-thermal (SIGSTOP at 80 C, SIGCONT
+#   - /usr/local/sbin/taos-llm (start|stop need root, status|ask do not),
+#     /etc/sudoers.d/50-taos-llm (the controller user may run exactly
+#     `sudo -n taos-llm start` and `stop`), taos-llm-thermal (SIGSTOP at 80 C, SIGCONT
 #     at 75 C, stop at 88 C) and taos-llm-idle (idle auto-stop) with their units,
 #   - /usr/share/taos/models/lfm3-1.7b.json, the licence the controller shows
 #     in Settings.
@@ -92,6 +94,10 @@ ctl_env() { # ctl_env NAME: the controller's environment value, or nothing
 CTL_CWD=$(readlink "/proc/$CTL_PID/cwd") || die "cannot read the controller's working dir"
 CTL_USER=$(systemctl show -p User --value tinyagentos.service)
 [ -n "$CTL_USER" ] && [ "$CTL_USER" != root ] || die "controller user is '${CTL_USER:-}', expected a non-root user"
+# It is written into sudoers: only a plain account name, nothing sudoers would read as syntax.
+case $CTL_USER in
+  *[!A-Za-z0-9_.-]*|-*) die "controller user '$CTL_USER' is not a plain account name; refusing to write sudoers" ;;
+esac
 PORT="${TAOS_LLAMACPP_PORT:-$(ctl_env TAOS_LLAMACPP_PORT)}"; PORT=${PORT:-7835}
 MODELS_DIR="${TAOS_LLAMACPP_MODELS_DIR:-$(ctl_env TAOS_LLAMACPP_MODELS_DIR)}"
 DATA_DIR="$(ctl_env TAOS_DATA_DIR)"; DATA_DIR=${DATA_DIR:-$CTL_CWD/data}
@@ -134,15 +140,37 @@ verify_sha256 "$MODEL" "$MODEL_SHA256" || die "$MODEL failed verification"
 say "model hash verified: $MODEL_NAME"
 
 # ---- 3. helper, guards, settings file, licence ---------------------------------
-install -d /usr/local/bin /usr/share/taos/models
-for f in taos-llm taos-llm-thermal taos-llm-idle; do
+# /usr/local/sbin does not exist on a fresh postmarketOS install.
+install -d -m 0755 /usr/local/sbin /usr/local/bin /usr/share/taos/models
+install -m 0755 "$HERE/bin/taos-llm" /usr/local/sbin/taos-llm
+for f in taos-llm-thermal taos-llm-idle; do
   install -m 0755 "$HERE/bin/$f" "/usr/local/bin/$f"
 done
+rm -f /usr/local/bin/taos-llm   # an earlier install put the helper here
 install -m 0644 "$HERE/lfm3-1.7b.json" /usr/share/taos/models/lfm3-1.7b.json
 # Read by taos-llm (port, model) and, as EnvironmentFile, by taos-llm-idle.
 printf 'TAOS_LLAMACPP_PORT=%s\nTAOS_LLM_MODEL=%s\nTAOS_LLM_IDLE_MIN=%s\n' \
   "$PORT" "$MODEL_NAME" "$IDLE_MIN" > "$CACHE/taos-llm.env.rendered"
 install -m 0644 "$CACHE/taos-llm.env.rendered" /etc/taos-llm.env
+
+# ---- 3b. sudoers: the controller may start and stop the model, nothing else ----
+# CTL_USER came from tinyagentos.service above (the installer already refused
+# without one). Validated with visudo before it is put in place: a broken file
+# in /etc/sudoers.d breaks sudo for everyone.
+T="$CACHE/50-taos-llm.rendered"
+cat > "$T.in" <<'SUDO'
+# taOS controller -> the on-device model. Exactly these two commands, these arguments.
+# The tool runs as root: sudo gives it a fixed PATH whatever the caller had.
+Defaults!/usr/local/sbin/taos-llm secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+@CTL_USER@ ALL=(root) NOPASSWD: /usr/local/sbin/taos-llm start, /usr/local/sbin/taos-llm stop
+SUDO
+sed "s|@CTL_USER@|$CTL_USER|" "$T.in" > "$T"
+rm -f "$T.in"
+chmod 0440 "$T"
+command -v visudo >/dev/null 2>&1 || die "visudo is missing; refusing to install sudoers unchecked"
+visudo -c -f "$T" >/dev/null || die "the sudoers file for $CTL_USER does not validate; not installed"
+install -m 0440 -o root -g root "$T" /etc/sudoers.d/50-taos-llm
+rm -f "$T"
 
 # ---- 4. the units (a template, filled in here) -------------------------------
 sed -e "s|@MODELS_DIR@|$MODELS_DIR|g" -e "s|@PORT@|$PORT|g" -e "s|@USER@|$CTL_USER|g" \
@@ -156,9 +184,9 @@ for u in taos-llm-thermal taos-llm-idle; do
   install -m 0644 "$HERE/../systemd/$u.service" "/etc/systemd/system/$u.service"
 done
 systemctl daemon-reload
-# NOT enabled and NOT started: opt-in. `taos-llm start` brings it up.
+# NOT enabled and NOT started: opt-in. `sudo taos-llm start` brings it up.
 if systemctl is-active --quiet "$SVC.service" && [ "$CHANGED" -eq 1 ]; then
-  say "$SVC is running and something it runs from changed; restart it with: taos-llm stop && taos-llm start"
+  say "$SVC is running and something it runs from changed; restart it with: sudo taos-llm stop && sudo taos-llm start"
 fi
 
 # ---- 5. optional smoke: one tool-call turn, then stopped again ------------------
@@ -167,9 +195,9 @@ fi
 if [ "${TAOS_LLM_SMOKE:-0}" = 1 ]; then
   was_active=0; systemctl is-active --quiet "$SVC.service" && was_active=1
   say "smoke: taos-llm start"
-  /usr/local/bin/taos-llm start >/dev/null || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "$SVC failed to start"; }
+  /usr/local/sbin/taos-llm start >/dev/null || { journalctl -u "$SVC" -n 40 --no-pager >&2; die "$SVC failed to start"; }
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/v1/models" | grep -q "\"$MODEL_NAME\"" ||
-    { [ "$was_active" -eq 1 ] || /usr/local/bin/taos-llm stop >/dev/null; die "router does not list $MODEL_NAME in /v1/models"; }
+    { [ "$was_active" -eq 1 ] || /usr/local/sbin/taos-llm stop >/dev/null; die "router does not list $MODEL_NAME in /v1/models"; }
   rc=0
   PORT=$PORT MODEL_NAME=$MODEL_NAME python3 - <<'PYEOF' || rc=$?
 import http.client, json, os, time
@@ -197,8 +225,8 @@ args = json.loads(fn["arguments"])
 assert "paris" in str(args.get("city", "")).lower(), "arguments %r" % args
 print("install-llama-cpp: smoke tool call: %s(%s) in %.1f s" % (fn["name"], fn["arguments"], time.time() - t0))
 PYEOF
-  [ "$was_active" -eq 1 ] || /usr/local/bin/taos-llm stop >/dev/null
+  [ "$was_active" -eq 1 ] || /usr/local/sbin/taos-llm stop >/dev/null
   [ "$rc" -eq 0 ] || die "smoke tool-call turn failed"
 fi
 
-say "done in $(( $(date +%s) - START )) s: $SVC installed, NOT enabled or started; run: taos-llm start"
+say "done in $(( $(date +%s) - START )) s: $SVC installed, NOT enabled or started; run: sudo taos-llm start"

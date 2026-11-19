@@ -116,7 +116,7 @@ def test_installer_keeps_the_model_pins():
 
 def test_installer_installs_helper_guards_units_and_licence():
     body = INSTALLER.read_text()
-    for needle in ("/usr/local/bin/taos-llm", "taos-llm-thermal", "taos-llm-idle",
+    for needle in ("/usr/local/sbin/taos-llm", "taos-llm-thermal", "taos-llm-idle",
                    "/usr/share/taos/models/lfm3-1.7b.json"):
         assert needle in body, needle
 
@@ -167,7 +167,7 @@ def rig(tmp_path: Path):
             active.unlink()
         e = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
                  STUB_ACTIVE=str(active), STUB_CURL_DIR=str(curl_dir),
-                 TAOS_LLM_ENV=str(tmp_path / "absent.env"))
+                 TAOS_LLM_ENV=str(tmp_path / "absent.env"), TAOS_LLM_TEST="1", TAOS_LLM_TEST_PATH=str(bindir))
         e.update(env or {})
         p = subprocess.run(["sh", str(BIN / script), *args], env=e,
                            capture_output=True, text=True, timeout=30)
@@ -186,17 +186,33 @@ def rig(tmp_path: Path):
 
 # ---- taos-llm ---------------------------------------------------------------
 
+needs_user = pytest.mark.skipif(os.geteuid() == 0, reason="the test hooks are ignored when root")
+HELPER = BIN / "taos-llm"
+INSTALLED = "/usr/local/sbin/taos-llm"
+SUDO_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+
 def test_status_running_json(rig):
+    (rig.curl_dir / "_health").write_text('{"status":"ok"}')
     p, calls = rig("taos-llm", "status", active_on=True)
     assert p.returncode == 0, p.stderr
-    assert json.loads(p.stdout) == {"running": True, "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
-    assert calls == ["systemctl is-active --quiet llama-cpp.service"]
+    assert json.loads(p.stdout) == {"running": True, "healthy": True,
+                                    "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
+    assert calls[0] == "systemctl is-active --quiet llama-cpp.service"
 
 
-def test_status_stopped_json(rig):
+def test_status_running_but_not_yet_healthy(rig):
+    p, _ = rig("taos-llm", "status", active_on=True)
+    assert json.loads(p.stdout)["running"] is True
+    assert json.loads(p.stdout)["healthy"] is False
+
+
+def test_status_stopped_json_never_asks_health(rig):
+    (rig.curl_dir / "_health").write_text('{"status":"ok"}')
     p, calls = rig("taos-llm", "status", active_on=False)
     assert p.returncode == 0, p.stderr
-    assert json.loads(p.stdout) == {"running": False, "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
+    assert json.loads(p.stdout) == {"running": False, "healthy": False,
+                                    "model": "LFM3-1.7B-QAD-Q4_0", "port": 7835}
     assert calls == ["systemctl is-active --quiet llama-cpp.service"]
 
 
@@ -204,10 +220,33 @@ def test_status_reads_port_and_model_from_the_env_file(rig):
     envf = rig.tmp / "llm.env"
     envf.write_text("TAOS_LLAMACPP_PORT=7900\nTAOS_LLM_MODEL=LFM3-1.7B-Q8_0\n")
     p, _ = rig("taos-llm", "status", env={"TAOS_LLM_ENV": str(envf)}, active_on=True)
-    assert json.loads(p.stdout) == {"running": True, "model": "LFM3-1.7B-Q8_0", "port": 7900}
+    j = json.loads(p.stdout)
+    assert (j["model"], j["port"]) == ("LFM3-1.7B-Q8_0", 7900)
 
 
-@pytest.mark.parametrize("args", [(), ("restart",), ("enable",), ("--help",), ("",)])
+@needs_user
+def test_status_works_without_root_and_without_the_test_hook(rig):
+    """The real path a settings card takes: no TAOS_LLM_TEST, not root."""
+    # No hook means the real systemctl and curl (stubs are ignored): whatever state this box
+    # is in, status answers as a plain user, with valid JSON and no refusal.
+    p, calls = rig("taos-llm", "status", env={"TAOS_LLM_TEST": ""}, active_on=True)
+    assert p.returncode == 0, p.stderr
+    assert set(json.loads(p.stdout)) == {"running", "healthy", "model", "port"}
+    assert "root" not in p.stderr and calls == []
+
+
+@needs_user
+@pytest.mark.parametrize("sub", ["start", "stop"])
+def test_start_and_stop_refuse_without_root(rig, sub):
+    p, calls = rig("taos-llm", sub, env={"TAOS_LLM_TEST": ""}, active_on=True)
+    assert p.returncode == 1
+    assert "needs root" in p.stderr
+    assert p.stdout == ""
+    assert calls == [], "a refused start/stop must not reach systemctl"
+
+
+@pytest.mark.parametrize("args", [(), ("restart",), ("enable",), ("--help",), ("",),
+                                  ("start", "x"), ("stop", "x"), ("status", "x")])
 def test_helper_refuses_unknown_subcommands(rig, args):
     p, calls = rig("taos-llm", *args)
     assert p.returncode == 2
@@ -236,6 +275,248 @@ def test_stop_stops_and_reports_not_running(rig):
     assert p.returncode == 0
     assert calls[0] == "systemctl stop llama-cpp.service"
     assert json.loads(p.stdout)["running"] is False
+
+
+def test_the_helper_fixes_its_own_path_before_any_command():
+    code = [ln for ln in HELPER.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert code[0] == "set -u"
+    assert code[1] == "PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH"
+
+
+def test_the_test_hooks_are_only_read_when_not_root():
+    src = HELPER.read_text()
+    guard = 'if [ "$(id -u)" != 0 ] && [ -n "${TAOS_LLM_TEST:-}" ]; then'
+    assert src.count(guard) == 1
+    head, tail = src.split(guard)
+    for hook in ("TAOS_LLM_ENV", "TAOS_LLM_START_WAIT", "TAOS_LLM_TEST_PATH"):
+        assert hook not in head, hook
+        assert hook in tail.split("\nfi\n")[0]
+        assert hook not in tail.split("\nfi\n", 1)[1]
+
+
+@needs_user
+def test_a_planted_systemctl_and_curl_on_the_callers_path_are_never_run(tmp_path):
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    marker = tmp_path / "marker"
+    for name in ("systemctl", "curl", "python3", "id"):
+        (evil / name).write_text('#!/bin/sh\necho %s >> "%s"\nexit 0\n' % (name, marker))
+        (evil / name).chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TAOS_LLM")}
+    env["PATH"] = "%s:%s" % (evil, env["PATH"])
+    p = subprocess.run(["sh", str(HELPER), "start"], env=env, capture_output=True, text=True, timeout=10)
+    assert p.returncode == 1 and "needs root" in p.stderr
+    assert not marker.exists(), marker.read_text() if marker.exists() else ""
+    p = subprocess.run(["sh", str(HELPER), "status"], env=env, capture_output=True, text=True, timeout=10)
+    assert "id" not in (marker.read_text().split() if marker.exists() else [])
+
+
+# ---- the sudoers file ---------------------------------------------------------
+
+def sudoers_text() -> list[str]:
+    """The installer's sudoers heredoc, lines as written (user placeholder left in)."""
+    src = INSTALLER.read_text()
+    m = re.search(r"<<'SUDO'\n(.*?)\nSUDO\n", src, re.S)
+    assert m, "no SUDO heredoc in the installer"
+    return m.group(1).splitlines()
+
+
+def test_sudoers_allows_exactly_start_and_stop_with_a_fixed_path():
+    rules = [ln for ln in sudoers_text() if not ln.startswith("#") and ln.strip()]
+    assert rules == [
+        "Defaults!/usr/local/sbin/taos-llm secure_path=/usr/sbin:/usr/bin:/sbin:/bin",
+        "@CTL_USER@ ALL=(root) NOPASSWD: /usr/local/sbin/taos-llm start, /usr/local/sbin/taos-llm stop",
+    ]
+    allow = rules[1].split("NOPASSWD:")[1]
+    assert "*" not in allow and "ALL" not in allow
+    assert "status" not in allow and "ask" not in allow
+
+
+def test_installer_writes_sudoers_only_after_visudo_validates_it():
+    body = "\n".join(active_lines(INSTALLER))
+    assert "/etc/sudoers.d/50-taos-llm" in body
+    v = body.index("visudo -c -f")
+    assert v < body.index("install -m 0440 -o root -g root", v)
+    # the user comes from tinyagentos.service and the install refuses without one
+    assert "CTL_USER" in body
+    assert 'die "controller user' in body
+    # nothing installs the file before the user is known
+    assert body.index('die "controller user') < body.index("50-taos-llm")
+    assert "|| true" not in body[v - 200:v + 300]
+
+
+def test_installer_puts_the_helper_in_usr_local_sbin_only():
+    body = INSTALLER.read_text()
+    assert "/usr/local/sbin/taos-llm" in body
+    installs = [ln for ln in active_lines(INSTALLER) if ln.startswith("install ")]
+    assert not [ln for ln in installs if "/usr/local/bin/taos-llm" in ln and "taos-llm-" not in ln]
+    assert 'install -m 0755 "$HERE/bin/taos-llm" /usr/local/sbin/taos-llm' in installs
+    assert "install -d -m 0755 /usr/local/sbin" in body
+
+
+def test_user_placeholder_is_filled_with_a_real_user_name():
+    """The rendered rule must be a plain user token: refuse anything sudoers would read as syntax."""
+    body = INSTALLER.read_text()
+    assert re.search(r"case \$CTL_USER in\s+\*\[!A-Za-z0-9_.-\]\*", body)
+
+
+# ---- taos-llm ask -------------------------------------------------------------
+
+import http.server  # noqa: E402
+import socket  # noqa: E402
+import threading  # noqa: E402
+
+
+@pytest.fixture
+def server():
+    """A stub llama-server: serves POST /v1/chat/completions with whatever the test queues."""
+    seen = []
+    reply = {"status": 200, "body": {}}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            seen.append((self.path, json.loads(self.rfile.read(n))))
+            raw = json.dumps(reply["body"]).encode()
+            self.send_response(reply["status"])
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield type("S", (), dict(port=srv.server_address[1], seen=seen, reply=reply))
+    srv.shutdown()
+
+
+def chat(content, reasoning="", finish="stop", tokens=7):
+    msg = {"role": "assistant", "content": content}
+    if reasoning:
+        msg["reasoning_content"] = reasoning
+    return {"choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+            "usage": {"completion_tokens": tokens}}
+
+
+def ask(rig, server, *args, stdin=None, active=True, port=None):
+    env = {"TAOS_LLAMACPP_PORT": str(port or server.port)}
+    if active:
+        (rig.tmp / "active").write_text("")
+    elif (rig.tmp / "active").exists():
+        (rig.tmp / "active").unlink()
+    e = dict(os.environ, PATH=f"{rig.tmp / 'stubs'}:{os.environ['PATH']}",
+             STUB_ACTIVE=str(rig.tmp / "active"), TAOS_LLM_TEST="1",
+             TAOS_LLM_TEST_PATH=str(rig.tmp / "stubs"),
+             TAOS_LLM_ENV=str(rig.tmp / "absent.env"), **env)
+    return subprocess.run(["sh", str(HELPER), "ask", *args], env=e, input=stdin,
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_ask_returns_the_answer(rig, server):
+    server.reply["body"] = chat("Hello there, how are you", tokens=9)
+    p = ask(rig, server, "--prompt", "Say hello in five words")
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout) == {"ok": True, "answer": "Hello there, how are you",
+                                    "reasoning_used": False, "tokens": 9}
+    path, req = server.seen[0]
+    assert path == "/v1/chat/completions"
+    assert req["messages"] == [{"role": "user", "content": "Say hello in five words"}]
+    assert req["max_tokens"] == 512
+    assert req["chat_template_kwargs"] == {"enable_thinking": False}
+    assert req["model"] == "LFM3-1.7B-QAD-Q4_0"
+
+
+def test_ask_reports_when_reasoning_was_used(rig, server):
+    server.reply["body"] = chat("Paris", reasoning="the capital of France", tokens=30)
+    j = json.loads(ask(rig, server, "--thinking", "on", "--prompt", "capital of France?").stdout)
+    assert j["ok"] is True and j["reasoning_used"] is True
+    assert server.seen[0][1]["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_ask_reads_the_prompt_from_stdin_and_honours_max_tokens(rig, server):
+    server.reply["body"] = chat("ok")
+    p = ask(rig, server, "--max-tokens", "64", stdin="what is 2+2?\n")
+    assert p.returncode == 0, p.stderr
+    req = server.seen[0][1]
+    assert req["messages"][0]["content"] == "what is 2+2?"
+    assert req["max_tokens"] == 64
+
+
+def test_ask_prompt_with_quotes_and_newlines_arrives_intact(rig, server):
+    server.reply["body"] = chat("ok")
+    prompt = 'say "hi"\nthen \'bye\' $(id) `id` \\n'
+    assert ask(rig, server, "--prompt", prompt).returncode == 0
+    assert server.seen[0][1]["messages"][0]["content"] == prompt
+
+
+def test_ask_budget_exhausted_is_exit_4_never_an_empty_answer(rig, server):
+    server.reply["body"] = chat("", reasoning="let me think about greetings", finish="length", tokens=20)
+    p = ask(rig, server, "--max-tokens", "20", "--thinking", "on", "--prompt", "Say hello in five words")
+    assert p.returncode == 4
+    assert json.loads(p.stdout) == {"ok": False, "error": "reasoning budget exhausted before an answer",
+                                    "finish_reason": "length"}
+
+
+def test_ask_empty_content_with_a_normal_stop_is_a_plain_failure(rig, server):
+    server.reply["body"] = chat("", finish="stop")
+    p = ask(rig, server, "--prompt", "hi")
+    assert p.returncode == 1
+    j = json.loads(p.stdout)
+    assert j["ok"] is False and j["error"] == "empty answer"
+
+
+def test_ask_truncated_but_non_empty_answer_is_still_an_answer(rig, server):
+    server.reply["body"] = chat("Hello there", finish="length")
+    p = ask(rig, server, "--prompt", "hi")
+    assert p.returncode == 0 and json.loads(p.stdout)["ok"] is True
+
+
+def test_ask_server_error_and_garbage_are_exit_1(rig, server):
+    server.reply.update(status=500, body={"error": "boom"})
+    p = ask(rig, server, "--prompt", "hi")
+    assert p.returncode == 1 and json.loads(p.stdout)["ok"] is False
+    server.reply.update(status=200, body={"nope": 1})
+    p = ask(rig, server, "--prompt", "hi")
+    assert p.returncode == 1 and json.loads(p.stdout)["error"] == "unreadable server reply"
+
+
+def test_ask_unit_not_active_is_exit_3_and_sends_nothing(rig, server):
+    p = ask(rig, server, "--prompt", "hi", active=False)
+    assert p.returncode == 3
+    assert json.loads(p.stdout) == {"ok": False, "error": "not running"}
+    assert server.seen == []
+
+
+def test_ask_unit_active_but_nothing_listening_is_exit_3(rig, server):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    dead = s.getsockname()[1]
+    s.close()
+    p = ask(rig, server, "--prompt", "hi", port=dead)
+    assert p.returncode == 3
+    assert json.loads(p.stdout) == {"ok": False, "error": "not running"}
+
+
+@pytest.mark.parametrize("args", [
+    ("--bogus", "x"), ("--thinking", "maybe", "--prompt", "hi"), ("--thinking",),
+    ("--max-tokens", "abc", "--prompt", "hi"), ("--max-tokens", "0", "--prompt", "hi"),
+    ("--max-tokens", "-5", "--prompt", "hi"), ("--prompt",), ("extra", "--prompt", "hi"),
+])
+def test_ask_unknown_or_malformed_options_are_exit_2_and_send_nothing(rig, server, args):
+    p = ask(rig, server, *args, stdin="")
+    assert p.returncode == 2, (p.stdout, p.stderr)
+    assert server.seen == []
+    assert p.stdout == ""
+
+
+def test_ask_needs_no_root_and_never_calls_start_or_stop(rig, server):
+    server.reply["body"] = chat("ok")
+    ask(rig, server, "--prompt", "hi")
+    calls = (rig.tmp / "calls").read_text() if (rig.tmp / "calls").exists() else ""
+    assert "systemctl start" not in calls and "systemctl stop" not in calls
 
 
 # ---- taos-llm-thermal -------------------------------------------------------
