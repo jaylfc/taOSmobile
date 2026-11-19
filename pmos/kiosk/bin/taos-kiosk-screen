@@ -136,8 +136,10 @@ wait_black_framelog() {
         3) return 0 ;;          # no frame at all: the output is off
         1)
             # 1 is both "ran out of time" and "could not connect": tell them
-            # apart by how long it ran, so a broken logger does not cost the cap twice.
-            if [ "$_el" -ge $(( _cap - 100 )) ]; then
+            # apart by how long it ran, so a broken logger does not cost the cap
+            # twice. Only a run that lasted the whole cap counts as out of time:
+            # with a small cap a slack would make an instant failure look like one.
+            if [ "$_el" -ge "$_cap" ]; then
                 echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
                 return 0
             fi

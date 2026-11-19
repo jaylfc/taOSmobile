@@ -88,7 +88,7 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
             body = ('dur=$(echo "$*" | sed -n "s/.*--duration \\([0-9.]*\\).*/\\1/p")\n'
                     'echo "framelog $*" >> "%s"\n'
                     ': > "%s/probed"\n'
-                    'end=$(awk -v d="$dur" -v n="$(date +%%s%%N)" \'BEGIN{printf "%%d", n + d*1e9}\')\n'
+                    'end=$(awk -v d="$dur" -v n="$(date +%%s%%N)" \'BEGIN{printf "%%.0f", n + d*1e9}\')\n'
                     'while :; do now=$(date +%%s%%N); t0=$(cat "%s")\n'
                     '  [ $(( (now - t0) / 1000000 )) -ge %d ] && { echo "framelog black" >> "%s"; exit 0; }\n'
                     '  [ "$now" -ge "$end" ] && { echo "framelog timeout" >> "%s"; exit 1; }\n'
@@ -339,3 +339,12 @@ def test_a_wake_during_the_frame_logger_wait_is_not_undone(tmp_path):
     assert "a wake arrived" in err
     # The wake ends the wait at once, not when the 2 s cap runs out.
     assert took < 1.2, took
+
+
+def test_a_logger_that_fails_at_once_is_not_taken_for_the_cap_even_with_a_small_cap(tmp_path):
+    """With a 100 ms cap a slack of 100 ms read an instant failure as 'ran out
+    of time' and powered off a lit screen without looking at it."""
+    lines, err, took = run(tmp_path, bright_for_s=0.05, cap_ms=100, framelog="broken")
+    i = power_off_index(lines)
+    assert "framelog broken" in lines
+    assert any(l.startswith("grim") for l in lines[:i]), lines
