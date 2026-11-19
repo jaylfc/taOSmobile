@@ -19,7 +19,7 @@ def run_invariants_check(repo_root: Path, config_content: str) -> int:
     script_path = script_dir / "check_doc_gate.py"
     
     # Copy the script from the project root
-    with open(Path.cwd() / "scripts" / "check_doc_gate.py", "rb") as src:
+    with open(Path(__file__).resolve().with_name("check_doc_gate.py"), "rb") as src:
         with open(script_path, "wb") as dst:
             dst.write(src.read())
 
