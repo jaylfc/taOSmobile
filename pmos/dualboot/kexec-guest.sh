@@ -11,6 +11,7 @@ set -eu
 D=/var/lib/dualboot
 G=$D/guest
 HERE=$(dirname "$0")
+. "$HERE/build-identity.sh"
 GUEST=omarchy GO= KAPK=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,8 +49,7 @@ if [ -n "$KAPK" ]; then
 else
   zcat "$G/kernel" > "$G/Image"
   # Same build as the running kernel, or the modules on taOS's root will not load
-  want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
-  strings "$G/Image" | grep -m1 '^Linux version' | grep -q "^Linux version $want" || { echo "kernel build != running"; exit 1; }
+  dualboot_stream_matches_running < "$G/Image" || { echo "kernel build != running"; exit 1; }
 fi
 
 rm -rf "$G/rd"; mkdir -p "$G/rd"

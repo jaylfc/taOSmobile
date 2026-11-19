@@ -6,6 +6,8 @@
 set -eu
 D=/var/lib/dualboot
 G=$D/guest
+HERE=$(dirname "$0")
+. "$HERE/build-identity.sh"
 slot=$(sed -n 's/.*androidboot\.slot_suffix=\(_[ab]\).*/\1/p' /proc/cmdline)
 [ -n "$slot" ] || { echo "no slot_suffix on the command line"; exit 1; }
 PART=/dev/disk/by-partlabel/boot$slot
@@ -34,10 +36,9 @@ open(g + "/kernel.new", "wb").write(kernel)
 open(g + "/ramdisk.new", "wb").write(ramdisk)
 print("kernel %d ramdisk %d page %d" % (ks, rs, ps))
 EOF
-want="$(uname -r) (.*) $(uname -v | cut -d' ' -f1)"
 # Validate the candidate before it touches the published pair: a rejected one must not become
 # kernel/ramdisk, nor push the good pair out to .prev on the next try
-zcat "$G/kernel.new" | strings | grep -m1 '^Linux version' | grep -q "^Linux version $want" \
+zcat "$G/kernel.new" | dualboot_stream_matches_running \
   || { rm -f "$G/kernel.new" "$G/ramdisk.new"; echo "unpacked kernel build != running kernel; is $PART the slot you booted?"; exit 1; }
 for f in kernel ramdisk; do [ -f "$G/$f" ] && cp -a "$G/$f" "$G/$f.prev"; done
 mv -f "$G/kernel.new" "$G/kernel"
