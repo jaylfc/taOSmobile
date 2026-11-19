@@ -141,12 +141,26 @@ tailnet, a USB network gadget, the GPU, and the touchscreen registered as a Hypr
 device. Going back is a reboot, which lands on slot b (taOS). Slot a is untouched, so this path
 cannot brick; the slot a booter above stays the option for a guest that should start cold.
 
-**Switching from an app (Jay asked 2026-10-30).** An "Omarchy" tile in taOS confirms, then asks a
-root device helper (taOSmobile, alongside the taos-kiosk-* scripts; the page never runs root
-commands itself) to set slot a active and reboot. Omarchy gets a matching "taOS" launcher entry
-that sets slot b. A switch is a reboot, not an in-place launch. A slot that fails to come up burns
-its retries and abl falls back to the other one, so this lands only after both OSes mark their own
-slot successful. Otherwise a healthy OS gets bounced back.
+**Switching from an app, and the way back (Jay ruled 2026-11-17: keep the kexec model).** A switch
+stays a kexec from RAM, so the way back is a plain reboot and nobody can be stranded in the other
+system.
+
+- From taOS: the shell's "Other systems" tile (taOS repo) asks the controller, which calls
+  `taos-switch-os list` as itself and `sudo -n taos-switch-os go <id>` after its own confirm step.
+  `pmos/dualboot/taos-switch-os` is the only root door: it accepts exactly `go omarchy` and
+  `go luma`, a sudoers line allows user taos exactly those two commands
+  (`pmos/dualboot/install-switch-os.sh`), and it passes nothing from the caller on. `go` answers at
+  once and the switch happens two seconds later.
+- Back to taOS: each guest image gets a "Return to taOS" entry in its app launcher
+  (`dualboot_return_entry` in `guest-units.sh`, called by both image builders). It confirms where a
+  dialog tool exists and reboots. The guest's own power menu "Restart", or a forced reset with the
+  power key, does the same thing.
+- The timed return (`dualboot-return.service`) is for tests only. It is armed for one launch by
+  `kexec-guest.sh --return-after <seconds>`; a normal launch removes the file, so a real switch
+  stays put. Until 2026-11-17 a standing file sent every guest back after 90 seconds.
+
+A real cold boot from slot a with a slot switch in both directions is NOT built. It would need both
+systems to mark their slot successful, or abl bounces a healthy one back.
 
 **Stage 3 (maybe): Omarchy's own mainline kernel on slot a.** Only if stage 2 shows a reason.
 It would need a spacewar DTB and none of the Pixel-bootloader assumptions above; for now it is

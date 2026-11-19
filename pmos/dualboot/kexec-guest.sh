@@ -1,6 +1,9 @@
 #!/bin/sh
 # Stage a guest OS for a RAM-only kexec from taOS (runs on the handset as root).
-# Usage: kexec-guest.sh [--guest omarchy|luma] [--kernel <linux-*.apk>] [--go]   (omarchy by default)
+# Usage: kexec-guest.sh [--guest omarchy|luma] [--kernel <linux-*.apk>] [--return-after <seconds>] [--go]
+#        (omarchy by default)
+# --return-after is for tests: the guest reboots back to taOS by itself after that many seconds.
+# Without it a launch clears the timer, so a real switch stays in the other system until it is rebooted.
 # Writes no partition and no slot attribute. Without --go it only loads; with --go it hands over
 # via systemctl kexec, so taOS stops cleanly and its root (which the guest mounts rw) is unmounted.
 # Inputs in $D/guest: kernel + ramdisk unpacked from the ACTIVE slot's boot image (refresh-guest-boot.sh),
@@ -12,16 +15,22 @@ D=/var/lib/dualboot
 G=$D/guest
 HERE=$(dirname "$0")
 . "$HERE/build-identity.sh"
-GUEST=omarchy GO= KAPK=
+GUEST=omarchy GO= KAPK= RA=
 while [ $# -gt 0 ]; do
   case "$1" in
     --guest) GUEST=${2:?--guest needs a name}; shift ;;
     --kernel) KAPK=${2:?--kernel needs a package}; shift ;;
+    --return-after) RA=${2:?--return-after needs seconds}; shift ;;
     --go) GO=1 ;;
     *) echo "unknown argument $1"; exit 1 ;;
   esac
   shift
 done
+case "$RA" in
+  '') ;;
+  *[!0-9]*) echo "--return-after takes whole seconds"; exit 1 ;;
+  *) [ "${#RA}" -le 5 ] && [ "$RA" -ge 10 ] || { echo "--return-after must be 10..99999"; exit 1; } ;;
+esac
 case "$GUEST" in
   omarchy) IMG=$D/arch-root.img ;;
   luma) IMG=$D/luma-root.img ;;
@@ -91,6 +100,9 @@ if [ -z "$GO" ]; then
   exit 0
 fi
 if [ -n "$GO" ]; then
+  # The guest's dualboot-return unit reads this file from taOS's root. Written or removed HERE, at
+  # the moment of going, so a timer armed for one test never follows a later real switch.
+  if [ -n "$RA" ]; then echo "$RA" > "$D/return-after"; else rm -f "$D/return-after"; fi
   # The q6v5 remoteprocs have no shutdown hook, so kexec leaves them running and the guest kernel's
   # attempt to boot them again hard-reset the phone (guest died at 5.6s as wpss/cdsp/adsp powered up;
   # with their driver blacklisted the guest lived). Stop them first; wifi and ssh drop here.

@@ -48,8 +48,9 @@ ExecStart=$EXE/dualboot-heartbeat
 [Install]
 WantedBy=sysinit.target
 EOF
-# Test mode, armed from taOS by touching $D/return-after (seconds): the guest reboots back to taOS
-# on its own, so a run with no network in the guest still ends without a hand on the power key
+# Test mode, armed for ONE launch by kexec-guest.sh --return-after <seconds>: the guest reboots back to
+# taOS on its own, so a run with no network in the guest still ends without a hand on the power key.
+# A normal launch removes the file and this unit does not start.
 cat > "$R/etc/systemd/system/dualboot-return.service" <<'EOF'
 [Unit]
 Description=Reboot back to taOS after the delay in taOS's return-after file
@@ -97,4 +98,43 @@ WantedBy=multi-user.target
 EOF
 mkdir -p "$R/etc/NetworkManager/conf.d"
 printf '[keyfile]\nunmanaged-devices=interface-name:usb0\n' > "$R/etc/NetworkManager/conf.d/50-usb0-unmanaged.conf"
+}
+
+# The way back, where the owner will look for it: an entry in the guest's app launcher.
+# dualboot_return_entry BIN_NOW EXE APPDIR_NOW
+#   BIN_NOW     the helper directory as mounted now, EXE the same directory as the guest sees it
+#   APPDIR_NOW  an XDG applications directory of the guest, as mounted now
+# Going back needs nothing clever: the switch was a kexec from RAM, so a plain reboot lands on taOS.
+# The entry exists so that this is one obvious tap rather than something to know.
+dualboot_return_entry() {
+local BIN=$1 EXE=$2 APPS=$3
+mkdir -p "$BIN" "$APPS"
+cat > "$BIN/taos-return" <<'RET'
+#!/bin/sh
+# Return to taOS: ask once where a dialog tool exists, then reboot. The desktop user may reboot
+# from an active session (logind); the fallbacks are for a session logind does not know.
+ask() {
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --question --title "Return to taOS" --text "Restart the phone into taOS?" --ok-label "Return to taOS" --cancel-label "Stay"
+  elif command -v kdialog >/dev/null 2>&1; then
+    kdialog --title "Return to taOS" --yesno "Restart the phone into taOS?"
+  else
+    return 0
+  fi
+}
+[ "${1:-}" = --now ] || ask || exit 0
+systemctl reboot || loginctl reboot || sudo -n systemctl reboot
+RET
+chmod 755 "$BIN/taos-return"
+cat > "$APPS/taos-return.desktop" <<RET
+[Desktop Entry]
+Type=Application
+Name=Return to taOS
+Comment=Restart the phone into taOS
+Exec=$EXE/taos-return
+Icon=system-reboot
+Terminal=false
+Categories=System;
+Keywords=taOS;reboot;switch;back;
+RET
 }

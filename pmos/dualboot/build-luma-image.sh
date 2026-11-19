@@ -3,7 +3,7 @@
 # Luma ships a userdata image (Android sparse, zstd) holding a 4096-byte-sector GPT: p1 an empty
 # vfat "pmOS_boot", p2 the ext4 "pmOS_root" carrying an OSTree sysroot. Only p2 is kept, grown to a
 # sparse 32G and relabelled, since taOS's own root is also labelled pmOS_root. The UUID stays: the
-# deployment's fstab mounts /sysroot by it. Output: $OUT/luma-root.img.zst (sparse when unpacked
+# deployment's fstab mounts /sysroot by it. Output: luma-root.img.zst and its .sha256, written into the workdir given as $1 (sparse when unpacked
 # with zstd -d --sparse). The download is checked against Luma's published SHA256SUMS.
 set -euo pipefail
 W=${1:?usage: build-luma-image.sh <workdir holding luma-mobile-alpha1-fp6-userdata.sparse.zst and sums>}

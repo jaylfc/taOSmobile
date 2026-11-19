@@ -109,6 +109,7 @@ for u in rmtfs tqftpserv; do systemctl enable "$u" 2>/dev/null || echo "NOUNIT $
 EOF
 . "$HERE/guest-units.sh"
 dualboot_guest_units "$MNT" /usr/local/bin Omarchy arch omarchy-mobile
+dualboot_return_entry "$MNT/usr/local/bin" /usr/local/bin "$MNT/usr/share/applications"
 mkdir -p "$MNT/mnt/taos"
 chroot "$MNT" /bin/bash /root/stage-a-config.sh
 # useradd -m creates the home as jay; it is only seeded here, after the user exists. The chown

@@ -17,7 +17,10 @@ say() { echo "=== $(date -u +%H:%M:%S) $*"; }
 if [ ! -f "$IMG" ]; then
   [ -f "$IMG.zst" ] || { echo "no $IMG.zst"; exit 1; }
   say unpack
-  zstd -dq --sparse "$IMG.zst" -o "$IMG"
+  # Into a partial file first: an interrupted run must not leave a half image that the next run mounts
+  rm -f "$IMG.partial"
+  zstd -dq --sparse "$IMG.zst" -o "$IMG.partial"
+  mv -f "$IMG.partial" "$IMG"
 fi
 mkdir -p "$MNT"
 L=$(losetup --show -f "$IMG")
@@ -38,6 +41,9 @@ say "deployment $DEP"
 say units
 . "$HERE/guest-units.sh"
 dualboot_guest_units "$DEP" /etc/dualboot Luma luma luma-mobile
+# /usr is read-only on OSTree; /usr/local is /var/usrlocal in the stateroot, and its share/ is on
+# the default XDG_DATA_DIRS, so the launcher finds the entry there
+dualboot_return_entry "$DEP/etc/dualboot" /etc/dualboot "$SR/var/usrlocal/share/applications"
 mkdir -p "$DEP/mnt/taos"
 for u in dualboot-marker dualboot-heartbeat dualboot-return dualboot-usbnet; do
   t=$(sed -n 's/^WantedBy=//p' "$DEP/etc/systemd/system/$u.service")
@@ -72,8 +78,10 @@ echo luma-mobile > "$DEP/etc/hostname"
 # label stay as they are
 if [ -n "${LUMA_PIN:-}" ]; then
   h=$(printf '%s\n' "$LUMA_PIN" | openssl passwd -6 -stdin)
-  awk -F: -v OFS=: -v h="$h" '$1 == "luma" { $2 = h; n++ } { print } END { exit n != 1 }' \
-    "$DEP/etc/shadow" > "$MNT/.shadow.new" || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
+  # the temp copy holds every hash: private from creation (the final file keeps its own mode below)
+  rm -f "$MNT/.shadow.new"
+  ( umask 077; H="$h" awk -F: -v OFS=: '$1 == "luma" { $2 = ENVIRON["H"]; n++ } { print } END { exit n != 1 }' \
+    "$DEP/etc/shadow" > "$MNT/.shadow.new" ) || { rm -f "$MNT/.shadow.new"; echo "no single luma line in shadow"; exit 1; }
   cat "$MNT/.shadow.new" > "$DEP/etc/shadow"
   rm -f "$MNT/.shadow.new"
   echo "luma PIN set"
