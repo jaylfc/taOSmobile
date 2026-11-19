@@ -199,3 +199,11 @@ def test_the_guest_gets_a_return_to_taos_entry(tmp_path):
     entry = (tmp_path / "apps" / "taos-return.desktop").read_text()
     assert "Name=Return to taOS" in entry and "Exec=/etc/dualboot/taos-return" in entry
     assert "Type=Application" in entry and "NoDisplay" not in entry
+
+
+def test_the_installer_creates_the_sbin_directory_before_installing_into_it():
+    """/usr/local/sbin is absent on a fresh postmarketOS: the first install stopped there."""
+    src = (HERE / "install-switch-os.sh").read_text()
+    mk = src.index("install -d -m 0755 /usr/local/sbin")
+    put = src.index('install -m 0755 "$HERE/taos-switch-os" /usr/local/sbin/taos-switch-os')
+    assert mk < put
