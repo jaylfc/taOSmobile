@@ -61,7 +61,8 @@ multi_windows() {
     fi
 }
 case "${1:-start}" in
-    start) exec su taos -s /bin/sh -c "$ENV exec waydroid session start" ;;
+    start) if [ "$(id -un)" = taos ]; then exec env $ENV waydroid session start
+           else exec su taos -s /bin/sh -c "$ENV exec waydroid session start"; fi ;;
     show)  ensure_session; as_taos 'waydroid show-full-ui' ;;
     app)   [ -n "${2:-}" ] || { echo "FAIL: app needs a package name"; exit 1; }
            ensure_session; as_taos "waydroid app launch '$2'" ;;
