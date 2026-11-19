@@ -16,6 +16,9 @@ TOOL = HERE / "taos-switch-os"
 
 @pytest.fixture
 def box(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("the test hooks are ignored when root, so these tests would run against the real "
+                    "system; run as a non-root user")
     d = tmp_path / "dualboot"
     (d / "guest").mkdir(parents=True)
     log = tmp_path / "launched"
