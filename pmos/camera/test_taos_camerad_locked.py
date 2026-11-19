@@ -3,8 +3,8 @@
 The camera opens from the lock screen without signing in, and camerad has no
 authentication of its own. Until 2026-11-17 anyone holding the locked phone
 could list, view and delete every photo. Locked now means: only the shots taken
-since the phone was last seen unlocked, and no delete. Locked is the default;
-only the controller saying exactly {"locked": false} lifts it.
+under the current lock session, and no delete. Locked is the default; only the
+controller saying exactly {"locked": false, "session": <int>} lifts it.
 """
 import http.client
 import importlib.machinery
@@ -70,9 +70,14 @@ def say(m, monkeypatch, answer):
     monkeypatch.setattr(m, "_ask_lock_state", ask)
 
 
+def _fake_session(monkeypatch, m):
+    s = types.SimpleNamespace(frame=lambda: (JPG, 1), frame_after=lambda seq, t: JPG, error=None)
+    monkeypatch.setattr(m, "_session", lambda which=None: s)
+
+
 def test_unlocked_control_everything_works(cam, monkeypatch, tmp_path):
     """The must-succeed half: without it every refusal below could be a broken server."""
-    say(cam, monkeypatch, {"locked": False})
+    say(cam, monkeypatch, {"locked": False, "session": 8})
     assert names(cam) == (False, ["old_1.jpg", "old_2.jpg"])
     assert call(cam, "GET", "/photo/old_1.jpg") == (200, JPG)
     status, body = call(cam, "DELETE", "/photo/old_1.jpg")
@@ -81,7 +86,7 @@ def test_unlocked_control_everything_works(cam, monkeypatch, tmp_path):
 
 
 def test_a_locked_phone_lists_views_and_deletes_nothing_old(cam, monkeypatch, tmp_path):
-    say(cam, monkeypatch, {"locked": True})
+    say(cam, monkeypatch, {"locked": True, "session": 7})
     assert names(cam) == (True, [])
     status, body = call(cam, "GET", "/photo/old_1.jpg")
     assert status == 404 and JPG not in body
@@ -92,19 +97,28 @@ def test_a_locked_phone_lists_views_and_deletes_nothing_old(cam, monkeypatch, tm
     assert (tmp_path / "old_1.jpg").exists() and (tmp_path / "old_2.jpg").exists()
 
 
-@pytest.mark.parametrize("answer", [
-    None,                              # no usable answer
-    {},                                # an old controller's unrelated JSON
-    {"locked": "false"},               # a string is not False
-    {"locked": 0},                     # nor is zero
-    {"locked": None},
+FAIL_CLOSED = [
+    None,                                           # no usable answer
+    {},                                             # an old controller's unrelated JSON
+    {"locked": False},                              # no session: the old contract
+    {"locked": True},
+    {"locked": False, "session": "7"},
+    {"locked": False, "session": 7.0},
+    {"locked": False, "session": True},
+    {"locked": False, "session": None},
+    {"locked": "false", "session": 7},              # a string is not False
+    {"locked": 0, "session": 7},                    # nor is zero
+    {"locked": None, "session": 7},
+    {"locked": False, "session": 7, "extra": 1},    # anything beyond the two keys
+    {"locked": False, "session": 7, "user": "x"},
     [False],
     "unlocked",
-    {"locked": False, "unexpected": True},   # anything beyond the one key
-    {"locked": False, "user": "x"},
     OSError("connection refused"),
     ValueError("not json"),
-])
+]
+
+
+@pytest.mark.parametrize("answer", FAIL_CLOSED)
 def test_anything_but_an_exact_unlocked_answer_is_locked(cam, monkeypatch, tmp_path, answer):
     say(cam, monkeypatch, answer)
     assert names(cam) == (True, [])
@@ -112,22 +126,33 @@ def test_anything_but_an_exact_unlocked_answer_is_locked(cam, monkeypatch, tmp_p
     assert (tmp_path / "old_1.jpg").exists()
 
 
+@pytest.mark.parametrize("answer", FAIL_CLOSED)
+def test_lock_state_fails_closed_with_no_session(cam, monkeypatch, answer):
+    say(cam, monkeypatch, answer)
+    assert cam.lock_state() == (True, None)
+
+
+def test_lock_state_reads_the_exact_contract(cam, monkeypatch):
+    say(cam, monkeypatch, {"locked": False, "session": 8})
+    assert cam.lock_state() == (False, 8)
+    assert cam.phone_locked() is False
+    say(cam, monkeypatch, {"locked": True, "session": 7})
+    assert cam.lock_state() == (True, 7)
+    assert cam.phone_locked() is True
+
+
 def test_with_no_controller_at_all_the_real_query_fails_closed(cam, tmp_path):
     # Nothing stubbed: _ask_lock_state really tries the dead port.
     assert cam.phone_locked() is True
+    assert cam.lock_state() == (True, None)
     assert names(cam) == (True, [])
     assert call(cam, "DELETE", "/photo/old_2.jpg")[0] == 403
     assert (tmp_path / "old_2.jpg").exists()
 
 
-def _fake_session(monkeypatch, m):
-    s = types.SimpleNamespace(frame=lambda: (JPG, 1), frame_after=lambda seq, t: JPG, error=None)
-    monkeypatch.setattr(m, "_session", lambda which=None: s)
-
-
 def test_a_shot_taken_while_locked_is_the_only_one_shown(cam, monkeypatch, tmp_path):
     _fake_session(monkeypatch, cam)
-    say(cam, monkeypatch, {"locked": True})
+    say(cam, monkeypatch, {"locked": True, "session": 7})
     status, body = call(cam, "POST", "/capture")
     assert status == 200, body
     shot = json.loads(body)["name"]
@@ -140,11 +165,11 @@ def test_a_shot_taken_while_locked_is_the_only_one_shown(cam, monkeypatch, tmp_p
 
 def test_the_locked_session_ends_when_the_phone_is_seen_unlocked(cam, monkeypatch):
     _fake_session(monkeypatch, cam)
-    say(cam, monkeypatch, {"locked": True})
+    say(cam, monkeypatch, {"locked": True, "session": 7})
     shot = json.loads(call(cam, "POST", "/capture")[1])["name"]
-    say(cam, monkeypatch, {"locked": False})
+    say(cam, monkeypatch, {"locked": False, "session": 7})
     assert names(cam) == (False, sorted([shot, "old_1.jpg", "old_2.jpg"]))
-    say(cam, monkeypatch, {"locked": True})
+    say(cam, monkeypatch, {"locked": True, "session": 8})
     # Locked again: last session's shot is as hidden as the rest.
     assert names(cam) == (True, [])
     assert call(cam, "GET", "/photo/" + shot)[0] == 404
@@ -152,51 +177,60 @@ def test_the_locked_session_ends_when_the_phone_is_seen_unlocked(cam, monkeypatc
 
 def test_a_shot_taken_unlocked_is_not_shown_once_locked(cam, monkeypatch):
     _fake_session(monkeypatch, cam)
-    say(cam, monkeypatch, {"locked": False})
+    say(cam, monkeypatch, {"locked": False, "session": 7})
     shot = json.loads(call(cam, "POST", "/capture")[1])["name"]
-    say(cam, monkeypatch, {"locked": True})
+    say(cam, monkeypatch, {"locked": True, "session": 8})
     assert names(cam) == (True, [])
     assert call(cam, "GET", "/photo/" + shot)[0] == 404
 
 
-def test_a_shot_observed_before_a_session_reset_is_not_added_to_the_next_session(cam, monkeypatch):
-    # The race, without threads: capture observes "locked", another request then
-    # sees the phone unlocked (session over), the phone locks again, and only
-    # then does the capture register its shot. That shot belongs to the old
-    # session and must not appear in the new one.
-    say(cam, monkeypatch, {"locked": True})
-    locked, gen = cam.lock_observation()
-    assert locked is True
-    say(cam, monkeypatch, {"locked": False})
-    assert cam.phone_locked() is False
-    say(cam, monkeypatch, {"locked": True})
-    cam.note_shot("x.jpg", locked, gen)
-    assert cam.visible_while_locked("x.jpg") is False
+def test_a_shot_observed_in_one_session_is_not_shown_in_the_next(cam, monkeypatch):
+    # The race, without threads: the capture observes session 7, the phone is
+    # unlocked and locked again (session 8), and only then is the shot noted.
+    say(cam, monkeypatch, {"locked": True, "session": 7})
+    locked, session = cam.lock_state()
+    assert (locked, session) == (True, 7)
+    say(cam, monkeypatch, {"locked": True, "session": 8})
+    cam.note_shot("x.jpg", locked, session)
+    assert cam.visible_while_locked("x.jpg", 8) is False
+    assert cam.visible_while_locked("x.jpg", 7) is True
 
 
-def test_a_shot_with_no_reset_in_between_is_registered(cam, monkeypatch):
-    say(cam, monkeypatch, {"locked": True})
-    locked, gen = cam.lock_observation()
-    say(cam, monkeypatch, {"locked": True})
-    cam.note_shot("x.jpg", locked, gen)
-    assert cam.visible_while_locked("x.jpg") is True
+def test_a_shot_in_the_same_session_is_registered(cam, monkeypatch):
+    say(cam, monkeypatch, {"locked": True, "session": 7})
+    locked, session = cam.lock_state()
+    cam.note_shot("x.jpg", locked, session)
+    assert cam.visible_while_locked("x.jpg", 7) is True
+    assert cam.visible_while_locked("x.jpg", None) is False
 
 
-def test_a_reset_that_lands_inside_the_observation_is_not_missed(cam, monkeypatch):
-    """Another request resets the session and the phone locks again while this
-    capture is still asking: the shot must not join the new session."""
-    answers = iter([{"locked": True}])
+def test_unlock_and_relock_with_no_request_between_hides_the_old_shot(cam, monkeypatch):
+    """THE BUG: camerad never saw the unlock, only a new session number."""
+    _fake_session(monkeypatch, cam)
+    say(cam, monkeypatch, {"locked": True, "session": 7})
+    shot = json.loads(call(cam, "POST", "/capture")[1])["name"]
+    assert names(cam) == (True, [shot])
+    say(cam, monkeypatch, {"locked": True, "session": 8})
+    assert names(cam) == (True, [])
+    assert call(cam, "GET", "/photo/" + shot)[0] == 404
 
-    def ask():
-        # This capture's own query: before it answers, another request sees
-        # the phone unlocked (a reset), and then the phone locks again.
-        monkeypatch.setattr(cam, "_ask_lock_state", lambda: {"locked": False})
-        cam.phone_locked()
-        monkeypatch.setattr(cam, "_ask_lock_state", lambda: {"locked": True})
-        return next(answers)
 
-    monkeypatch.setattr(cam, "_ask_lock_state", ask)
-    locked, gen = cam.lock_observation()
-    assert locked is True
-    cam.note_shot("y.jpg", locked, gen)
-    assert cam.visible_while_locked("y.jpg") is False
+def test_the_same_session_across_requests_keeps_the_shot_visible(cam, monkeypatch):
+    _fake_session(monkeypatch, cam)
+    say(cam, monkeypatch, {"locked": True, "session": 7})
+    shot = json.loads(call(cam, "POST", "/capture")[1])["name"]
+    for _ in range(3):
+        assert names(cam) == (True, [shot])
+        assert call(cam, "GET", "/photo/" + shot) == (200, JPG)
+
+
+def test_a_shot_taken_on_a_malformed_answer_is_never_shown_while_locked(cam, monkeypatch):
+    _fake_session(monkeypatch, cam)
+    say(cam, monkeypatch, {"locked": True})          # no session
+    status, body = call(cam, "POST", "/capture")
+    assert status == 200, body
+    shot = json.loads(body)["name"]
+    for later in ({"locked": True, "session": 7}, {"locked": True}, None):
+        say(cam, monkeypatch, later)
+        assert names(cam) == (True, [])
+        assert call(cam, "GET", "/photo/" + shot)[0] == 404
