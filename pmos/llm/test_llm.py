@@ -228,6 +228,46 @@ def test_status_reads_port_and_model_from_the_env_file(rig):
     assert (j["model"], j["port"]) == ("LFM3-1.7B-Q8_0", 7900)
 
 
+def env_status(rig, text: str):
+    envf = rig.tmp / "llm.env"
+    envf.write_text(text)
+    sentinel = rig.tmp / "SENTINEL"
+    p, _ = rig("taos-llm", "status", env={"TAOS_LLM_ENV": str(envf)}, active_on=True)
+    assert not sentinel.exists(), "the env file was executed"
+    return json.loads(p.stdout)
+
+
+@pytest.mark.parametrize("bad", [
+    "7835; touch {s}", "$(touch {s})", "`touch {s}`", "7835 7836", "0", "65536", "123456", "007835", "-1", "",
+])
+def test_helper_never_executes_the_env_file_and_ignores_a_bad_port(rig, bad):
+    j = env_status(rig, "TAOS_LLAMACPP_PORT=%s\n" % bad.format(s=rig.tmp / "SENTINEL"))
+    assert j["port"] == 7835
+
+
+@pytest.mark.parametrize("bad", ["x; touch {s}", "$(touch {s})", "a b", "../x", '"quoted"', ""])
+def test_helper_ignores_a_bad_model_name(rig, bad):
+    j = env_status(rig, "TAOS_LLM_MODEL=%s\n" % bad.format(s=rig.tmp / "SENTINEL"))
+    assert j["model"] == "LFM3-1.7B-QAD-Q4_0"
+
+
+def test_helper_env_file_newline_injection_and_stray_lines_are_ignored(rig):
+    s = rig.tmp / "SENTINEL"
+    j = env_status(rig, (
+        "TAOS_LLAMACPP_PORT=7900\n"
+        f"PATH=/tmp/evil\ntouch {s}\n$(touch {s})\nexport X=1; touch {s}\n"
+        f"TAOS_LLM_MODEL=LFM3-1.7B-Q8_0\n  TAOS_LLM_MODEL=evil\nTAOS_LLM_IDLE_MIN=5; touch {s}\n"))
+    assert (j["model"], j["port"]) == ("LFM3-1.7B-Q8_0", 7900)
+
+
+def test_helper_reads_a_last_line_without_a_newline(rig):
+    assert env_status(rig, "TAOS_LLAMACPP_PORT=7901")["port"] == 7901
+
+
+def test_helper_never_sources_the_env_file():
+    assert not [ln for ln in active_lines(HELPER) if re.match(r"\s*(\.|source)\s", ln) or "&& . " in ln]
+
+
 @needs_user
 def test_status_works_without_root_and_without_the_test_hook(rig):
     """The real path a settings card takes: no TAOS_LLM_TEST, not root."""
@@ -374,6 +414,54 @@ def test_user_placeholder_is_filled_with_a_real_user_name():
     """The rendered rule must be a plain user token: refuse anything sudoers would read as syntax."""
     body = INSTALLER.read_text()
     assert re.search(r"case \$CTL_USER in\s+\*\[!A-Za-z0-9_.-\]\*", body)
+
+
+def installer_check(fn: str, value: str):
+    """Run one of the installer's check functions on VALUE (installer sourced, main skipped)."""
+    return subprocess.run(
+        ["sh", "-c", '. "$0"; ' + fn + ' "$1"', str(INSTALLER), value],
+        env=dict(os.environ, INSTALL_LLAMA_SOURCE_ONLY="1"), capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.parametrize("ok", ["7835", "1", "80", "65535"])
+def test_installer_accepts_a_real_port(ok):
+    assert installer_check("check_port", ok).returncode == 0
+
+
+@pytest.mark.parametrize("bad", [
+    "7835; touch /tmp/x", "$(id)", "`id`", "7835\nFOO=1", "7835 ", "0", "65536", "123456", "007835",
+    "-1", "", "7a", "7835|x",
+])
+def test_installer_refuses_a_bad_port(bad):
+    p = installer_check("check_port", bad)
+    assert p.returncode != 0 and "FAIL" in p.stderr and "port" in p.stderr
+
+
+@pytest.mark.parametrize("ok", [
+    "/srv/models", "/home/taos/data/llama-cpp/models", "/opt/a_b-c.d/m", "/a/b..c", "/a/..b",
+])
+def test_installer_accepts_a_plain_models_dir(ok):
+    assert installer_check("check_models_dir", ok).returncode == 0
+
+
+@pytest.mark.parametrize("bad", [
+    "models", "./models", "", "/", "/srv/../etc", "/srv/..", "/../srv", "/srv/models/..",
+    "/srv/$(id)", "/srv/`id`", "/srv; touch /tmp/x", "/srv/a|b", "/srv/a&b", "/srv/a b",
+    "/srv/a\nb", "/srv/a\nExecStartPre=/bin/sh", "/srv/a\\b", "/srv/a'b", '/srv/a"b', "/srv/a*", "/srv/é",
+])
+def test_installer_refuses_a_bad_models_dir(bad):
+    p = installer_check("check_models_dir", bad)
+    assert p.returncode != 0 and "FAIL" in p.stderr and "models dir" in p.stderr
+
+
+def test_installer_validates_before_it_writes_anything():
+    body = "\n".join(active_lines(INSTALLER))
+    main = body.index("PORT=${PORT:-7835}")
+    assert body.index('check_port "$PORT"') > main
+    assert body.index('check_models_dir "$MODELS_DIR"') > body.index("MODELS_DIR=${MODELS_DIR:-$DATA_DIR")
+    for sink in ("taos-llm.env.rendered", "install -d -o", "llama-cpp.service.rendered"):
+        assert body.index('check_models_dir "$MODELS_DIR"') < body.index(sink)
+        assert body.index('check_port "$PORT"') < body.index(sink)
 
 
 # ---- taos-llm ask -------------------------------------------------------------

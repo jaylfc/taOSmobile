@@ -44,12 +44,24 @@ fi
 if [ "$(id -u)" = 0 ]; then
   unset TAOS_LLAMACPP_PORT TAOS_LLM_MODEL
 fi
-# shellcheck disable=SC1090
-[ -r "$ENV_FILE" ] && . "$ENV_FILE"
 SVC=llama-cpp.service
 PORT="${TAOS_LLAMACPP_PORT:-7835}"
 MODEL="${TAOS_LLM_MODEL:-LFM3-1.7B-QAD-Q4_0}"
-case $PORT in ''|*[!0-9]*) PORT=7835 ;; esac
+# The env file is DATA, never sourced: this runs as root. Only the three
+# expected KEY=value lines are read, each only if its value has the expected
+# shape; anything else (other keys, quotes, command text) is ignored.
+if [ -r "$ENV_FILE" ]; then
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _v=${_line#*=}
+    case $_line in
+      TAOS_LLAMACPP_PORT=*) case $_v in ''|*[!0-9]*) ;; *) PORT=$_v ;; esac ;;
+      TAOS_LLM_MODEL=*) case $_v in ''|*[!A-Za-z0-9._-]*) ;; *) MODEL=$_v ;; esac ;;
+      TAOS_LLM_IDLE_MIN=*) ;;   # read by taos-llm-idle, not here
+    esac
+  done < "$ENV_FILE"
+fi
+case $PORT in ''|*[!0-9]*|0*) PORT=7835 ;; esac
+[ "${#PORT}" -le 5 ] && [ "$PORT" -le 65535 ] || PORT=7835
 USAGE="usage: taos-llm start|stop|status|ask"
 
 need_root() {

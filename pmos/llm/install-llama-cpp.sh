@@ -73,7 +73,33 @@ verify_sha256() {
   return 0
 }
 
-# Sourced by the tests to reach verify_sha256 alone.
+# check_port VALUE: a TCP port, digits only, 1..65535, no leading zero. The value
+# lands in /etc/taos-llm.env and the unit file, so anything else is refused.
+check_port() {
+  case $1 in
+    ''|*[!0-9]*|0*) die "port '$1' is not a plain number 1-65535" ;;
+  esac
+  [ "${#1}" -le 5 ] && [ "$1" -le 65535 ] || die "port '$1' is not in 1-65535"
+}
+
+# check_models_dir VALUE: an absolute path of [A-Za-z0-9._/-] with no '..'
+# component. It is substituted into the unit file, so nothing sed or systemd
+# would read as syntax (and no newline) gets through.
+check_models_dir() {
+  case $1 in
+    /*) ;;
+    *) die "models dir '$1' is not an absolute path" ;;
+  esac
+  case $1 in
+    *[!A-Za-z0-9._/-]*) die "models dir has characters outside A-Za-z0-9._/-" ;;
+  esac
+  case "$1/" in
+    */../*) die "models dir '$1' has a '..' component" ;;
+  esac
+  [ "$1" != / ] || die "models dir cannot be /"
+}
+
+# Sourced by the tests to reach verify_sha256, check_port and check_models_dir alone.
 if [ "${INSTALL_LLAMA_SOURCE_ONLY:-0}" = 1 ]; then return 0; fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
@@ -102,6 +128,8 @@ PORT="${TAOS_LLAMACPP_PORT:-$(ctl_env TAOS_LLAMACPP_PORT)}"; PORT=${PORT:-7835}
 MODELS_DIR="${TAOS_LLAMACPP_MODELS_DIR:-$(ctl_env TAOS_LLAMACPP_MODELS_DIR)}"
 DATA_DIR="$(ctl_env TAOS_DATA_DIR)"; DATA_DIR=${DATA_DIR:-$CTL_CWD/data}
 MODELS_DIR=${MODELS_DIR:-$DATA_DIR/llama-cpp/models}
+check_port "$PORT"
+check_models_dir "$MODELS_DIR"
 [ -d "$DATA_DIR" ] || die "controller data dir $DATA_DIR does not exist"
 say "controller: user $CTL_USER, data dir $DATA_DIR"
 say "core llama.cpp contract: port $PORT, models dir $MODELS_DIR"
