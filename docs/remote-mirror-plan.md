@@ -52,18 +52,25 @@ touch guard while mirroring. Hardware keys (power, volume) and text go through a
 device, so the existing key handlers see them as real presses.
 
 **Transport and auth.** One WebSocket on the phone's tailnet address only, never 0.0.0.0. Tailscale
-already encrypts the path. The daemon admits a peer only when Tailscale's local API (`whois`) says it
-is one of Jay's own devices, so no token is shipped or stored. The protocol is versioned from the
-first message.
+already encrypts the path. The protocol is versioned from the first message. Admission needs BOTH of
+these, checked before any video is sent or any control message is read:
 
-Stage 2 requirement, the WebSocket `Origin` check: the handshake is accepted only when its `Origin`
-header is present and exactly equals one of the allowed origins, which are listed in the protocol doc
-and are `taos-mirror://app` (the Mac app, which sets it explicitly on the handshake) and nothing else.
-A handshake with no `Origin`, or with any other one (for example `https://` from a browser page), is
-refused before any video is sent or any control message is read. Stage 2 tests both a browser-origin
-handshake (refused) and the Mac app (connects). Both checks are needed because `whois` identifies the
-Mac, not the page or app that opened the socket: a web page open on that Mac passes `whois`, and only
-the `Origin` check tells it apart from the app.
+- **Tailscale identity:** Tailscale's local API (`whois`) says the peer is one of Jay's own devices.
+- **A per-device pairing secret (stage 2 requirement):** the Mac app is paired with the phone once,
+  on the phone's screen, and receives a random token that it keeps in the macOS keychain and sends on
+  every connect. The phone stores only a hash of each token, with the device it was issued to, and
+  can revoke one. A connection without a valid token is refused.
+
+The identity alone is not enough: `whois` names the Mac, not the process on it, so any program or
+web page on that Mac would pass it. The token is what proves it is the paired app.
+
+**Origin check, defence in depth (stage 2):** the handshake is also refused unless its `Origin`
+header is present and exactly equals an allowed origin, listed in the protocol doc: `taos-mirror://app`
+(the Mac app sets it explicitly) and nothing else. This only stops browser pages, which cannot forge
+`Origin` (cross-site WebSocket use from a page open on the Mac); any native process can set any
+`Origin`, so it is NOT an authentication control. Stage 2 tests: a browser-origin handshake (refused),
+the paired app (connects), the app with a revoked or missing token (refused), and another device on
+the tailnet (refused).
 
 **Mac app.** SwiftUI, a window shaped like the handset (aspect 1080:2400, corner radius matching the
 panel). It decodes the stream with VideoToolbox, sends clicks and drags as touches, the trackpad scroll
@@ -89,6 +96,6 @@ CI, since the repo is public.
 |---|---|---|
 | 0 | Device probes for the four unknowns above, with wayvnc as a quick end-to-end check of the headless-output idea. | @taOSmobile-dev, on the handset |
 | 1 | `taos-mirror on/off` plus the headless output, panel off, touch exemption, and every forced-off path. Installer and unit in `pmos/`. | @taOSmobile-dev |
-| 2 | `taos-mirrord`: capture, encode, WebSocket, whois admission, control messages into taos-touch. A protocol doc that the Mac app is written against. | @taOSmobile-dev, with lane cards for pieces that are testable off-device |
+| 2 | `taos-mirrord`: capture, encode, WebSocket, admission (whois plus pairing token, Origin as defence in depth), control messages into taos-touch. A protocol doc that the Mac app is written against. | @taOSmobile-dev, with lane cards for pieces that are testable off-device |
 | 3 | Mac app: view-only first (connect, decode, phone-shaped window), then touch, keys and toolbar. Built in CI on macOS. | Lane cards against the stage-2 protocol doc |
 | 4 | Management: status (battery, network, taOS version), restart the kiosk, reboot, pull a screenshot, file drop. Audio is a later stage. | Cards |
