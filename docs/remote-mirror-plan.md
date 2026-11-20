@@ -56,6 +56,15 @@ already encrypts the path. The daemon admits a peer only when Tailscale's local 
 is one of Jay's own devices, so no token is shipped or stored. The protocol is versioned from the
 first message.
 
+Stage 2 requirement, the WebSocket `Origin` check: the handshake is accepted only when its `Origin`
+header is present and exactly equals one of the allowed origins, which are listed in the protocol doc
+and are `taos-mirror://app` (the Mac app, which sets it explicitly on the handshake) and nothing else.
+A handshake with no `Origin`, or with any other one (for example `https://` from a browser page), is
+refused before any video is sent or any control message is read. Stage 2 tests both a browser-origin
+handshake (refused) and the Mac app (connects). Both checks are needed because `whois` identifies the
+Mac, not the page or app that opened the socket: a web page open on that Mac passes `whois`, and only
+the `Origin` check tells it apart from the app.
+
 **Mac app.** SwiftUI, a window shaped like the handset (aspect 1080:2400, corner radius matching the
 panel). It decodes the stream with VideoToolbox, sends clicks and drags as touches, the trackpad scroll
 as a swipe, and the keyboard as text. A toolbar has power, volume up/down, screenshot, start/stop
