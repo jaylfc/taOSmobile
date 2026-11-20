@@ -446,6 +446,8 @@ def test_installer_accepts_a_plain_models_dir(ok):
 
 @pytest.mark.parametrize("bad", [
     "models", "./models", "", "/", "/srv/../etc", "/srv/..", "/../srv", "/srv/models/..",
+    "/.", "/./", "//", "///", "/srv/./models", "/srv//models", "/srv/models/", "/srv/.", "/srv",
+    "/etc", "/usr", "/var",
     "/srv/$(id)", "/srv/`id`", "/srv; touch /tmp/x", "/srv/a|b", "/srv/a&b", "/srv/a b",
     "/srv/a\nb", "/srv/a\nExecStartPre=/bin/sh", "/srv/a\\b", "/srv/a'b", '/srv/a"b', "/srv/a*", "/srv/é",
 ])

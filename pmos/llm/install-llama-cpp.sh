@@ -95,8 +95,15 @@ check_models_dir() {
   esac
   case "$1/" in
     */../*) die "models dir '$1' has a '..' component" ;;
+    */./*) die "models dir '$1' has a '.' component" ;;
+    *//*) die "models dir '$1' has an empty component" ;;
   esac
-  [ "$1" != / ] || die "models dir cannot be /"
+  # Not a top-level directory: install -d gives the models dir an owner and a
+  # mode, and on / or a system directory that would be a disaster.
+  case $1 in
+    /*/*) ;;
+    *) die "models dir '$1' must be at least two levels deep" ;;
+  esac
 }
 
 # Sourced by the tests to reach verify_sha256, check_port and check_models_dir alone.
