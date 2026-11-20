@@ -128,9 +128,13 @@ def test_licence_json_matches_the_model_card():
         "name": "LFM3 1.7B",
         "licence": "LFM Open License v1.0",
         "licence_note": "Commercial use allowed only below USD 10 million annual revenue",
+        "thinking_default": "off",
         "source": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
         "offline": True,
+        "performance_note": j["performance_note"],
     }
+    # Settings shows this to the owner: it must carry the measured numbers.
+    assert "2 cores" in j["performance_note"] and "3 minutes" in j["performance_note"]
 
 
 # ---- stubs ------------------------------------------------------------------
