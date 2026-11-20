@@ -9,7 +9,7 @@ taOS Mirror and the handset gate. Nothing has been built or run.
 | Project | What it runs | State |
 |---|---|---|
 | ChefKissInc/Inferno (about 4,000 stars, pushed 2026-09) | Real iOS on an emulated iPhone 11 (A13, `t8030`), as a QEMU fork | Boots to SpringBoard. iOS 14.0b5 is the version its wiki supports; issue #241 (closed) reports iOS 18.5 booting, but the wiki still lists 15 to 26 as upcoming. Display and multitouch work; audio and baseband are WIP; App Store, iCloud, Face ID and passcode do not work. |
-| touchHLE/touchHLE (about 4,000 stars, pushed 2026-10) | Early 32-bit iOS apps (iPhone OS 2.x to iOS 4.0), high-level emulation, no iOS inside | AArch64 Linux "probably works, build it yourself"; AArch64 Android ships as a release. Mostly games. 64-bit iOS is ruled out by the project. |
+| touchHLE/touchHLE (about 4,000 stars, pushed 2026-10) | Early 32-bit iOS apps (iPhone OS 2.x to iOS 4.0), high-level emulation, no iOS inside | AArch64 Linux "probably works, build it yourself"; AArch64 Android ships as a release. Mostly games. 64-bit iOS is ruled out by the project. A version in that range does not mean the app works: the README (v0.3.0) says the vast majority of apps for those versions do not work, and points to its app compatibility database (appdb.touchhle.org) as the guide, so check it before picking a game. |
 | devos50/qemu-ios | iPod touch 1G and 2G | Hardware preservation, not a usable phone OS. |
 | TrungNguyen1909/qemu-t8030 | Inferno's predecessor | Archived 2022. |
 | MakrSas/Inferno-iOS | Inferno as an app on a real iPhone | Shows Inferno running on an ARM phone without KVM: boot takes minutes; 8 to 25 fps depending on the translation buffer (64 MB to 256 MB). |
