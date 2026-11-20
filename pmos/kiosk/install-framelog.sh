@@ -22,20 +22,16 @@ trap 'rm -rf "$STAGE"' EXIT
 [ "$(id -u)" = 0 ] || { echo "FAIL: must run as root"; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "FAIL: docker is not on PATH"; exit 1; }
 
-# The same sources build-on-phone.sh copies, including the unit tests: `make
-# test` in the container builds test_stats and test_out from these.
-for f in framelog.c stats.c stats.h out.c out.h test_out.c test_stats.c Makefile; do
-    [ -r "$SRC_DIR/$f" ] || { echo "FAIL: $SRC_DIR/$f not readable"; exit 1; }
-done
-
 # Build in an alpine:edge container on the handset, the same way
 # pmos/framelog/build-on-phone.sh does, so the binary matches the host libc and
 # libwayland. The container is the build environment; nothing it installs is
 # persisted on the host.
 mkdir -p "$STAGE/src"
+
 # The same sources build-on-phone.sh copies, including the unit tests: `make
 # test` in the container builds test_stats and test_out from these.
 for f in framelog.c stats.c stats.h out.c out.h test_out.c test_stats.c Makefile; do
+    [ -r "$SRC_DIR/$f" ] || { echo "FAIL: $SRC_DIR/$f not readable"; exit 1; }
     cp "$SRC_DIR/$f" "$STAGE/src/"
 done
 

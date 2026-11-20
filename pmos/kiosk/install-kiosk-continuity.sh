@@ -180,7 +180,17 @@ echo "installed /etc/taos/sway-kiosk.conf"
 # the rest of the install, and it must not be able to leave the kiosk half
 # installed. It is its own script (install-framelog.sh) so a failed build
 # fails clearly without breaking the sway config and helpers above.
-"$HERE/install-framelog.sh"
+#
+# The call is wrapped in `if`, not bare: this script runs with `set -eu`, so
+# install-framelog.sh exiting 1 on a failed build would otherwise abort the
+# whole install and leave the kiosk half done. The `if` catches that, prints
+# what failed, and carries on; taos-kiosk-screen falls back to its grim loop.
+if "$HERE/install-framelog.sh"; then
+    echo "PASS: framelog installed"
+else
+    echo "FAIL: taos-framelog did not build or install" >&2
+    echo "      taos-kiosk-screen will fall back to its grim loop"
+fi
 
 # --- verification -----------------------------------------------------------
 # Each check needs a control, or "absent" and "never looked" read the same.
