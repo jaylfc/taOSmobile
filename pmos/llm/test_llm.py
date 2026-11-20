@@ -570,7 +570,6 @@ def thermal(rig):
         return p, [c for c in calls if c.startswith("systemctl")]
 
     tick.fake = t
-    tick.state = state
     t.zone(0, "cpu-0-0-thermal", "40000")
     t.zone(2, "gpuss-0", "99000")        # not a cpu zone: must never count
     t.zone(3, "pm7325", "99000")
@@ -691,6 +690,7 @@ def idle(rig):
         assert any(c.startswith("curl") for c in calls), "the poll must actually read /slots"
         return p, [c for c in calls if c.startswith("systemctl")]
 
+    tick.state = state
     return tick
 
 
@@ -736,3 +736,39 @@ def test_idle_one_busy_slot_among_idle_ones_is_busy(idle):
     both = '[{"id":0,"is_processing":false},{"id":1,"is_processing": true}]'
     idle(0, both)
     assert idle(100000, both)[1] == []
+
+
+# A request that starts and ends between two polls: is_processing is false at
+# both polls but the slots' work counters (id_task, n_decoded) moved.
+def slots(task: int, decoded: int = 0, proc: bool = False) -> str:
+    return json.dumps([{"id": 0, "id_task": task, "is_processing": proc,
+                        "next_token": [{"n_decoded": decoded}]}])
+
+
+def test_idle_a_request_between_polls_restarts_the_clock(idle):
+    idle(1000, slots(5, 0))
+    assert idle(1500, slots(6, 12))[1] == []          # ran and finished between polls
+    assert idle(1500 + 599, slots(6, 12))[1] == []    # clock restarted at 1500
+    assert idle(1500 + 600, slots(6, 12))[1] == [HALT]
+
+
+def test_idle_tokens_decoded_alone_count_as_activity(idle):
+    idle(1000, slots(5, 0))
+    idle(1100, slots(5, 3))
+    assert idle(1100 + 599, slots(5, 3))[1] == []
+    assert idle(1100 + 600, slots(5, 3))[1] == [HALT]
+
+
+def test_idle_unchanged_counters_for_the_full_limit_stop(idle):
+    idle(1000, slots(5, 7))
+    assert idle(1000 + 300, slots(5, 7))[1] == []
+    assert idle(1000 + 599, slots(5, 7))[1] == []
+    assert idle(1000 + 600, slots(5, 7))[1] == [HALT]
+
+
+def test_idle_first_poll_with_no_stored_counters_never_stops(idle):
+    # an old last_busy but no counters file: nothing to compare, so no stop
+    idle.state.mkdir()
+    (idle.state / "last_busy").write_text("0")
+    assert idle(100000, slots(5, 7))[1] == []
+    assert idle(100000 + 599, slots(5, 7))[1] == []
