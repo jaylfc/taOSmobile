@@ -74,7 +74,10 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
 7. **Set up taOS Agent.** Explains taOS Agent can change the system, so a powerful, high quality
    model is recommended. Options: cloud provider key (stored in Secrets, gateway assigned to taOS
    Agent), a model from your cluster, free taOS models (later, shown as coming soon), or
-   "Skip for now" (taOS Agent uses the on-device model with limited abilities).
+   "Skip for now" (taOS Agent uses the models on your taOS host over the network, the default
+   decided 2026-11-19). The offline option lives in Settings: LFM3-1.7B is opt-in, stopped by
+   default, runs on 2 cores (about 9 tokens per second, and a long first prompt takes about 3
+   minutes), and its licence limit is shown there.
 8. **Privacy summary.** What stays on device, what leaves it.
 9. **First chat.** Opens the chat with the personal assistant, three suggested prompts tailored
    from step 5.
@@ -82,8 +85,8 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
 Jay's ruling on the agent order (2026-10-31): the tailored first agent is a SEPARATE personal
 assistant, created before taOS Agent ("maybe they should create their personal assistant first").
 taOS Agent is its own onboarding step that explains what taOS Agent is for and that it is
-powerful, which is why a powerful model is recommended; support for smaller on-device models for
-taOS Agent is "coming soon".
+powerful, which is why a powerful model is recommended; taOS Agent on a small on-device model is
+not the default (see step 7).
 
 Identity rule: the system agent is always named "taOS Agent" whatever harness or model sits
 behind it; a harness swap must not rename it or reset its memory.
