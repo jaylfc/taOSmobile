@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import os
 import subprocess
 import sys
 import tomllib
@@ -169,10 +170,30 @@ def check_config_is_live(repo_root: Path, files_to_scan: list[str], config: dict
     # defaulted by forgetting.
     declared_unscanned = invariants.get("unscanned_paths", [])
     scanned = set(files_to_scan)
-    for doc in sorted(repo_root.rglob("*.md")):
-        if any(part == ".git" for part in doc.parts):
+    # Use git to enumerate .md files, excluding .git directories and git-ignored files
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # If git fails, report a git-related error that matches the gate's failure style
+        failures.append(f"config: git command failed to list .md files in repo")
+        return failures
+    # -z: NUL-separated and unquoted, so a path with unusual characters is the
+    # literal path, not git's escaped form.
+    # Bytes, decoded as file names: text mode would translate a CR in a name
+    # to LF, and two different files could then match one configured path.
+    names = [os.fsdecode(b) for b in result.stdout.split(b"\0") if b]
+    # --cached still lists a tracked file deleted in the worktree but not staged;
+    # only files that exist are checked, as the old filesystem walk did.
+    names = [n for n in names if (Path(repo_root) / n).is_file()]
+    for doc_rel in sorted(names):
+        if any(part == ".git" for part in Path(doc_rel).parts):
             continue
-        rel = doc.relative_to(repo_root).as_posix()
+        rel = doc_rel
         if rel in scanned or _match_any(rel, declared_unscanned):
             continue
         failures.append(
