@@ -1,0 +1,20 @@
+[Unit]
+Description=taOS on-device LLM idle auto-stop (TAOS_LLM_IDLE_MIN minutes, default 10)
+# Polls llama-server's /slots every 60 s and stops llama-cpp.service when no slot
+# has been processing for TAOS_LLM_IDLE_MIN minutes. A unit of its own, bound to
+# the model, so it applies however the model was started and is never a job
+# started from an ssh session. Not installable: llama-cpp.service Wants= it.
+BindsTo=llama-cpp.service
+After=llama-cpp.service
+PartOf=llama-cpp.service
+
+[Service]
+Type=simple
+# TAOS_LLAMACPP_PORT, TAOS_LLM_MODEL and TAOS_LLM_IDLE_MIN, written by the installer.
+EnvironmentFile=-/etc/taos-llm.env
+ExecStart=/usr/local/bin/taos-llm-idle
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
