@@ -264,6 +264,18 @@ def test_start_starts_waits_for_health_then_reports_running(rig):
     assert json.loads(p.stdout)["running"] is True
 
 
+def test_start_loads_the_model_so_the_idle_stop_can_see_it(rig):
+    """In router mode /slots is unreadable until the model is loaded, and the
+    idle stop counts unreadable as busy: start must load the model itself."""
+    (rig.curl_dir / "_health").write_text('{"status":"ok"}')
+    p, calls = rig("taos-llm", "start", active_on=True)
+    assert p.returncode == 0, p.stderr
+    health = next(i for i, c in enumerate(calls) if "/health" in c)
+    warm = [i for i, c in enumerate(calls) if "/v1/chat/completions" in c]
+    assert warm and warm[0] > health, calls
+    assert '"max_tokens":1' in calls[warm[0]] and '"enable_thinking":false' in calls[warm[0]]
+
+
 def test_start_fails_when_health_never_answers(rig):
     p, calls = rig("taos-llm", "start", env={"TAOS_LLM_START_WAIT": "2"}, active_on=True)
     assert p.returncode == 1

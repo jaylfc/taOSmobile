@@ -139,6 +139,15 @@ case "${1:-}" in
       [ "$i" -le "$WAIT" ] || { echo "taos-llm: /health did not answer in $WAIT s" >&2; exit 1; }
       sleep 1
     done
+    # Load the model now. In router mode llama-server loads it on the first
+    # request, and until then /slots cannot be read, so the idle stop treated a
+    # started-but-unused model as busy and never stopped it (measured on the
+    # handset). A failed warm-up is reported, not fatal: the first real request
+    # loads it instead.
+    curl -fsS --max-time 180 -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1,\"chat_template_kwargs\":{\"enable_thinking\":false}}" \
+      "http://127.0.0.1:$PORT/v1/chat/completions" >/dev/null 2>&1 ||
+      echo "taos-llm: warm-up request failed; the model loads on its first request" >&2
     status ;;
   stop)
     [ "$#" -eq 1 ] || { echo "$USAGE" >&2; exit 2; }
