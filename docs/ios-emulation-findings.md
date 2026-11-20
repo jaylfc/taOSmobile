@@ -42,6 +42,8 @@ placed by hand. It would never be fetched by a script and never committed to a r
 ## If it is picked up again
 
 - **The quick, clean win** is touchHLE as a taOS app. It runs natively on arm64, needs only IPAs Jay
-  owns, takes real touch and the accelerometer, and is limited to classic iOS games.
+  owns, takes real touch and the accelerometer, and is limited to classic iOS games. The tool needs
+  a decrypted app binary (README v0.3.0), and an owned IPA can still contain an encrypted one, so
+  owning the IPA is not sufficient on its own.
 - **The research run** is Inferno on omarchy (x86_64, faster) first, with firmware Jay places there.
   The phone would come second, once omarchy shows SpringBoard and gives a frame-rate number.
