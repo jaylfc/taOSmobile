@@ -454,6 +454,24 @@ def test_installer_refuses_a_bad_models_dir(bad):
     assert p.returncode != 0 and "FAIL" in p.stderr and "models dir" in p.stderr
 
 
+def test_installer_gives_owner_and_mode_to_the_models_dir_only():
+    lines = active_lines(INSTALLER)
+    owned = [ln for ln in lines if ln.startswith("install -d") and re.search(r"\s-[ogm]\s", ln)]
+    # exactly one operand-carrying install -d with -o/-g/-m, and it names only the models dir
+    models = [ln for ln in owned if "MODELS_DIR" in ln]
+    assert len(models) == 1
+    assert models[0].endswith('-m 0755 "$MODELS_DIR"')
+    assert "dirname" not in models[0] and "PARENT" not in models[0]
+    # the parent is created with a plain install -d, and only when it is missing
+    assert 'install -d "$MODELS_PARENT"' in "\n".join(lines)
+    body = "\n".join(lines)
+    guard = body.index('if [ ! -d "$MODELS_PARENT" ]')
+    assert guard < body.index('install -d "$MODELS_PARENT"') < body.index("fi", guard)
+    assert body.index("chown", guard) < body.index(models[0])
+    # no other directory-creating call hands the parent an owner or mode
+    assert not [ln for ln in owned if ln is not models[0] and "PARENT" in ln]
+
+
 def test_installer_validates_before_it_writes_anything():
     body = "\n".join(active_lines(INSTALLER))
     main = body.index("PORT=${PORT:-7835}")

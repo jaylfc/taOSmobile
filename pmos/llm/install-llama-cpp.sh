@@ -149,7 +149,16 @@ say "$(/usr/bin/llama-server --version 2>&1 | head -n 2 | tr '\n' ' ')"
 
 # The models dir sits inside the controller's 0700 data dir and is the controller's.
 mkdir -p "$CACHE/dl"
-install -d -o "$CTL_USER" -g "$(id -gn "$CTL_USER")" -m 0755 "$(dirname "$MODELS_DIR")" "$MODELS_DIR"
+# Owner and mode go on the models dir ONLY: with several operands install -d
+# applies -o/-g/-m to every one, so an override like /srv/models would chown /srv.
+# A parent that already exists keeps its owner and mode; one this run creates
+# is handed to the controller, as the default layout's llama-cpp dir was.
+MODELS_PARENT=$(dirname "$MODELS_DIR")
+if [ ! -d "$MODELS_PARENT" ]; then
+  install -d "$MODELS_PARENT"
+  chown "$CTL_USER:$(id -gn "$CTL_USER")" "$MODELS_PARENT"
+fi
+install -d -o "$CTL_USER" -g "$(id -gn "$CTL_USER")" -m 0755 "$MODELS_DIR"
 
 # ---- 2. the model: verify, fetch only if needed, verify again -----------------
 MODEL="$MODELS_DIR/$MODEL_FILE"
