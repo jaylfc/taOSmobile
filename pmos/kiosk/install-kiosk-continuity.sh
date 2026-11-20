@@ -174,6 +174,14 @@ install -d -m 755 /etc/taos
 install -m 644 "$CONF_SRC" /etc/taos/sway-kiosk.conf
 echo "installed /etc/taos/sway-kiosk.conf"
 
+# 5. The frame logger taos-kiosk-screen uses to watch the panel go black.
+#
+# This runs BEFORE the verification block: a build failure here must not stop
+# the rest of the install, and it must not be able to leave the kiosk half
+# installed. It is its own script (install-framelog.sh) so a failed build
+# fails clearly without breaking the sway config and helpers above.
+"$HERE/install-framelog.sh"
+
 # --- verification -----------------------------------------------------------
 # Each check needs a control, or "absent" and "never looked" read the same.
 
