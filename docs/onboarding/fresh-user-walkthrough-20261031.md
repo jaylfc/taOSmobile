@@ -69,13 +69,19 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
 4. **This device.** First device, or join an existing cluster (pair code / nearby).
 5. **About you.** A few tap-to-pick chips (what you want help with, tone, how hands-on). Feeds the
    first agent's persona and suggested prompts.
-6. **On-device model.** Recommended small chat model sized to the device, download with progress,
-   runs offline. Skip allowed.
+6. **Offline model (pointer only).** Onboarding does not download a model. It shows one line: an
+   offline model can be turned on later in Settings (on the phone that is LFM3-1.7B, opt-in, see
+   step 7). This keeps a single model-selection flow: agents choose their model in step 7 and in
+   Settings, never here.
 7. **Set up taOS Agent.** Explains taOS Agent can change the system, so a powerful, high quality
    model is recommended. Options: cloud provider key (stored in Secrets, gateway assigned to taOS
    Agent), a model from your cluster, free taOS models (later, shown as coming soon), or
    "Skip for now" (taOS Agent uses the models on your taOS host over the network, the default
-   decided 2026-11-19). The offline option lives in Settings: LFM3-1.7B is opt-in, stopped by
+   decided 2026-11-19). This needs the device to reach a taOS host that serves a chat model (the
+   device is that host, or it is one of the person's devices that can reach it). If no host model
+   can be reached when a chat starts, the chat says so plainly instead of failing silently, and
+   offers three ways forward: connect to your taOS host, add a cloud provider key, or turn on the
+   offline model in Settings. The offline option lives in Settings: LFM3-1.7B is opt-in, stopped by
    default, runs on 2 cores (about 9 tokens per second, and a long first prompt takes about 3
    minutes), and its licence limit is shown there.
 8. **Privacy summary.** What stays on device, what leaves it.
