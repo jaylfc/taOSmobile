@@ -87,6 +87,8 @@ bash scripts/install-git-hooks.sh                     # wire it to pre-commit
   gets switched off. Satisfy it by editing one of the docs the rule names, or
   by explaining yourself in a `Docs-Reviewed: <why>` commit trailer.
 
+The tests now use proper pytest assertions instead of print/return.
+
 Rules live in `docs/doc-gate.toml` and are data — cover a new area by adding a
 `[[rules]]` entry, not by editing the script. CI
 (`.github/workflows/doc-gate.yml`) is authoritative on push and PR, so
@@ -128,6 +130,9 @@ the Cluster app, with Bluetooth kept as its fallback link, is
 
 The plan for taOS Mirror, which shows and drives the handset from the MacBook over
 Tailscale with the phone's own panel dark, is `docs/remote-mirror-plan.md`.
+
+What was found about running iOS as an app through an emulator (parked 2026-10-25) is in
+`docs/ios-emulation-findings.md`.
 
 The plan for dual booting taOS and Omarchy Mobile, one OS per A/B boot slot
 sharing userdata, is `docs/dual-boot-plan.md`.

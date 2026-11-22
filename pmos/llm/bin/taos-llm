@@ -1,0 +1,174 @@
+#!/bin/sh
+# taos-llm: opt-in switch for the handset's on-device model. Installed at
+# /usr/local/sbin/taos-llm.
+#
+#   taos-llm start    ROOT. Start llama-cpp.service (and, through it, the
+#                     thermal guard and the idle auto-stop), wait for /health,
+#                     print status.
+#   taos-llm stop     ROOT. Stop it, print status.
+#   taos-llm status   Any user. Print {"running":bool,"healthy":bool,"model":"...","port":N}.
+#                     running is `systemctl is-active` (needs no root); healthy
+#                     is /health over loopback.
+#   taos-llm ask [--thinking on|off] [--max-tokens N] [--prompt TEXT]
+#                     Any user. One chat completion against the local server,
+#                     prompt from --prompt or stdin. Prints one JSON line:
+#                       {"ok":true,"answer":"...","reasoning_used":bool,"tokens":N}
+#                       {"ok":false,"error":"reasoning budget exhausted before an answer",
+#                        "finish_reason":"length"}                       exit 4
+#                       {"ok":false,"error":"not running"}                exit 3
+#                       {"ok":false,"error":"..."}                        exit 1
+#                     Bad usage exits 2. Thinking is OFF by default for ask:
+#                     LFM3 is a reasoning model and spends a small token budget
+#                     entirely on its <think> block, returning an empty answer.
+#
+# The service is never enabled: phone agents use the taOS host's models by
+# default, and this model is for offline use and quick replies. It stops itself
+# after TAOS_LLM_IDLE_MIN idle minutes (taos-llm-idle.service).
+#
+# Under sudo only the two exact forms `start` and `stop` are allowed
+# (/etc/sudoers.d/50-taos-llm), so this script is the whole root surface.
+set -u
+# May run as root under sudo: never trust the caller's PATH.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+
+ENV_FILE=/etc/taos-llm.env
+WAIT=60
+TESTING=
+# Test hooks, honoured ONLY when not root: a root caller (sudo) can never be steered by them.
+if [ "$(id -u)" != 0 ] && [ -n "${TAOS_LLM_TEST:-}" ]; then
+  ENV_FILE="${TAOS_LLM_ENV:-$ENV_FILE}"
+  WAIT="${TAOS_LLM_START_WAIT:-$WAIT}"
+  [ -z "${TAOS_LLM_TEST_PATH:-}" ] || PATH="$TAOS_LLM_TEST_PATH:$PATH"
+  TESTING=1
+fi
+if [ "$(id -u)" = 0 ]; then
+  unset TAOS_LLAMACPP_PORT TAOS_LLM_MODEL
+fi
+SVC=llama-cpp.service
+PORT="${TAOS_LLAMACPP_PORT:-7835}"
+MODEL="${TAOS_LLM_MODEL:-LFM3-1.7B-QAD-Q4_0}"
+# The env file is DATA, never sourced: this runs as root. Only the three
+# expected KEY=value lines are read, each only if its value has the expected
+# shape; anything else (other keys, quotes, command text) is ignored.
+if [ -r "$ENV_FILE" ]; then
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _v=${_line#*=}
+    case $_line in
+      TAOS_LLAMACPP_PORT=*) case $_v in ''|*[!0-9]*) ;; *) PORT=$_v ;; esac ;;
+      TAOS_LLM_MODEL=*) case $_v in ''|*[!A-Za-z0-9._-]*) ;; *) MODEL=$_v ;; esac ;;
+      TAOS_LLM_IDLE_MIN=*) ;;   # read by taos-llm-idle, not here
+    esac
+  done < "$ENV_FILE"
+fi
+case $PORT in ''|*[!0-9]*|0*) PORT=7835 ;; esac
+[ "${#PORT}" -le 5 ] && [ "$PORT" -le 65535 ] || PORT=7835
+USAGE="usage: taos-llm start|stop|status|ask"
+
+need_root() {
+  [ -n "$TESTING" ] || [ "$(id -u)" = 0 ] || { echo "taos-llm: $1 needs root" >&2; exit 1; }
+}
+
+healthy() { curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; }
+
+status() {
+  if systemctl is-active --quiet "$SVC"; then running=true; else running=false; fi
+  if [ "$running" = true ] && healthy; then h=true; else h=false; fi
+  printf '{"running":%s,"healthy":%s,"model":"%s","port":%s}\n' "$running" "$h" "$MODEL" "$PORT"
+}
+
+ask() {
+  shift
+  thinking=off; max=512; prompt=; have_prompt=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --thinking) [ "$#" -ge 2 ] || { echo "taos-llm ask: --thinking needs on|off" >&2; exit 2; }
+                  case $2 in on|off) thinking=$2 ;; *) echo "taos-llm ask: --thinking must be on or off" >&2; exit 2 ;; esac
+                  shift 2 ;;
+      --max-tokens) [ "$#" -ge 2 ] || { echo "taos-llm ask: --max-tokens needs a number" >&2; exit 2; }
+                  case $2 in ''|*[!0-9]*|0) echo "taos-llm ask: --max-tokens must be a positive number" >&2; exit 2 ;; esac
+                  max=$2; shift 2 ;;
+      --prompt)   [ "$#" -ge 2 ] || { echo "taos-llm ask: --prompt needs text" >&2; exit 2; }
+                  prompt=$2; have_prompt=1; shift 2 ;;
+      *) echo "taos-llm ask: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+  [ -n "$have_prompt" ] || prompt=$(cat)
+  [ -n "$prompt" ] || { echo "taos-llm ask: empty prompt" >&2; exit 2; }
+  if ! systemctl is-active --quiet "$SVC"; then
+    echo '{"ok":false,"error":"not running"}'; exit 3
+  fi
+  TAOS_ASK_PROMPT=$prompt TAOS_ASK_THINKING=$thinking TAOS_ASK_MAX=$max \
+  TAOS_ASK_PORT=$PORT TAOS_ASK_MODEL=$MODEL \
+  TAOS_ASK_TIMEOUT="${TAOS_LLM_ASK_TIMEOUT:-300}" python3 -c '
+import http.client, json, os, socket, sys
+def out(obj, code):
+    print(json.dumps(obj, ensure_ascii=False)); sys.exit(code)
+body = {
+    "model": os.environ["TAOS_ASK_MODEL"],
+    "messages": [{"role": "user", "content": os.environ["TAOS_ASK_PROMPT"]}],
+    "max_tokens": int(os.environ["TAOS_ASK_MAX"]),
+    # LFM3 chat template: enable_thinking (default true) picks "<think>" or "<think></think>"
+    "chat_template_kwargs": {"enable_thinking": os.environ["TAOS_ASK_THINKING"] == "on"},
+}
+try:
+    c = http.client.HTTPConnection("127.0.0.1", int(os.environ["TAOS_ASK_PORT"]),
+                                   timeout=float(os.environ["TAOS_ASK_TIMEOUT"]))
+    c.request("POST", "/v1/chat/completions", json.dumps(body), {"Content-Type": "application/json"})
+    r = c.getresponse(); raw = r.read()
+except ConnectionRefusedError:
+    out({"ok": False, "error": "not running"}, 3)
+except (OSError, socket.timeout) as e:
+    out({"ok": False, "error": "request failed: %s" % e}, 1)
+if r.status != 200:
+    out({"ok": False, "error": "server answered %d" % r.status}, 1)
+try:
+    j = json.loads(raw)
+    ch = j["choices"][0]
+    msg = ch["message"]
+    content = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or ""
+    fin = ch.get("finish_reason")
+    tokens = int((j.get("usage") or {}).get("completion_tokens") or 0)
+except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+    out({"ok": False, "error": "unreadable server reply"}, 1)
+if not content.strip():
+    if fin == "length":
+        out({"ok": False, "error": "reasoning budget exhausted before an answer",
+             "finish_reason": "length"}, 4)
+    out({"ok": False, "error": "empty answer", "finish_reason": fin}, 1)
+out({"ok": True, "answer": content, "reasoning_used": bool(reasoning.strip()), "tokens": tokens}, 0)
+'
+}
+
+case "${1:-}" in
+  start)
+    [ "$#" -eq 1 ] || { echo "$USAGE" >&2; exit 2; }
+    need_root start
+    systemctl start "$SVC" || { echo "taos-llm: $SVC failed to start" >&2; exit 1; }
+    i=0
+    until healthy; do
+      i=$((i + 1))
+      [ "$i" -le "$WAIT" ] || { echo "taos-llm: /health did not answer in $WAIT s" >&2; exit 1; }
+      sleep 1
+    done
+    # Load the model now. In router mode llama-server loads it on the first
+    # request, and until then /slots cannot be read, so the idle stop treated a
+    # started-but-unused model as busy and never stopped it (measured on the
+    # handset). A failed warm-up is reported, not fatal: the first real request
+    # loads it instead.
+    curl -fsS --max-time 180 -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1,\"chat_template_kwargs\":{\"enable_thinking\":false}}" \
+      "http://127.0.0.1:$PORT/v1/chat/completions" >/dev/null 2>&1 ||
+      echo "taos-llm: warm-up request failed; the model loads on its first request" >&2
+    status ;;
+  stop)
+    [ "$#" -eq 1 ] || { echo "$USAGE" >&2; exit 2; }
+    need_root stop
+    systemctl stop "$SVC" || exit 1
+    status ;;
+  status)
+    [ "$#" -eq 1 ] || { echo "$USAGE" >&2; exit 2; }
+    status ;;
+  ask) ask "$@" ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
+esac

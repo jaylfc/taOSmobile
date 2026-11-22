@@ -1,0 +1,10 @@
+{
+  "id": "lfm3-1.7b",
+  "name": "LFM3 1.7B",
+  "licence": "LFM Open License v1.0",
+  "licence_note": "Commercial use allowed only below USD 10 million annual revenue",
+  "source": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF",
+  "offline": true,
+  "thinking_default": "off",
+  "performance_note": "On this phone it runs on 2 cores to stay cool: about 9 tokens per second, and a long first prompt takes about 3 minutes. Agents with long system prompts should use host models (the default)."
+}

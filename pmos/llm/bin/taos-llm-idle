@@ -1,0 +1,80 @@
+#!/bin/sh
+# taos-llm-idle: stop llama-cpp.service after TAOS_LLM_IDLE_MIN minutes (default
+# 10) in which no slot was processing. Run by taos-llm-idle.service (bound to
+# the model service). Every TAOS_LLM_IDLE_POLL s (default 60) it reads
+# llama-server's GET /slots; any slot with "is_processing": true restarts the
+# clock. A request that starts and ends between two polls is caught too: each
+# poll also records a fingerprint of the slots' work counters (every slot's
+# "id_task", the task id, which grows with each request, and "n_decoded", the
+# tokens generated for the current task, both from llama.cpp's server README
+# for GET /slots; not run against the device's 1.0.0). A fingerprint that
+# differs from the previous poll's, stored in the state dir, also restarts the
+# clock. The first poll has nothing to compare with and counts as activity.
+# If /slots cannot be read or has no is_processing field, the model is treated
+# as BUSY (logged once): a wrong guess must not cut off an answer.
+#
+#   taos-llm-idle          loop forever
+#   taos-llm-idle --once   one poll, for tests
+# Test knobs: TAOS_LLM_IDLE_STATE, TAOS_LLM_NOW (epoch seconds).
+set -u
+STATE="${TAOS_LLM_IDLE_STATE:-/run/taos-llm-idle}"
+PORT="${TAOS_LLAMACPP_PORT:-7835}"
+MODEL="${TAOS_LLM_MODEL:-LFM3-1.7B-QAD-Q4_0}"
+POLL="${TAOS_LLM_IDLE_POLL:-60}"
+IDLE_MIN="${TAOS_LLM_IDLE_MIN:-10}"
+case $IDLE_MIN in ''|*[!0-9]*|0) echo "taos-llm-idle: bad TAOS_LLM_IDLE_MIN '$IDLE_MIN', using 10" >&2; IDLE_MIN=10 ;; esac
+SVC=llama-cpp.service
+
+log() { echo "taos-llm-idle: $*" >&2; }
+
+# busy: 0 if a slot is processing, its work counters changed since the last
+# poll, or the state is unknown; 1 if all are idle and nothing happened.
+busy() {
+  _read=0 _fp="" _proc=0
+  for _u in "/slots" "/slots?model=$MODEL"; do
+    _b=$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT$_u" 2>/dev/null) || continue
+    case $_b in
+      *'"is_processing":true'*|*'"is_processing": true'*) _proc=1; _read=1 ;;
+      *'"is_processing"'*) _read=1 ;;
+    esac
+    _fp="$_fp$(printf '%s' "$_b" | grep -oE '"(id_task|n_decoded)": *-?[0-9]+' | tr -d ' \n')"
+  done
+  if [ "$_read" -eq 0 ]; then
+    if [ ! -e "$STATE/unreadable" ]; then
+      : > "$STATE/unreadable"
+      log "cannot read slot state from /slots, treating the model as busy"
+    fi
+    return 0
+  fi
+  rm -f "$STATE/unreadable"
+  # Activity between polls: compare the counters with the previous poll's.
+  _changed=0
+  if [ -n "$_fp" ]; then
+    if [ ! -e "$STATE/counters" ] || [ "$(cat "$STATE/counters")" != "$_fp" ]; then _changed=1; fi
+    printf '%s\n' "$_fp" > "$STATE/counters"
+  fi
+  if [ "$_proc" -eq 1 ] || [ "$_changed" -eq 1 ]; then return 0; fi
+  return 1
+}
+
+step() {
+  mkdir -p "$STATE"
+  now="${TAOS_LLM_NOW:-$(date +%s)}"
+  [ -e "$STATE/last_busy" ] || echo "$now" > "$STATE/last_busy"
+  if busy; then
+    echo "$now" > "$STATE/last_busy"
+    return 0
+  fi
+  last=$(cat "$STATE/last_busy")
+  if [ $((now - last)) -ge $((IDLE_MIN * 60)) ]; then
+    log "idle for $((now - last)) s (limit $((IDLE_MIN * 60)) s): stopping $SVC"
+    systemctl stop "$SVC"
+  fi
+}
+
+if [ "${1:-}" = --once ]; then step; exit 0; fi
+rm -rf "$STATE"
+while :; do
+  step
+  sleep "$POLL"
+done

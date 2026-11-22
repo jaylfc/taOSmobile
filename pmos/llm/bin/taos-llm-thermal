@@ -1,0 +1,74 @@
+#!/bin/sh
+# taos-llm-thermal: thermal cap for llama-cpp.service. Run by
+# taos-llm-thermal.service (bound to the model service), as root.
+#
+# Hottest CPU zone (a /sys/class/thermal/thermal_zone*/ whose type contains
+# "cpu") at or above PAUSE_C: SIGSTOP every process of the unit.
+# At or below RESUME_C while paused: SIGCONT. At or above ABORT_C: stop the unit.
+# A zone that cannot be read is skipped. If NO zone can be read the guard logs
+# once and does nothing, and resumes a paused unit: it never holds the model
+# stopped on a reading it cannot take.
+#
+#   taos-llm-thermal          loop forever (every TAOS_LLM_THERMAL_INTERVAL s)
+#   taos-llm-thermal --once   one decision, for tests
+# Test knobs: TAOS_LLM_THERMAL_DIR, TAOS_LLM_THERMAL_STATE.
+set -u
+DIR="${TAOS_LLM_THERMAL_DIR:-/sys/class/thermal}"
+STATE="${TAOS_LLM_THERMAL_STATE:-/run/taos-llm-thermal}"
+PAUSE_C="${TAOS_LLM_PAUSE_C:-80}"
+RESUME_C="${TAOS_LLM_RESUME_C:-75}"
+ABORT_C="${TAOS_LLM_ABORT_C:-88}"
+INTERVAL="${TAOS_LLM_THERMAL_INTERVAL:-2}"
+SVC=llama-cpp.service
+
+log() { echo "taos-llm-thermal: $*" >&2; }   # stderr is the journal under systemd
+
+# hottest: print the hottest readable cpu zone in millidegrees, or fail.
+hottest() {
+  _max=
+  for _z in "$DIR"/thermal_zone*; do
+    [ -r "$_z/type" ] && [ -r "$_z/temp" ] || continue
+    _type=$(cat "$_z/type" 2>/dev/null) || continue
+    case $_type in *cpu*) ;; *) continue ;; esac
+    _t=$(cat "$_z/temp" 2>/dev/null) || continue
+    case $_t in ''|*[!0-9]*) continue ;; esac
+    if [ -z "$_max" ] || [ "$_t" -gt "$_max" ]; then _max=$_t; fi
+  done
+  [ -n "$_max" ] || return 1
+  echo "$_max"
+}
+
+resume() { systemctl kill --signal=SIGCONT "$SVC"; rm -f "$STATE/paused"; }
+
+step() {
+  mkdir -p "$STATE"
+  if ! t=$(hottest); then
+    if [ ! -e "$STATE/nozone" ]; then
+      : > "$STATE/nozone"
+      log "no readable cpu thermal zone under $DIR, the thermal cap is inactive"
+    fi
+    if [ -e "$STATE/paused" ]; then log "resuming $SVC (cannot read a temperature)"; resume; fi
+    return 0
+  fi
+  rm -f "$STATE/nozone"
+  if [ "$t" -ge $((ABORT_C * 1000)) ]; then
+    log "hottest cpu zone $((t / 1000)) C >= $ABORT_C C: stopping $SVC"
+    rm -f "$STATE/paused"
+    systemctl stop "$SVC"
+  elif [ -e "$STATE/paused" ]; then
+    if [ "$t" -le $((RESUME_C * 1000)) ]; then
+      log "hottest cpu zone $((t / 1000)) C <= $RESUME_C C: resuming $SVC"
+      resume
+    fi
+  elif [ "$t" -ge $((PAUSE_C * 1000)) ]; then
+    log "hottest cpu zone $((t / 1000)) C >= $PAUSE_C C: pausing $SVC (SIGSTOP)"
+    systemctl kill --signal=SIGSTOP "$SVC" && : > "$STATE/paused"
+  fi
+}
+
+if [ "${1:-}" = --once ]; then step; exit 0; fi
+rm -rf "$STATE"   # a fresh guard starts from "not paused"
+while :; do
+  step
+  sleep "$INTERVAL"
+done

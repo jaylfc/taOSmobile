@@ -1,0 +1,21 @@
+[Unit]
+Description=taOS on-device LLM thermal cap (pause at 80 C, resume at 75 C, stop at 88 C)
+# A unit of its own, bound to the model: it starts and stops with
+# llama-cpp.service however that was started (taos-llm, core's controller, or
+# systemctl), survives the short-lived taos-llm helper, and is restarted by
+# systemd if it dies. Not installable: llama-cpp.service Wants= it.
+BindsTo=llama-cpp.service
+After=llama-cpp.service
+PartOf=llama-cpp.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/taos-llm-thermal
+# Whatever happens to the guard, never leave the model SIGSTOPped.
+ExecStopPost=-/usr/bin/systemctl kill --signal=SIGCONT llama-cpp.service
+Restart=on-failure
+RestartSec=2
+Nice=-5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

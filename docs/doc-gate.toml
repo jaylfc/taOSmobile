@@ -33,6 +33,7 @@ referenced_paths_scan = [
   "docs/first-run-controller-choice.md",
   "docs/pmos-audio-bringup.md",
   "docs/pmos-checkpoint-images.md",
+  "docs/ios-emulation-findings.md",
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
   "pmos/gunyah/README.md",
