@@ -86,7 +86,11 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
    minutes), and its licence limit is shown there.
 8. **Privacy summary.** What stays on device, what leaves it.
 9. **First chat.** Opens the chat with the personal assistant, three suggested prompts tailored
-   from step 5.
+   from step 5. The personal assistant uses the same model source as the step 7 default: the
+   models on your taOS host over the network. A cloud key chosen in step 7 is assigned to taOS
+   Agent only; giving the personal assistant a different model (a cloud key, a cluster model, or
+   the offline model) is done per agent in Settings. If no host model is reachable, the first chat
+   shows the same message and three ways forward as step 7.
 
 Jay's ruling on the agent order (2026-10-31): the tailored first agent is a SEPARATE personal
 assistant, created before taOS Agent ("maybe they should create their personal assistant first").
