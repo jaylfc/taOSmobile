@@ -90,7 +90,10 @@ Measured from the API after step 4 (`GET /api/taos-agent/config`): `model: null`
    models on your taOS host over the network. A cloud key chosen in step 7 is assigned to taOS
    Agent only; giving the personal assistant a different model (a cloud key, a cluster model, or
    the offline model) is done per agent in Settings. If no host model is reachable, the first chat
-   shows the same message and three ways forward as step 7.
+   shows the same message and ways forward as step 7, with one addition: a cloud key or the offline
+   model only helps this chat once it is assigned to the personal assistant, so the message offers
+   that assignment in the same step ("Use it for <assistant name>") instead of leaving the person to
+   find it in Settings.
 
 Jay's ruling on the agent order (2026-10-31): the tailored first agent is a SEPARATE personal
 assistant, created before taOS Agent ("maybe they should create their personal assistant first").
