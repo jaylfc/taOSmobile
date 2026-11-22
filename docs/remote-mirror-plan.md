@@ -67,6 +67,15 @@ these, checked before any video is sent or any control message is read:
 The identity alone is not enough: `whois` names the Mac, not the process on it, so any program or
 web page on that Mac would pass it. The token is what proves it is the paired app.
 
+**One identity and one engine (decided 2026-11-22):** the pairing token above is how this plan was
+first written. When stage 2 is built, the Mac app is instead an enrolled device on the person's
+roster (the device key and endorsement in the device design,
+`native/specs/devices-presence-and-mirroring-20261122.md` in the team notes), so there is one device
+identity across taOS, not a second token scheme; and the video, input and clipboard path is the same
+stream engine as taOS desktop streaming, presented from the phone's side. The admission rules above
+keep their meaning with the roster key in place of the token: bound to its device, revocable, and
+never enough on its own without the Tailscale identity.
+
 **Origin check, defence in depth (stage 2):** the handshake is also refused unless its `Origin`
 header is present and exactly equals an allowed origin, listed in the protocol doc: `taos-mirror://app`
 (the Mac app sets it explicitly) and nothing else. This only stops browser pages, which cannot forge
