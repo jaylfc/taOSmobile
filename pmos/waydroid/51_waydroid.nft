@@ -1,0 +1,19 @@
+#!/usr/sbin/nft -f
+# Let the Waydroid container's bridge (waydroid0) through the handset firewall.
+#
+# /etc/nftables.nft sets policy drop on input and forward. waydroid-net.sh
+# adds its own `inet lxc` table with accept rules for the bridge, but under
+# nftables every base chain on a hook is evaluated and a drop in any of them
+# wins, so without these lines dnsmasq never sees the container's DHCP/DNS
+# (input) and Android's traffic never leaves (forward). Same shape as
+# 51_docker.nft and 51_usb_inet.nft beside it. The masquerade itself is
+# waydroid-net.sh's `ip lxc` nat table; nothing to add here.
+table inet filter {
+	chain input {
+		iifname "waydroid0" accept comment "Allow incoming network traffic from Waydroid"
+	}
+	chain forward {
+		iifname "waydroid0" accept comment "Allow outgoing network traffic from Waydroid"
+		oifname "waydroid0" ct state {established, related} counter accept comment "accept replies to Waydroid"
+	}
+}
