@@ -128,6 +128,9 @@ The plan for pairing the taOSusb board (a Pi Zero 2W agent) over Bluetooth into
 the Cluster app, with Bluetooth kept as its fallback link, is
 `docs/taosusb-pairing-plan.md`.
 
+What was found about running iOS as an app through an emulator (parked 2026-10-25) is in
+`docs/ios-emulation-findings.md`.
+
 The plan for dual booting taOS and Omarchy Mobile, one OS per A/B boot slot
 sharing userdata, is `docs/dual-boot-plan.md`.
 
