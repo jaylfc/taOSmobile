@@ -58,8 +58,11 @@ these, checked before any video is sent or any control message is read:
 - **Tailscale identity:** Tailscale's local API (`whois`) says the peer is one of Jay's own devices.
 - **A per-device pairing secret (stage 2 requirement):** the Mac app is paired with the phone once,
   on the phone's screen, and receives a random token that it keeps in the macOS keychain and sends on
-  every connect. The phone stores only a hash of each token, with the device it was issued to, and
-  can revoke one. A connection without a valid token is refused.
+  every connect. The phone stores only a hash of each token, with the Tailscale node it was issued
+  to (its stable node id from `whois`), and can revoke one. A connection without a valid token is
+  refused, and so is a valid token presented from any node other than the one it was issued to:
+  the token is bound to its device, so a token copied to another of Jay's devices does not work
+  there, and revoking one device's token never depends on which device presents it.
 
 The identity alone is not enough: `whois` names the Mac, not the process on it, so any program or
 web page on that Mac would pass it. The token is what proves it is the paired app.
@@ -69,8 +72,8 @@ header is present and exactly equals an allowed origin, listed in the protocol d
 (the Mac app sets it explicitly) and nothing else. This only stops browser pages, which cannot forge
 `Origin` (cross-site WebSocket use from a page open on the Mac); any native process can set any
 `Origin`, so it is NOT an authentication control. Stage 2 tests: a browser-origin handshake (refused),
-the paired app (connects), the app with a revoked or missing token (refused), and another device on
-the tailnet (refused).
+the paired app (connects), the app with a revoked or missing token (refused), another device on
+the tailnet (refused), and a valid token presented from another of Jay's own devices (refused).
 
 **Mac app.** SwiftUI, a window shaped like the handset (aspect 1080:2400, corner radius matching the
 panel). It decodes the stream with VideoToolbox, sends clicks and drags as touches, the trackpad scroll
