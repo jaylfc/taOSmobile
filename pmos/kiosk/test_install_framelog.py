@@ -15,7 +15,7 @@ SCRIPT = HERE / "install-framelog.sh"
 CONTINUITY = HERE / "install-kiosk-continuity.sh"
 
 
-def rig(tmp_path, docker_body):
+def rig(tmp_path, docker_body, ldd_body='echo "\tlibc.so => /lib/libc.so"\n'):
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     (bindir / "id").write_text('#!/bin/sh\n[ "${1:-}" = -u ] && echo 0\n')
@@ -24,7 +24,10 @@ def rig(tmp_path, docker_body):
     for f in bindir.iterdir():
         f.chmod(0o755)
     # Only the tools the script needs, so a host docker can never leak in.
-    for tool in ("sh", "dirname", "mktemp", "rm", "cp", "cmp", "install", "mkdir", "chmod", "cat"):
+    if ldd_body is not None:
+        (bindir / "ldd").write_text("#!/bin/sh\n" + ldd_body)
+        (bindir / "ldd").chmod(0o755)
+    for tool in ("sh", "dirname", "mktemp", "rm", "cp", "cmp", "install", "mkdir", "chmod", "cat", "grep"):
         real = shutil.which(tool, path="/usr/bin:/bin")
         if real and not (bindir / tool).exists():
             (bindir / tool).symlink_to(real)
@@ -98,3 +101,21 @@ def test_the_script_is_executable_because_the_installer_calls_it_directly():
 def test_the_kiosk_install_carries_on_when_the_build_fails():
     text = CONTINUITY.read_text()
     assert 'if "$HERE/install-framelog.sh"; then' in text
+
+
+def test_a_binary_with_missing_libraries_never_replaces_a_working_one(tmp_path):
+    env, dest = rig(tmp_path, BUILDS, ldd_body='echo "\tlibwayland-client.so.0 => not found"\n')
+    dest.write_text("old\n")
+    r = run(env)
+    assert r.returncode == 1
+    assert "libraries" in r.stderr and "not found" in r.stderr
+    assert dest.read_text() == "old\n"
+
+
+def test_a_binary_that_does_not_run_never_replaces_a_working_one(tmp_path):
+    broken = BUILDS.replace("echo framelog", "exit 9; echo framelog")
+    env, dest = rig(tmp_path, broken)
+    dest.write_text("old\n")
+    r = run(env)
+    assert r.returncode == 1 and "does not run" in r.stderr
+    assert dest.read_text() == "old\n"

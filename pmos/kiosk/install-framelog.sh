@@ -49,6 +49,19 @@ fi
 
 [ -x "$STAGE/taos-framelog" ] || { echo "FAIL: the container produced no taos-framelog binary"; exit 1; }
 
+# Built in alpine:edge, run on the host: a library the host lacks would make the
+# new binary unrunnable, and it must never replace a working one. Same check as
+# build-on-phone.sh (ldd), plus actually running it.
+if ! command -v ldd >/dev/null 2>&1; then
+    echo "FAIL: ldd is not available to check the new binary" >&2; exit 1
+fi
+if ldd "$STAGE/taos-framelog" 2>&1 | grep -q "not found"; then
+    echo "FAIL: the new taos-framelog needs libraries this host does not have:" >&2
+    ldd "$STAGE/taos-framelog" 2>&1 | grep "not found" >&2
+    exit 1
+fi
+"$STAGE/taos-framelog" --help >/dev/null 2>&1 || { echo "FAIL: the new taos-framelog does not run here" >&2; exit 1; }
+
 # Idempotency: only replace the installed binary when the new one changed, so a
 # re-run that rebuilt nothing is a no-op on the device.
 if [ -x "$DEST" ] && cmp -s "$STAGE/taos-framelog" "$DEST"; then
