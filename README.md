@@ -137,6 +137,9 @@ What was found about running iOS as an app through an emulator (parked 2026-10-2
 The plan for dual booting taOS and Omarchy Mobile, one OS per A/B boot slot
 sharing userdata, is `docs/dual-boot-plan.md`.
 
+How the phone tells the controller its screen and power state for presence beats
+(two files under the runtime dir) is `docs/presence-source.md`.
+
 ## Licence
 
 taOSmobile is licensed under the GNU Affero General Public License v3.0 or later

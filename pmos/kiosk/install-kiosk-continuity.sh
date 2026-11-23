@@ -86,6 +86,11 @@ for helper in taos-kiosk-idle taos-kiosk-power taos-kiosk-screen \
     echo "installed /usr/local/bin/$helper"
 done
 
+# Sourced by taos-kiosk-screen and taos-kiosk-charger from next to them; not
+# executable, not exec'd by the config.
+install -m 644 "$HERE/bin/taos-presence-lib.sh" /usr/local/bin/taos-presence-lib.sh
+echo "installed /usr/local/bin/taos-presence-lib.sh"
+
 # Every path the config execs must now exist and be executable. The loop above
 # is not the check: it installs what THIS script knows about, while the config
 # is what actually gets run, so a helper added to the config and forgotten here

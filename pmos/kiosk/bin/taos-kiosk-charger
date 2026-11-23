@@ -43,6 +43,17 @@ echo "$$" > "$PIDFILE"
 # Overridable only so the edge logic can be tested against a fake tree.
 SUPPLIES="${TAOS_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 
+# Publishes the power state for the controller's presence beats.
+_here="$(dirname "$0")"
+if [ -r "$_here/taos-presence-lib.sh" ]; then
+    . "$_here/taos-presence-lib.sh"
+else
+    presence_write() { :; }
+fi
+
+# Overridable only so the edge logic can be tested without the sway session.
+CHARGE_PLAY="${TAOS_CHARGE_PLAY:-/usr/local/bin/taos-kiosk-charge-play}"
+
 plugged() {
     for d in "$SUPPLIES"/*; do
         [ -r "$d/online" ] || continue
@@ -54,14 +65,21 @@ plugged() {
 
 was=0
 plugged && was=1
+# The baseline is published too, but never animates.
+presence_write power "$was"
 
 while :; do
     now=0
     plugged && now=1
+    # Published on EVERY poll, before the animation so a plug is reported at
+    # once. presence_write skips an unchanged value (one tmpfs read), so this
+    # costs nothing, and a write that failed on the edge is repaired on the
+    # next poll instead of leaving the file stale until the next plug.
+    presence_write power "$now"
     if [ "$was" = 0 ] && [ "$now" = 1 ]; then
         # The whole show -- tell the page, wake, go dark again after -- is
         # its own script so the demo board can play it too.
-        /usr/local/bin/taos-kiosk-charge-play
+        "$CHARGE_PLAY"
     fi
     was="$now"
     sleep 1
