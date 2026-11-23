@@ -225,3 +225,29 @@ def test_a_blocked_presence_dir_never_stops_the_charger(tmp_path):
             time.sleep(0.02)
     finally:
         c.stop()
+
+
+def test_a_failed_power_on_is_not_published_as_on(tmp_path):
+    # swaymsg fails only the power-on itself; everything else succeeds.
+    env = stub_env(tmp_path, 'case "$*" in *"power on"*) exit 1 ;; esac\nexit 0')
+    r = subprocess.run(["sh", str(SCREEN), "on"], env=env, capture_output=True, text=True, timeout=20)
+    assert presence(tmp_path, "screen") is None, r.stderr
+    # Control: the same wake with a working power-on publishes "on".
+    env = stub_env(tmp_path, "exit 0")
+    subprocess.run(["sh", str(SCREEN), "on"], env=env, capture_output=True, text=True, timeout=20)
+    assert presence(tmp_path, "screen") == "on\n"
+
+
+def test_a_failed_edge_write_is_repaired_on_the_next_poll(tmp_path):
+    c = Charger(tmp_path, "0")
+    c.start()
+    try:
+        c.wait_for("0\n")
+        # The plug edge's write is lost (the file is reset behind the charger's
+        # back, as a failed publication would leave it) while power stays on.
+        c.set_usb("1")
+        c.wait_for("1\n")
+        (tmp_path / "taos-presence" / "power").write_text("0\n")
+        c.wait_for("1\n")
+    finally:
+        c.stop()

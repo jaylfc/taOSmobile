@@ -233,7 +233,8 @@ on)
     # The pid makes every wake's stamp different whatever precision `date` has
     # here: two wakes in one second must not look like one.
     echo "$$.$(date +%s%N 2>/dev/null || date +%s)" > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
-    swaymsg "output * power on" >/dev/null 2>&1 || true
+    _on_ok=0
+    swaymsg "output * power on" >/dev/null 2>&1 || _on_ok=1
     touch_events enabled
     page on
     # RE-ARM THE IDLE WATCHER. This lived in taos-kiosk-power until the power-on
@@ -256,7 +257,9 @@ on)
     # taos-kiosk-idle kills the previous instance before starting, so this
     # cannot stack watchers however often the screen is woken.
     swaymsg exec -- /usr/local/bin/taos-kiosk-idle >/dev/null 2>&1 || true
-    presence_write screen on
+    # Only a panel that really powered on is published as on; a failed power-on
+    # leaves the file as it was (the next sync or off/on corrects it).
+    [ "$_on_ok" = 0 ] && presence_write screen on
     ;;
 sync)
     # Session start: publish what the panel is NOW and change nothing else, so
