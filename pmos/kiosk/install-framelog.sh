@@ -15,7 +15,7 @@ set -eu
 
 HERE="$(dirname "$0")"
 SRC_DIR="$HERE/../framelog"
-DEST=/usr/local/bin/taos-framelog
+DEST="${TAOS_FRAMELOG_DEST:-/usr/local/bin/taos-framelog}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
