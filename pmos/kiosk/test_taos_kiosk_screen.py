@@ -101,6 +101,23 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         fl.write_text("#!/bin/sh\n" + body)
         os.chmod(fl, 0o755)
         env["TAOS_FRAMELOG"] = str(fl)
+        # For the "broken" framelog, provide a fake clock so the instant failure
+        # always measures as < cap, even on a loaded runner. Other framelogs use
+        # real time (they run long enough that wall-clock is fine).
+        if framelog == "broken":
+            clock_script = bindir / "taos-framelog-clock"
+            clock_counter = tmp_path / "framelog_clock_counter"
+            clock_counter.write_text("0")
+            clock_base = 1000000000000000000  # fixed base nanoseconds
+            clock_script.write_text(
+                '#!/bin/sh\n'
+                'n=$(cat "%s" 2>/dev/null || echo 0)\n'
+                'n=$((n + 1)); echo $n > "%s"\n'
+                'if [ $n -eq 1 ]; then echo %d; else echo %d; fi\n'
+                % (clock_counter, clock_counter, clock_base, clock_base + 1000000)
+            )
+            os.chmod(clock_script, 0o755)
+            env["TAOS_FRAMELOG_CLOCK"] = str(clock_script)
     if query_fails:
         (bindir / "swaymsg").write_text(
             '#!/bin/sh\ncase "$*" in *get_outputs*) exit 1 ;; esac\necho "swaymsg $*" >> "%s"\n' % log)
