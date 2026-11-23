@@ -23,7 +23,8 @@ ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 
 def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
-        query_fails=False, wake_at_s=None, wake_in_gap=False, bright_looks=None, framelog=None):
+        query_fails=False, wake_at_s=None, wake_in_gap=False, bright_looks=None, framelog=None,
+        stub_date=False):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
     Returns (ordered log lines, stderr, seconds taken)."""
     bindir = tmp_path / "bin"
@@ -33,6 +34,35 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     start = tmp_path / "start"
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
+
+    # Fixed base time for deterministic elapsed-time measurements when stub_date is enabled.
+    # 1_700_000_000_000_000_000 ns = 2023-11-14 16:13:20 UTC
+    BASE_TIME_NS = 1_700_000_000_000_000_000
+    if stub_date:
+        start.write_text(str(BASE_TIME_NS))
+        date_counter = tmp_path / "date_counter"
+        date_counter.write_text("0")
+        date_stub = (
+            '#!/bin/sh\n'
+            'case "$1" in\n'
+            '  +%s%N)\n'
+            '    n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
+            '    n=$((n + 1))\n'
+            '    echo $n > "{counter}"\n'
+            '    echo $(({base} + n * 1000))\n'
+            '    ;;\n'
+            '  +%s)\n'
+            '    echo $(({base} / 1000000000))\n'
+            '    ;;\n'
+            '  *)\n'
+            '    exec /bin/date "$@"\n'
+            '    ;;\n'
+            'esac\n'
+        ).format(counter=date_counter, base=BASE_TIME_NS)
+        (bindir / "date").write_text(date_stub)
+        os.chmod(bindir / "date", 0o755)
+    else:
+        start.write_text(str(time.time_ns()))
     if grim_ok and bright_looks is not None:
         # Bright for a fixed NUMBER of looks, then black: independent of how
         # long the script takes to start on a slow machine.
@@ -344,7 +374,7 @@ def test_a_wake_during_the_frame_logger_wait_is_not_undone(tmp_path):
 def test_a_logger_that_fails_at_once_is_not_taken_for_the_cap_even_with_a_small_cap(tmp_path):
     """With a 100 ms cap a slack of 100 ms read an instant failure as 'ran out
     of time' and powered off a lit screen without looking at it."""
-    lines, err, took = run(tmp_path, bright_for_s=0.05, cap_ms=100, framelog="broken")
+    lines, err, took = run(tmp_path, 0, cap_ms=100, framelog="broken", bright_looks=2, stub_date=True)
     i = power_off_index(lines)
     assert "framelog broken" in lines
     assert any(l.startswith("grim") for l in lines[:i]), lines
