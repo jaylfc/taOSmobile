@@ -65,6 +65,9 @@ unscanned_paths = [
   # in tinyagentos (routes/auth.py, hub/relay.py) or in the taosusb board repo,
   # not here.
   "docs/taosusb-pairing-plan.md",
+  # The remote-mirror plan names files that stages 1-3 will create (taos-mirror,
+  # taos-mirrord, the Mac app) and taos-touch, which is still on PR #5.
+  "docs/remote-mirror-plan.md",
   # The dual-boot plan names upstream Omarchy Mobile and pmaports paths
   # (initramfs/init, tools/install-phone, init_functions_2nd.sh), none in this repo.
   "docs/dual-boot-plan.md",
