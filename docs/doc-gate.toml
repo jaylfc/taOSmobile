@@ -34,6 +34,7 @@ referenced_paths_scan = [
   "docs/pmos-audio-bringup.md",
   "docs/pmos-checkpoint-images.md",
   "docs/ios-emulation-findings.md",
+  "docs/presence-source.md",
   "droidian/taos-layer/README.md",
   "droidian/adaptation/README.md",
   "pmos/gunyah/README.md",

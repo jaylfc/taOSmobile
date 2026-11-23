@@ -28,6 +28,15 @@
 # that disables touch without leaving that key able to re-enable it.
 set -eu
 
+# Publishes the screen state for the controller's presence beats. The lib is
+# looked up next to this script; without it presence is simply not published.
+_here="$(dirname "$0")"
+if [ -r "$_here/taos-presence-lib.sh" ]; then
+    . "$_here/taos-presence-lib.sh"
+else
+    presence_write() { :; }
+fi
+
 # type:touch rather than the identifier 0:0:fts_ts: a replacement digitiser or a
 # kernel that renames the device would silently stop matching, and the failure
 # mode of a non-matching selector here is the pocket-touch bug coming back with
@@ -214,6 +223,8 @@ off)
         touch_events enabled
         exit 0
     fi
+    # The panel is down and stays down. Not written when the power-off failed.
+    [ "${_rc:-0}" -ne 0 ] || presence_write screen off
     exit "${_rc:-0}"
     ;;
 on)
@@ -245,9 +256,20 @@ on)
     # taos-kiosk-idle kills the previous instance before starting, so this
     # cannot stack watchers however often the screen is woken.
     swaymsg exec -- /usr/local/bin/taos-kiosk-idle >/dev/null 2>&1 || true
+    presence_write screen on
+    ;;
+sync)
+    # Session start: publish what the panel is NOW and change nothing else, so
+    # the controller does not wait for the first on/off after a reboot. An
+    # answer that cannot be read writes nothing (unknown stays unknown).
+    _o="$(swaymsg -t get_outputs -r 2>/dev/null)" || exit 0
+    case "$_o" in
+        *'"power": true'*|*'"power":true'*|*'"dpms": true'*|*'"dpms":true'*) presence_write screen on ;;
+        *'"power": false'*|*'"power":false'*|*'"dpms": false'*|*'"dpms":false'*) presence_write screen off ;;
+    esac
     ;;
 *)
-    echo "usage: taos-kiosk-screen off|on" >&2
+    echo "usage: taos-kiosk-screen off|on|sync" >&2
     exit 2
     ;;
 esac
