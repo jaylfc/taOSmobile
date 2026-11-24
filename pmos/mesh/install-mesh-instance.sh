@@ -60,7 +60,11 @@ echo "personal tailnet before:"; cat "$TMP"
 OUT="$(su -s /bin/sh taos -c "\"$TAOS_PYTHON\" -m $MOD allocate $PERSON")" \
     || die "allocate $PERSON failed"
 SLOT="$(printf '%s' "$OUT" | grep -o '"slot": *[0-9]*' | head -n1 | sed 's/[^0-9]//g')"
-[ "$SLOT" = 0 ] || die "allocate reported slot '${SLOT:-none}', the phone's one person must be slot 0"
+if [ "$SLOT" != 0 ]; then
+    # Do not leave a stray allocation behind on a refused install.
+    su -s /bin/sh taos -c "\"$TAOS_PYTHON\" -m $MOD release $PERSON" >/dev/null 2>&1 || true
+    die "allocate reported slot '${SLOT:-none}', the phone's one person must be slot 0 (released)"
+fi
 echo "PASS: $PERSON holds slot 0"
 
 if [ "$START" = 1 ]; then

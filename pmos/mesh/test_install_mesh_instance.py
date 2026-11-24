@@ -132,6 +132,8 @@ def test_slot_other_than_zero_fails(tmp_path):
     assert r.returncode != 0
     assert "slot" in (r.stdout + r.stderr)
     assert not any("enable" in l for l in calls(log))
+    # The refused allocation is released, not left behind.
+    assert any("release alice" in l for l in calls(log)), calls(log)
 
 
 def test_inert_by_default(tmp_path):
