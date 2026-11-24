@@ -35,31 +35,24 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
 
-    # Fixed base time for deterministic elapsed-time measurements when stub_date is enabled.
-    # 1_700_000_000_000_000_000 ns = 2023-11-14 16:13:20 UTC
+    # Controlled clock for deterministic elapsed-time measurements. The script
+    # and the logger under test read time via `date`, so a stub on PATH makes
+    # their elapsed-time decisions exact. The clock advances only when the stub
+    # `sleep` is called; the test drives timing by choosing the scenario, not
+    # by waiting on wall-clock time.
     BASE_TIME_NS = 1_700_000_000_000_000_000
+    fake_time_ns = tmp_path / "fake_time_ns"
     if stub_date:
+        fake_time_ns.write_text(str(BASE_TIME_NS))
         start.write_text(str(BASE_TIME_NS))
-        date_counter = tmp_path / "date_counter"
-        date_counter.write_text("0")
-        date_stub = (
+        real_date = subprocess.run(["sh", "-c", "command -v date"], capture_output=True, text=True).stdout.strip()
+        (bindir / "date").write_text(
             '#!/bin/sh\n'
             'case "$1" in\n'
-            '  +%s%N)\n'
-            '    n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
-            '    n=$((n + 1))\n'
-            '    echo $n > "{counter}"\n'
-            '    echo $(({base} + n * 1000))\n'
-            '    ;;\n'
-            '  +%s)\n'
-            '    echo $(({base} / 1000000000))\n'
-            '    ;;\n'
-            '  *)\n'
-            '    exec /bin/date "$@"\n'
-            '    ;;\n'
-            'esac\n'
-        ).format(counter=date_counter, base=BASE_TIME_NS)
-        (bindir / "date").write_text(date_stub)
+            '  +%%s%%N) cat "%s" ;;\n'
+            '  +%%s) awk \'{printf "%%d", $1/1000000000}\' "%s" ;;\n'
+            '  *) exec %s "$@" ;;\n'
+            'esac\n' % (fake_time_ns, fake_time_ns, real_date))
         os.chmod(bindir / "date", 0o755)
     else:
         start.write_text(str(time.time_ns()))
@@ -101,9 +94,23 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         # What grim really does on a dark output: never returns.
         (bindir / "grim").write_text('#!/bin/sh\necho "grim hung" >> "%s"\nsleep 60\n' % log)
     (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
-    # A sleep that is logged and still sleeps, so the order of looks and waits can be read.
+    # A sleep that is logged and still sleeps, so the order of looks and waits
+    # can be read. With stub_date it also advances the controlled clock, so the
+    # script's elapsed-time checks are deterministic without waiting on the wall.
     real_sleep = subprocess.run(["sh", "-c", "command -v sleep"], capture_output=True, text=True).stdout.strip()
-    (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
+    if stub_date:
+        (bindir / "sleep").write_text(
+            '#!/bin/sh\n'
+            'echo "sleep $*" >> "%s"\n'
+            'ns=$(awk -v s="$1" \'BEGIN {printf "%%d", s * 1000000000}\')\n'
+            'lock="%s.lock"\n'
+            'exec 9>"$lock"\n'
+            'flock 9\n'
+            'cur=$(cat "%s")\n'
+            'echo $((cur + ns)) > "%s"\n'
+            'flock -u 9\n' % (log, fake_time_ns, fake_time_ns, fake_time_ns))
+    else:
+        (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
     for n in ("grim", "swaymsg", "curl", "sleep"):
         os.chmod(bindir / n, 0o755)
     env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
@@ -160,8 +167,11 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         assert w.returncode == 0, w.stderr
         _, err = p.communicate(timeout=15)
         rc = p.returncode
-    took = time.time() - t0
     assert rc == 0, err
+    if stub_date:
+        took = (int(fake_time_ns.read_text().strip()) - BASE_TIME_NS) / 1e9
+    else:
+        took = time.time() - t0
     return log.read_text().splitlines(), err, took
 
 
