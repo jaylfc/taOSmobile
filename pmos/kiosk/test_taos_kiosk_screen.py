@@ -139,7 +139,10 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         env["TAOS_BLACK_WAIT_MS"] = str(cap_ms)
     if wake_in_gap:
         (tmp_path / "wake_in_gap").write_text("")
-    start.write_text(str(time.time_ns()))
+    # With stub_date the stub clock owns the start time (set above); writing the
+    # wall clock here would make the stubs compute a negative elapsed time.
+    if not stub_date:
+        start.write_text(str(time.time_ns()))
     t0 = time.time()
     if wake_at_s is None:
         r = subprocess.run(["sh", str(SCRIPT), "off"], env=env, capture_output=True, text=True, timeout=15)
