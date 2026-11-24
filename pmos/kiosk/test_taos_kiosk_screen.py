@@ -33,6 +33,29 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     start = tmp_path / "start"
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
+
+    # Real commands for stubs that need to delegate.
+    real_date = subprocess.run(["sh", "-c", "command -v date"], capture_output=True, text=True).stdout.strip()
+    real_sleep = subprocess.run(["sh", "-c", "command -v sleep"], capture_output=True, text=True).stdout.strip()
+
+    # Fake time infrastructure: all stubs use a controlled clock so tests are
+    # deterministic and fast. The clock advances only when the stub `sleep`
+    # is called, by the requested sleep duration.
+    FAKE_TIME_BASE = 1000000000000000000
+    fake_time_ns = tmp_path / "fake_time_ns"
+    fake_time_ns.write_text(str(FAKE_TIME_BASE))
+    start.write_text(str(FAKE_TIME_BASE))
+
+    # date stub: returns fake time for +%s%N and +%s, delegates otherwise.
+    (bindir / "date").write_text(
+        '#!/bin/sh\n'
+        'case "$1" in\n'
+        '  +%%s%%N) cat "%s" ;;\n'
+        '  +%%s) awk \'{printf "%%d", $1/1e9}\' "%s" ;;\n'
+        '  *) exec %s "$@" ;;\n'
+        'esac\n' % (fake_time_ns, fake_time_ns, real_date))
+    os.chmod(bindir / "date", 0o755)
+
     if grim_ok and bright_looks is not None:
         # Bright for a fixed NUMBER of looks, then black: independent of how
         # long the script takes to start on a slow machine.
@@ -68,13 +91,34 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         'esac\n'
         'echo "swaymsg $*" >> "%s"\n' % (power, power, tmp_path, tmp_path, log))
     if grim_hangs:
-        # What grim really does on a dark output: never returns.
-        (bindir / "grim").write_text('#!/bin/sh\necho "grim hung" >> "%s"\nsleep 60\n' % log)
+        # What grim really does on a dark output: never returns. Advance fake
+        # time by 1s (the timeout duration) and exit as if killed by timeout,
+        # so the script's `timeout 1 grim` sees immediate failure and the cap
+        # check (500ms fake time) is exceeded on the first iteration.
+        (bindir / "grim").write_text(
+            '#!/bin/sh\n'
+            'echo "grim hung" >> "%s"\n'
+            'cur=$(cat "%s")\n'
+            'echo $((cur + 1000000000)) > "%s"\n'
+            'exit 143\n' % (log, fake_time_ns, fake_time_ns))
     (bindir / "curl").write_text('#!/bin/sh\necho "curl $*" >> "%s"\n' % log)
-    # A sleep that is logged and still sleeps, so the order of looks and waits can be read.
-    real_sleep = subprocess.run(["sh", "-c", "command -v sleep"], capture_output=True, text=True).stdout.strip()
-    (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
-    for n in ("grim", "swaymsg", "curl", "sleep"):
+    # A sleep that is logged and advances fake time, so the order of looks and
+    # waits can be read and the clock is controlled. Use flock on a lock file
+    # to serialize access to fake_time_ns since multiple processes (main script,
+    # framelog) may call sleep concurrently.
+    (bindir / "sleep").write_text(
+        '#!/bin/sh\n'
+        'echo "sleep $*" >> "%s"\n'
+        'ns=$(awk -v s="$1" \'BEGIN {printf "%%d", s * 1e9}\')\n'
+        'lock="%s.lock"\n'
+        'exec 9>"$lock"\n'
+        'flock 9\n'
+        'cur=$(cat "%s")\n'
+        'echo $((cur + ns)) > "%s"\n'
+        'flock -u 9\n'
+        '# Do not actually sleep; fake time advances instantly.\n'
+        % (log, fake_time_ns, fake_time_ns, fake_time_ns))
+    for n in ("grim", "swaymsg", "curl", "sleep", "date"):
         os.chmod(bindir / n, 0o755)
     env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
     # No frame logger unless a test asks for one: the grim path stays what the
@@ -109,7 +153,6 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         env["TAOS_BLACK_WAIT_MS"] = str(cap_ms)
     if wake_in_gap:
         (tmp_path / "wake_in_gap").write_text("")
-    start.write_text(str(time.time_ns()))
     t0 = time.time()
     if wake_at_s is None:
         r = subprocess.run(["sh", str(SCRIPT), "off"], env=env, capture_output=True, text=True, timeout=15)
@@ -127,8 +170,9 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
         assert w.returncode == 0, w.stderr
         _, err = p.communicate(timeout=15)
         rc = p.returncode
-    took = time.time() - t0
     assert rc == 0, err
+    fake_elapsed_ns = int(fake_time_ns.read_text().strip()) - FAKE_TIME_BASE
+    took = fake_elapsed_ns / 1e9
     return log.read_text().splitlines(), err, took
 
 
