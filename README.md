@@ -21,7 +21,8 @@ about 2026-10-05, so read it as last known, not live:
   text-to-speech (`pmos/voice/`, attributions in `pmos/voice/NOTICE-STT.md` and
   `pmos/voice/NOTICE-TTS.md`).
 - Cameras (`pmos/camera/`), audio (`docs/pmos-audio-bringup.md`), and a BLE
-  check for pairing the taOS Orb (`pmos/ble/`).
+  check for pairing the taOS Orb (`pmos/ble/`), and the per-person taOS mesh
+  instance installer (`pmos/mesh/`, not yet run on the handset; see `pmos/mesh/README.md`).
 - GPS (added 2026-10-09, not yet installed on the handset): `pmos/kiosk/bin/taos-locationd`
   keeps the modem's GNSS on (it works with no SIM) and publishes the latest fix to
   `/run/taos-location/location.json` for the controller's `GET /api/system/location`

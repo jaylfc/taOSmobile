@@ -30,6 +30,7 @@ referenced_paths_scan = [
   "docs/droidian-kiosk-scope.md",
   "docs/custom-image-scope.md",
   "docs/device-notes.md",
+  "pmos/mesh/README.md",
   "docs/first-run-controller-choice.md",
   "docs/pmos-audio-bringup.md",
   "docs/pmos-checkpoint-images.md",
