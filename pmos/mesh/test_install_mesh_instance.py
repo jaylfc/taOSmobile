@@ -22,7 +22,7 @@ STATUS_CHANGED = json.dumps({"BackendState": "Running",
                              "Self": {"TailscaleIPs": ["100.64.9.9"]}})
 
 
-def rig(tmp_path, uid=0, slot=0, status_seq=None, route_seq=None, restart_heals=True):
+def rig(tmp_path, uid=0, slot=0, status_seq=None, route_seq=None, restart_heals=True, sock=True):
     """status_seq / route_seq: outputs for successive calls (last one repeats).
     After a `systemctl restart tailscaled`, the first answer is used again when
     restart_heals is true (the restart restores the original state)."""
@@ -47,7 +47,7 @@ def rig(tmp_path, uid=0, slot=0, status_seq=None, route_seq=None, restart_heals=
     w("id", f'[ "${{1:-}}" = -u ] && echo {uid}\n')
     w("su", f'echo "su $*" >> {log}\n'
             'while [ "$#" -gt 0 ]; do [ "$1" = -c ] && { shift; exec sh -c "$1"; }; shift; done\n')
-    sock_make = f'touch {run_root}/alice.sock' if True else ''
+    sock_make = f'touch {run_root}/alice.sock' if sock else ':'
     w("systemctl", f'echo "systemctl $*" >> {log}\n'
                    f'case "$*" in "enable --now taos-mesh@"*) {sock_make};; '
                    f'"restart tailscaled") echo 1 > {state}/restarted;; esac\nexit 0\n')
@@ -55,7 +55,8 @@ def rig(tmp_path, uid=0, slot=0, status_seq=None, route_seq=None, restart_heals=
     pick = ('n=$(cat {s}/{k}.n 2>/dev/null || echo 0); echo $((n+1)) > {s}/{k}.n; '
             '[ "$(cat {s}/restarted)" = 1 ] && [ {h} = 1 ] && n=0; '
             '[ -f {s}/{k}.$n ] || n=$(ls {s}/{k}.[0-9] | wc -l | sed "s/ //g"; ); '
-            'f={s}/{k}.$n; [ -f "$f" ] || f=$(ls {s}/{k}.[0-9] | tail -n1); cat "$f"\n')
+            'f={s}/{k}.$n; [ -f "$f" ] || f=$(ls {s}/{k}.[0-9] | tail -n1); '
+            '[ "$(cat "$f")" = __FAIL__ ] && exit 1; cat "$f"\n')
     w("tailscale", f'echo "tailscale $*" >> {log}\n'
                    + pick.format(s=state, k="status", h=heal))
     w("ip", f'echo "ip $*" >> {log}\n' + pick.format(s=state, k="route", h=heal))
@@ -71,7 +72,8 @@ def rig(tmp_path, uid=0, slot=0, status_seq=None, route_seq=None, restart_heals=
         if real and not (bindir / tool).exists():
             (bindir / tool).symlink_to(real)
     env = dict(os.environ, PATH=str(bindir), TAOS_PYTHON=str(py),
-               TAOS_MESH_RUN_ROOT=str(run_root), TAOS_MESH_SETTLE_SECS="2")
+               TAOS_MESH_RUN_ROOT=str(run_root), TAOS_MESH_SETTLE_SECS="2",
+               TAOS_MESH_SOCKET_WAIT_SECS="1")
     return env, log
 
 
@@ -209,3 +211,37 @@ def test_script_never_names_kiosk_or_personal_config(tmp_path):
     for needle in ("sway-kiosk", "/etc/default/tailscaled", "tailscale up",
                    "tailscale login", "tailscale logout", "tailscale set"):
         assert needle not in body
+
+
+# --------------------------- unobservable state and failed starts (review)
+
+
+def test_an_unobservable_tailnet_is_never_reported_as_unchanged(tmp_path):
+    env, log = rig(tmp_path, status_seq=["__FAIL__"])
+    r = run(env, "alice")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS: personal tailnet" not in r.stdout
+    assert "NOT CHECKED" in r.stdout
+
+
+def test_a_failed_route_query_is_not_reported_as_unchanged(tmp_path):
+    env, log = rig(tmp_path, route_seq=["__FAIL__"])
+    r = run(env, "alice")
+    assert "PASS: personal route table 52" not in r.stdout
+    assert "NOT CHECKED" in r.stdout
+
+
+def test_observed_before_but_not_after_restarts_and_fails_if_still_unobservable(tmp_path):
+    env, log = rig(tmp_path, status_seq=[STATUS_OK, "__FAIL__"], restart_heals=False)
+    r = run(env, "alice")
+    assert "systemctl restart tailscaled" in calls(log)
+    assert r.returncode != 0 and "still differs" in r.stderr
+
+
+def test_a_failed_start_still_checks_and_restores_the_personal_tailnet(tmp_path):
+    # The instance changed the personal tailnet and its socket never appeared.
+    env, log = rig(tmp_path, status_seq=[STATUS_OK, STATUS_CHANGED], sock=False)
+    r = run(env, "alice", "--start")
+    assert r.returncode != 0 and "did not appear" in r.stderr
+    assert "systemctl restart tailscaled" in calls(log)
+    assert "PASS: personal tailnet BackendState and IPs unchanged (after restart)" in r.stdout

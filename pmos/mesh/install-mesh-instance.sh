@@ -16,7 +16,18 @@ SETTLE="${TAOS_MESH_SETTLE_SECS:-20}"
 SOCK_WAIT="${TAOS_MESH_SOCKET_WAIT_SECS:-20}"
 MOD=tinyagentos.taosnet.mesh_instances
 
-die() { echo "FAIL: $*" >&2; exit 1; }
+PROVISIONED=0
+VERIFYING=0
+# A failure after provisioning began still checks (and if needed restores) the
+# personal tailnet before exiting: a failed start must not leave it changed.
+die() {
+    echo "FAIL: $*" >&2
+    if [ "$PROVISIONED" = 1 ] && [ "$VERIFYING" = 0 ]; then
+        VERIFYING=1
+        verify_personal || true
+    fi
+    exit 1
+}
 
 PERSON="${1:-}"
 START=0
@@ -42,19 +53,57 @@ esac
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-# One line per fact the personal tailnet exposes: backend state, own IPs, table 52.
+# One line per fact the personal tailnet exposes: backend state, own IPs,
+# table 52. Returns 1 when the state cannot be OBSERVED (daemon not answering,
+# no BackendState, route query failed): "could not look" must never compare
+# equal to "looked and nothing changed".
 snapshot() {
-    st="$(tailscale status --json 2>/dev/null | tr -d ' \n' || true)"
+    st="$(tailscale status --json 2>/dev/null | tr -d ' \n')" || return 1
     state="$(printf '%s' "$st" | sed -n 's/.*"BackendState":"\([^"]*\)".*/\1/p' | head -n1)"
+    [ -n "$state" ] || return 1
     ips="$(printf '%s' "$st" | sed 's/.*"Self"://' \
         | grep -o '"TailscaleIPs":\[[^]]*\]' | head -n1 || true)"
-    printf 'backend=%s\nips=%s\n' "${state:-unavailable}" "${ips:-none}"
-    printf 'table52=%s\n' "$(ip route show table 52 2>/dev/null | tr '\n' ';' || true)"
+    rt="$(ip route show table 52 2>/dev/null)" || return 1
+    printf 'backend=%s\nips=%s\n' "$state" "${ips:-none}"
+    printf 'table52=%s\n' "$(printf '%s' "$rt" | tr '\n' ';')"
 }
 
-snapshot > "$TMP"
-echo "personal tailnet before:"; cat "$TMP"
+OBSERVED=0
+AFTER="$(mktemp)"
+trap 'rm -f "$TMP" "$AFTER"' EXIT
+if snapshot > "$TMP"; then
+    OBSERVED=1
+    echo "personal tailnet before:"; cat "$TMP"
+else
+    echo "NOT CHECKED: the personal tailnet could not be observed before install (tailscaled not answering on the default socket, or the route query failed); its state is not verified"
+fi
 
+verify_personal() {
+    [ "$OBSERVED" = 1 ] || { echo "NOT CHECKED: personal tailnet (not observable before install)"; return 0; }
+    if snapshot > "$AFTER" && cmp -s "$TMP" "$AFTER"; then
+        echo "PASS: personal tailnet BackendState and IPs unchanged"
+        echo "PASS: personal route table 52 unchanged"
+        return 0
+    fi
+    echo "personal tailnet changed or unobservable after install, restarting tailscaled:"
+    cat "$AFTER"
+    systemctl restart tailscaled || { echo "FAIL: restart tailscaled failed" >&2; return 1; }
+    i=0
+    while :; do
+        if snapshot > "$AFTER" && cmp -s "$TMP" "$AFTER"; then break; fi
+        i=$((i + 1))
+        if [ "$i" -gt "$SETTLE" ]; then
+            cat "$AFTER"
+            echo "FAIL: personal tailnet still differs after restart" >&2
+            return 1
+        fi
+        sleep 1
+    done
+    echo "PASS: personal tailnet BackendState and IPs unchanged (after restart)"
+    echo "PASS: personal route table 52 unchanged (after restart)"
+}
+
+PROVISIONED=1
 "$TAOS_PYTHON" -m "$MOD" install-template || die "install-template failed"
 
 OUT="$(su -s /bin/sh taos -c "\"$TAOS_PYTHON\" -m $MOD allocate $PERSON")" \
@@ -80,21 +129,4 @@ else
     echo "inert: not enabled or started (pass --start to run it)"
 fi
 
-AFTER="$(mktemp)"
-trap 'rm -f "$TMP" "$AFTER"' EXIT
-snapshot > "$AFTER"
-if ! cmp -s "$TMP" "$AFTER"; then
-    echo "personal tailnet changed after install, restarting tailscaled:"
-    cat "$AFTER"
-    systemctl restart tailscaled || die "restart tailscaled failed"
-    i=0
-    while :; do
-        snapshot > "$AFTER"
-        cmp -s "$TMP" "$AFTER" && break
-        i=$((i + 1))
-        [ "$i" -le "$SETTLE" ] || { cat "$AFTER"; die "personal tailnet still differs after restart"; }
-        sleep 1
-    done
-fi
-echo "PASS: personal tailnet BackendState and IPs unchanged"
-echo "PASS: personal route table 52 unchanged"
+verify_personal || exit 1
