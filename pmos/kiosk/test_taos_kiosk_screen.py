@@ -24,43 +24,32 @@ ONE_ROW = b"P6\n8 4\n255\n" + b"\x00" * 24 + b"\xff" * 24 + b"\x00" * 48
 
 def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=False, bright=BRIGHT,
         query_fails=False, wake_at_s=None, wake_in_gap=False, bright_looks=None, framelog=None,
-        stub_date=False):
+        clock_ns_values=None):
     """Stub grim shows a bright screen for `bright_for_s` seconds, then black.
-    Returns (ordered log lines, stderr, seconds taken)."""
+    Returns (ordered log lines, stderr, seconds taken).
+    If `clock_ns_values` is a list of ints, the script's elapsed-time clock will
+    return those values in sequence (nanoseconds since epoch)."""
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     log = tmp_path / "log"
     log.write_text("")
-    start = tmp_path / "start"
+start = tmp_path / "start"
     (tmp_path / "bright.ppm").write_bytes(bright)
     (tmp_path / "black.ppm").write_bytes(BLACK)
 
-    # Fixed base time for deterministic elapsed-time measurements when stub_date is enabled.
-    # 1_700_000_000_000_000_000 ns = 2023-11-14 16:13:20 UTC
-    BASE_TIME_NS = 1_700_000_000_000_000_000
-    if stub_date:
-        start.write_text(str(BASE_TIME_NS))
-        date_counter = tmp_path / "date_counter"
-        date_counter.write_text("0")
-        date_stub = (
-            '#!/bin/sh\n'
-            'case "$1" in\n'
-            '  +%s%N)\n'
-            '    n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
-            '    n=$((n + 1))\n'
-            '    echo $n > "{counter}"\n'
-            '    echo $(({base} + n * 1000))\n'
-            '    ;;\n'
-            '  +%s)\n'
-            '    echo $(({base} / 1000000000))\n'
-            '    ;;\n'
-            '  *)\n'
-            '    exec /bin/date "$@"\n'
-            '    ;;\n'
-            'esac\n'
-        ).format(counter=date_counter, base=BASE_TIME_NS)
-        (bindir / "date").write_text(date_stub)
-        os.chmod(bindir / "date", 0o755)
+    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
+
+# Install a deterministic clock for the script's now_ns() if requested.
+    if clock_ns_values is not None:
+        clock_counter = tmp_path / "clock_counter"
+        clock_counter.write_text("0")
+        clock_values = tmp_path / "clock_values"
+        clock_values.write_text("\n".join(str(v) for v in clock_ns_values) + "\n")
+        clock_stub = '#!/bin/sh\nn=$(cat "{counter}" 2>/dev/null || echo 0)\n n=$((n + 1))\n echo $n > "{counter}"\n sed -n "${n}p" "{values}"\n'.format(counter=clock_counter, values=clock_values)
+        clock_path = bindir / "taos-clock"
+        clock_path.write_text(clock_stub)
+        os.chmod(clock_path, 0o755)
+        env["TAOS_CLOCK_CMD"] = str(clock_path)
     else:
         start.write_text(str(time.time_ns()))
     if grim_ok and bright_looks is not None:
@@ -106,10 +95,6 @@ def run(tmp_path, bright_for_s, cap_ms=None, grim_ok=True, lit=True, grim_hangs=
     (bindir / "sleep").write_text('#!/bin/sh\necho "sleep $*" >> "%s"\nexec %s "$@"\n' % (log, real_sleep))
     for n in ("grim", "swaymsg", "curl", "sleep"):
         os.chmod(bindir / n, 0o755)
-    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ["PATH"]), XDG_RUNTIME_DIR=str(tmp_path))
-    # No frame logger unless a test asks for one: the grim path stays what the
-    # older tests measure, whatever is installed on the machine running them.
-    env["TAOS_FRAMELOG"] = str(tmp_path / "no-framelog")
     if framelog is not None:
         fl = bindir / "taos-framelog"
         if framelog == "ok":
