@@ -369,10 +369,11 @@ def test_a_wake_during_the_frame_logger_wait_is_not_undone(tmp_path):
 def test_a_logger_that_fails_at_once_is_not_taken_for_the_cap_even_with_a_small_cap(tmp_path):
     """With a 100 ms cap a slack of 100 ms read an instant failure as 'ran out
     of time' and powered off a lit screen without looking at it."""
-    # Clock returns two values: start and end, 1 ms apart (well under 100 ms cap).
+    # Clock returns enough values for all now_ns() calls: _t0, _f0, _el (framelog),
+    # then _el in the grim loop for each look (2 bright looks + 1 black look).
     BASE = 1_700_000_000_000_000_000
     lines, err, took = run(tmp_path, 0, cap_ms=100, framelog="broken", bright_looks=2,
-                           clock_ns_values=[BASE, BASE + 1_000_000])
+                           clock_ns_values=[BASE + i * 1_000_000 for i in range(10)])
     i = power_off_index(lines)
     assert "framelog broken" in lines
     assert any(l.startswith("grim") for l in lines[:i]), lines

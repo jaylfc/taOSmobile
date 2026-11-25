@@ -134,7 +134,7 @@ wait_black_framelog() {
     [ -x "$FRAMELOG" ] || return 1
     _r="$(printf '%s' "${TAOS_BLACK_PROBE:-268,0 4x1200}" | tr ' ' ',')"
     _d="$(awk -v c="$_cap" 'BEGIN { printf "%.3f", c / 1000 }')"
-    _f0="$(now_ns)"
+    _f0="$(now_ns 2>/dev/null)"
     "$FRAMELOG" --every-frame --until-black --duration "$_d" --first-timeout 400 \
         --region "$_r" >/dev/null 2>&1 &
     _fp=$!
@@ -147,7 +147,7 @@ wait_black_framelog() {
         sleep 0.02
     done
     _flrc=0; wait "$_fp" || _flrc=$?
-    _el=$(( ( $(now_ns) - _f0 ) / 1000000 ))
+    _el=$(( ( $(now_ns 2>/dev/null) - _f0 ) / 1000000 ))
     # (_flrc, not _rc: the off path ends with `exit "${_rc:-0}"`, and shell
     # variables are global.)
     case "$_flrc" in
