@@ -108,6 +108,16 @@ panel_state() {
 WAKE_STAMP="${XDG_RUNTIME_DIR:-/tmp}/taos-screen.wake"
 wake_stamp() { cat "$WAKE_STAMP" 2>/dev/null || echo none; }
 
+# Nanosecond clock for elapsed-time measurements. Tests can inject a
+# deterministic source via TAOS_CLOCK_CMD; production uses date(1).
+now_ns() {
+    if [ -n "${TAOS_CLOCK_CMD:-}" ]; then
+        "${TAOS_CLOCK_CMD}" 2>/dev/null || echo 0
+    else
+        date +%s%N 2>/dev/null || echo 0
+    fi
+}
+
 # Wait for black, at most TAOS_BLACK_WAIT_MS (2 s); the cap means a page that
 # never blackens costs time, not the screen-off. LOOK FIRST, then sleep: this
 # used to sleep 150 ms before the first look "to leave a frame's time", which
@@ -124,7 +134,7 @@ wait_black_framelog() {
     [ -x "$FRAMELOG" ] || return 1
     _r="$(printf '%s' "${TAOS_BLACK_PROBE:-268,0 4x1200}" | tr ' ' ',')"
     _d="$(awk -v c="$_cap" 'BEGIN { printf "%.3f", c / 1000 }')"
-    _f0="$(date +%s%N)"
+    _f0="$(now_ns)"
     "$FRAMELOG" --every-frame --until-black --duration "$_d" --first-timeout 400 \
         --region "$_r" >/dev/null 2>&1 &
     _fp=$!
@@ -137,7 +147,7 @@ wait_black_framelog() {
         sleep 0.02
     done
     _flrc=0; wait "$_fp" || _flrc=$?
-    _el=$(( ( $(date +%s%N) - _f0 ) / 1000000 ))
+    _el=$(( ( $(now_ns 2>/dev/null) - _f0 ) / 1000000 ))
     # (_flrc, not _rc: the off path ends with `exit "${_rc:-0}"`, and shell
     # variables are global.)
     case "$_flrc" in
@@ -160,7 +170,7 @@ wait_black_framelog() {
 wait_black() {
     _cap="${TAOS_BLACK_WAIT_MS:-2000}"
     case "$_cap" in ''|*[!0-9]*) _cap=2000 ;; esac
-    _t0="$(date +%s%N 2>/dev/null)"
+    _t0="$(now_ns 2>/dev/null)"
     case "$_t0" in ''|*[!0-9]*) sleep 0.6; return 0 ;; esac
     wait_black_framelog && return 0
     while :; do
@@ -171,7 +181,7 @@ wait_black() {
         # A wake arrived: stop waiting, the caller will stand down.
         [ "$(wake_stamp)" = "${_stamp0:-none}" ] || return 0
         is_black && return 0
-        _el=$(( ( $(date +%s%N) - _t0 ) / 1000000 ))
+        _el=$(( ( $(now_ns 2>/dev/null) - _t0 ) / 1000000 ))
         if [ "$_el" -ge "$_cap" ]; then
             echo "taos-kiosk-screen: screen still not black after ${_el} ms, powering off anyway" >&2
             return 0
@@ -232,7 +242,7 @@ on)
     _w="$WAKE_STAMP.$$"
     # The pid makes every wake's stamp different whatever precision `date` has
     # here: two wakes in one second must not look like one.
-    echo "$$.$(date +%s%N 2>/dev/null || date +%s)" > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
+    echo "$$.$(now_ns 2>/dev/null || now_ns)" > "$_w" 2>/dev/null && mv -f "$_w" "$WAKE_STAMP" 2>/dev/null || rm -f "$_w"
     _on_ok=0
     swaymsg "output * power on" >/dev/null 2>&1 || _on_ok=1
     touch_events enabled
